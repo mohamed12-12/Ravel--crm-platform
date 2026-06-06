@@ -1,0 +1,150 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def _bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    lowered = value.strip().lower()
+    return lowered in {"1", "true", "yes", "y", "on"}
+
+
+def _optional_path(raw: str | None) -> Path | None:
+    if not raw:
+        return None
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    return candidate
+
+
+def _extract_sheet_id(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    marker = "/spreadsheets/d/"
+    if marker in text:
+        tail = text.split(marker, 1)[1]
+        return tail.split("/", 1)[0].strip()
+    return text
+
+
+@dataclass(frozen=True)
+class Settings:
+    app_env: str
+    app_host: str
+    app_port: int
+    app_secret_key: str
+    log_level: str
+
+    ai_provider: str
+    gemini_api_key: str
+    gemini_model: str
+    openai_api_key: str
+    openai_model: str
+
+    sheet_backend: str
+    excel_source_workbook: Path
+    excel_runtime_workbook: Path
+    google_sheet_id: str
+    google_service_account_json: str
+    google_application_credentials: str
+
+    meta_verify_token: str
+    meta_page_access_token: str
+    meta_app_secret: str
+    meta_graph_api_version: str
+    public_webhook_url: str
+
+    human_handoff_phone: str
+    human_handoff_email: str
+    admin_alert_webhook_url: str
+    demo_reset_on_start: bool
+    default_country_code: str
+    demo_write_mode: str
+
+    @property
+    def ai_enabled(self) -> bool:
+        return self.ai_provider == "gemini" and bool(self.gemini_api_key)
+
+    def validate(self) -> list[str]:
+        errors: list[str] = []
+        if self.sheet_backend not in {"excel", "google", "google_sheets"}:
+            errors.append("SHEET_BACKEND must be either 'excel', 'google', or 'google_sheets'.")
+        if self.sheet_backend == "excel" and not self.excel_source_workbook.exists():
+            errors.append(f"Source workbook not found: {self.excel_source_workbook}")
+        if self.app_port <= 0:
+            errors.append("APP_PORT must be a positive integer.")
+        if self.sheet_backend in {"google", "google_sheets"}:
+            if not self.google_sheet_id:
+                errors.append(f"GOOGLE_SHEET_ID is required when SHEET_BACKEND={self.sheet_backend}.")
+            creds_path = _optional_path(self.google_application_credentials)
+            if creds_path is None or not creds_path.exists():
+                errors.append(f"GOOGLE_APPLICATION_CREDENTIALS file was not found for SHEET_BACKEND={self.sheet_backend}.")
+        return errors
+
+
+def load_settings() -> Settings:
+    _load_env_file(PROJECT_ROOT / ".env")
+
+    source = os.getenv("EXCEL_SOURCE_WORKBOOK", "RT - Travelers Database.phase5.ready.xlsx")
+    runtime = os.getenv("EXCEL_RUNTIME_WORKBOOK", "RT - Travelers Database.phase5.demo.xlsx")
+
+    source_path = Path(source)
+    if not source_path.is_absolute():
+        source_path = PROJECT_ROOT / source_path
+    runtime_path = Path(runtime)
+    if not runtime_path.is_absolute():
+        runtime_path = PROJECT_ROOT / runtime_path
+
+    return Settings(
+        app_env=os.getenv("APP_ENV", "development"),
+        app_host=os.getenv("APP_HOST", "127.0.0.1"),
+        app_port=int(os.getenv("APP_PORT", "5001")),
+        app_secret_key=os.getenv("APP_SECRET_KEY", "rahma-traveler-demo"),
+        log_level=os.getenv("LOG_LEVEL", "INFO"),
+        ai_provider=os.getenv("AI_PROVIDER", "gemini").strip().lower(),
+        gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip(),
+        openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
+        openai_model=os.getenv("OPENAI_MODEL", "").strip(),
+        sheet_backend=os.getenv("SHEET_BACKEND", "excel").strip().lower(),
+        excel_source_workbook=source_path,
+        excel_runtime_workbook=runtime_path,
+        google_sheet_id=_extract_sheet_id(os.getenv("GOOGLE_SHEET_ID", "")),
+        google_service_account_json=os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip(),
+        google_application_credentials=os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip(),
+        meta_verify_token=os.getenv("META_VERIFY_TOKEN", "").strip(),
+        meta_page_access_token=os.getenv("META_PAGE_ACCESS_TOKEN", "").strip(),
+        meta_app_secret=os.getenv("META_APP_SECRET", "").strip(),
+        meta_graph_api_version=os.getenv("META_GRAPH_API_VERSION", "").strip(),
+        public_webhook_url=os.getenv("PUBLIC_WEBHOOK_URL", "").strip(),
+        human_handoff_phone=os.getenv("HUMAN_HANDOFF_PHONE", "").strip(),
+        human_handoff_email=os.getenv("HUMAN_HANDOFF_EMAIL", "").strip(),
+        admin_alert_webhook_url=os.getenv("ADMIN_ALERT_WEBHOOK_URL", "").strip(),
+        demo_reset_on_start=_bool(os.getenv("DEMO_RESET_ON_START"), default=False),
+        default_country_code=os.getenv("DEFAULT_COUNTRY_CODE", "20").strip(),
+        demo_write_mode=os.getenv("DEMO_WRITE_MODE", "demo").strip().lower(),
+    )

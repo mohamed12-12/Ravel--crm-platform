@@ -1,0 +1,20 @@
+{% extends "crm_base.html" %}
+{% set active_page = 'leads' %}
+
+{% block content %}
+<div class="animate-fade-in">
+    <h2>Sales Leads</h2>
+    <p style="color: var(--text-secondary); margin-bottom: 2rem;">Manage incoming inquiries and qualify potential travelers.</p>
+
+    <div class="data-panel">
+        <div class="panel-header">
+            <h3>Recent Inquiries</h3>
+        </div>
+        <div style="padding: 3rem; text-align: center; color: var(--text-secondary);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 48px; height: 48px; margin-bottom: 1rem; opacity: 0.2;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+            <p>Leads module integration in progress...</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">The AI Agent is currently capturing leads into the spreadsheet live.</p>
+        </div>
+    </div>
+</div>
+{% endblock %}

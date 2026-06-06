@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Rahma Traveler CRM{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg-base:     #0b0f1a;
+            --bg-surface:  #111827;
+            --bg-card:     #1a2234;
+            --bg-hover:    #1e2a40;
+            --border:      rgba(255,255,255,0.07);
+            --border-act:  rgba(99,102,241,0.5);
+            --accent:      #6366f1;
+            --accent-2:    #a78bfa;
+            --text-main:   #f1f5f9;
+            --text-muted:  #64748b;
+            --text-dim:    #94a3b8;
+            --green:       #22c55e;
+            --yellow:      #eab308;
+            --red:         #ef4444;
+            --sidebar-w:   240px;
+        }
+
+        html, body { height: 100%; font-family: 'Inter', sans-serif; background: var(--bg-base); color: var(--text-main); }
+
+        /* ── Layout ─────────────────────────────────────────── */
+        .app-layout { display: flex; min-height: 100vh; }
+
+        /* ── Sidebar ─────────────────────────────────────────── */
+        .sidebar {
+            width: var(--sidebar-w);
+            background: var(--bg-surface);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            top: 0; left: 0; bottom: 0;
+            z-index: 100;
+            overflow-y: auto;
+        }
+
+        .sidebar-brand {
+            padding: 1.25rem 1.25rem 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .sidebar-brand .logo-text {
+            font-size: 1.05rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #6366f1, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.02em;
+        }
+        .sidebar-brand .logo-sub {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-top: 2px;
+        }
+
+        .sidebar-nav { flex: 1; padding: 0.75rem 0.75rem; }
+
+        .nav-section-label {
+            font-size: 0.6rem;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            padding: 0.75rem 0.5rem 0.35rem;
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+            padding: 0.55rem 0.75rem;
+            border-radius: 0.6rem;
+            text-decoration: none;
+            color: var(--text-dim);
+            font-size: 0.83rem;
+            font-weight: 500;
+            transition: all 0.15s ease;
+            margin-bottom: 2px;
+            position: relative;
+        }
+        .nav-link:hover { background: var(--bg-hover); color: var(--text-main); }
+        .nav-link.active {
+            background: rgba(99,102,241,0.12);
+            color: var(--accent-2);
+            border: 1px solid var(--border-act);
+        }
+        .nav-link .nav-icon { font-size: 0.95rem; width: 18px; text-align: center; }
+        .nav-badge {
+            margin-left: auto;
+            background: var(--red);
+            color: #fff;
+            font-size: 0.6rem;
+            font-weight: 700;
+            padding: 1px 6px;
+            border-radius: 999px;
+            min-width: 18px;
+            text-align: center;
+        }
+
+        .sidebar-footer {
+            padding: 0.75rem;
+            border-top: 1px solid var(--border);
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            text-align: center;
+        }
+
+        /* ── Main Content ─────────────────────────────────────── */
+        .main-content {
+            margin-left: var(--sidebar-w);
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        .topbar {
+            background: var(--bg-surface);
+            border-bottom: 1px solid var(--border);
+            padding: 0.85rem 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 50;
+        }
+        .topbar-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-dim);
+        }
+        .topbar-actions { display: flex; align-items: center; gap: 0.75rem; }
+
+        .page-body { padding: 2rem; flex: 1; }
+
+        /* ── Flash messages ──────────────────────────────────── */
+        .flash-list { list-style: none; margin-bottom: 1rem; }
+        .flash-msg {
+            padding: 0.75rem 1rem;
+            border-radius: 0.5rem;
+            font-size: 0.85rem;
+            margin-bottom: 0.5rem;
+        }
+        .flash-success { background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.25); color: #86efac; }
+        .flash-error   { background: rgba(239,68,68,0.1);  border: 1px solid rgba(239,68,68,0.25);  color: #fca5a5; }
+        .flash-info    { background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.25); color: #a5b4fc; }
+
+        /* ── Shared component styles ─────────────────────────── */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            font-size: 0.82rem;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.15s ease;
+        }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-primary:hover { background: #5558e8; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(99,102,241,0.35); }
+        .btn-ghost { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+        .btn-ghost:hover { background: var(--bg-hover); color: var(--text-main); }
+        .btn-danger { background: rgba(239,68,68,0.1); color: #fca5a5; border: 1px solid rgba(239,68,68,0.2); }
+        .btn-danger:hover { background: rgba(239,68,68,0.2); }
+        .btn-success { background: rgba(34,197,94,0.1); color: #86efac; border: 1px solid rgba(34,197,94,0.2); }
+        .btn-success:hover { background: rgba(34,197,94,0.2); }
+        .btn-sm { padding: 0.3rem 0.65rem; font-size: 0.75rem; }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 0.875rem;
+            padding: 1.5rem;
+        }
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1.25rem;
+        }
+        .card-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        /* Badges */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.2rem 0.6rem;
+            border-radius: 999px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+        .badge-green  { background: rgba(34,197,94,0.12);  color: #86efac; border: 1px solid rgba(34,197,94,0.2); }
+        .badge-yellow { background: rgba(234,179,8,0.12);  color: #fde047; border: 1px solid rgba(234,179,8,0.2); }
+        .badge-red    { background: rgba(239,68,68,0.12);  color: #fca5a5; border: 1px solid rgba(239,68,68,0.2); }
+        .badge-blue   { background: rgba(99,102,241,0.12); color: #a5b4fc; border: 1px solid rgba(99,102,241,0.2); }
+        .badge-purple { background: rgba(167,139,250,0.12);color: #c4b5fd; border: 1px solid rgba(167,139,250,0.2); }
+        .badge-gray   { background: rgba(100,116,139,0.12);color: #94a3b8; border: 1px solid rgba(100,116,139,0.2); }
+
+        /* Table */
+        .data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+        .data-table thead th {
+            text-align: left;
+            padding: 0.65rem 1rem;
+            color: var(--text-muted);
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            border-bottom: 1px solid var(--border);
+            background: rgba(255,255,255,0.02);
+        }
+        .data-table tbody tr {
+            border-bottom: 1px solid var(--border);
+            transition: background 0.1s;
+            cursor: pointer;
+        }
+        .data-table tbody tr:hover { background: var(--bg-hover); }
+        .data-table tbody td { padding: 0.8rem 1rem; color: var(--text-dim); vertical-align: middle; }
+        .data-table tbody td.primary { color: var(--text-main); font-weight: 600; }
+        .data-table tbody td.mono { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--accent-2); }
+
+        /* Forms */
+        .form-group { margin-bottom: 1rem; }
+        .form-label { display: block; font-size: 0.75rem; font-weight: 600; color: var(--text-dim); margin-bottom: 0.4rem; text-transform: uppercase; letter-spacing: 0.06em; }
+        .form-input, .form-select, .form-textarea {
+            width: 100%;
+            background: var(--bg-base);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            padding: 0.6rem 0.85rem;
+            color: var(--text-main);
+            font-size: 0.83rem;
+            font-family: 'Inter', sans-serif;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+        .form-input:focus, .form-select:focus, .form-textarea:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(99,102,241,0.15);
+        }
+        .form-select option { background: var(--bg-surface); }
+        .form-textarea { resize: vertical; min-height: 80px; }
+
+        /* Search bar */
+        .search-bar {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+            margin-bottom: 1.25rem;
+            flex-wrap: wrap;
+        }
+        .search-input-wrap { position: relative; flex: 1; min-width: 200px; }
+        .search-input-wrap input { padding-left: 2.25rem; }
+        .search-icon { position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 0.85rem; pointer-events: none; }
+
+        /* KPI Cards */
+        .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+        .kpi-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 0.875rem;
+            padding: 1.1rem 1.25rem;
+        }
+        .kpi-label { font-size: 0.65rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
+        .kpi-value { font-size: 2rem; font-weight: 800; color: var(--text-main); line-height: 1.1; margin: 0.3rem 0 0.15rem; }
+        .kpi-sub { font-size: 0.72rem; color: var(--text-muted); }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.65);
+            backdrop-filter: blur(4px);
+            z-index: 200;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.open { display: flex; }
+        .modal-box {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            padding: 2rem;
+            width: 100%;
+            max-width: 560px;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 25px 50px rgba(0,0,0,0.5);
+        }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+        .modal-title { font-size: 1.1rem; font-weight: 700; }
+        .modal-close { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.25rem; line-height: 1; }
+        .modal-close:hover { color: var(--text-main); }
+
+        /* Grid helpers */
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
+        .col-span-2 { grid-column: span 2; }
+
+        /* Capacity bar */
+        .cap-bar { height: 5px; background: var(--border); border-radius: 999px; overflow: hidden; margin-top: 4px; }
+        .cap-fill { height: 100%; border-radius: 999px; transition: width 0.3s; }
+        .cap-fill.good  { background: var(--green); }
+        .cap-fill.warn  { background: var(--yellow); }
+        .cap-fill.empty { background: var(--red); }
+
+        /* Pagination */
+        .pagination { display: flex; align-items: center; gap: 0.35rem; margin-top: 1rem; }
+        .page-btn {
+            padding: 0.35rem 0.75rem;
+            border-radius: 0.4rem;
+            font-size: 0.78rem;
+            font-weight: 500;
+            text-decoration: none;
+            color: var(--text-dim);
+            border: 1px solid var(--border);
+            transition: all 0.15s;
+        }
+        .page-btn:hover { background: var(--bg-hover); color: var(--text-main); }
+        .page-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
+    </style>
+    {% block head %}{% endblock %}
+</head>
+<body>
+<div class="app-layout">
+
+    <!-- SIDEBAR -->
+    <nav class="sidebar">
+        <div class="sidebar-brand">
+            <div class="logo-text">☪ Rahma CRM</div>
+            <div class="logo-sub">Travel Management System</div>
+        </div>
+
+        <div class="sidebar-nav">
+            <div class="nav-section-label">Overview</div>
+            <a href="{{ url_for('admin.dashboard') }}" class="nav-link {% if request.endpoint == 'admin.dashboard' %}active{% endif %}">
+                <span class="nav-icon">⊞</span> Dashboard
+            </a>
+
+            <div class="nav-section-label">CRM</div>
+            <a href="{{ url_for('travelers.index') }}" class="nav-link {% if request.blueprint == 'travelers' %}active{% endif %}">
+                <span class="nav-icon">👥</span> Travelers
+            </a>
+            <a href="{{ url_for('leads.index') }}" class="nav-link {% if request.blueprint == 'leads' %}active{% endif %}">
+                <span class="nav-icon">🎯</span> Leads
+            </a>
+            <a href="{{ url_for('bookings.index') }}" class="nav-link {% if request.blueprint == 'bookings' %}active{% endif %}">
+                <span class="nav-icon">📋</span> Bookings
+            </a>
+            <a href="{{ url_for('interactions.index') }}" class="nav-link {% if request.blueprint == 'interactions' %}active{% endif %}">
+                <span class="nav-icon">💬</span> Interactions
+            </a>
+
+            <div class="nav-section-label">Operations</div>
+            <a href="{{ url_for('trips.index') }}" class="nav-link {% if request.blueprint == 'trips' %}active{% endif %}">
+                <span class="nav-icon">✈️</span> Trips
+            </a>
+            <a href="{{ url_for('handoffs.index') }}" class="nav-link {% if request.blueprint == 'handoffs' %}active{% endif %}">
+                <span class="nav-icon">🔔</span> Handoff Queue
+                <span class="nav-badge" id="sidebar-handoff-badge" style="display:none">0</span>
+            </a>
+
+            <div class="nav-section-label">Admin</div>
+            <a href="{{ url_for('admin.import_data') }}" class="nav-link {% if request.endpoint == 'admin.import_data' %}active{% endif %}">
+                <span class="nav-icon">⬆</span> Import / Sync
+            </a>
+            <a href="{{ url_for('admin.duplicates') }}" class="nav-link {% if request.endpoint == 'admin.duplicates' %}active{% endif %}">
+                <span class="nav-icon">⚠</span> Duplicates
+            </a>
+        </div>
+
+        <div class="sidebar-footer">Rahma Traveler v3.0</div>
+    </nav>
+
+    <!-- MAIN -->
+    <div class="main-content">
+        <div class="topbar">
+            <span class="topbar-title">{% block topbar_title %}{% endblock %}</span>
+            <div class="topbar-actions">{% block topbar_actions %}{% endblock %}</div>
+        </div>
+
+        <div class="page-body">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            <ul class="flash-list">
+                {% for category, message in messages %}
+                <li class="flash-msg flash-{{ category }}">{{ message }}</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+            {% endwith %}
+
+            {% block content %}{% endblock %}
+        </div>
+    </div>
+</div>
+
+<script>
+// Poll pending handoff count
+function updateHandoffBadge() {
+    fetch('/admin/handoffs/pending')
+        .then(r => r.json())
+        .then(d => {
+            const b = document.getElementById('sidebar-handoff-badge');
+            if (b) {
+                if (d.count > 0) {
+                    b.textContent = d.count;
+                    b.style.display = 'inline-block';
+                } else {
+                    b.style.display = 'none';
+                }
+            }
+        }).catch(() => {});
+}
+updateHandoffBadge();
+setInterval(updateHandoffBadge, 15000);
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Rahma Traveler Sales Agent Demo</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-block">
+          <p class="eyebrow">Client Demo</p>
+          <h1>Rahma Traveler Sales Agent</h1>
+          <p class="subcopy">A safe web demo for CRM lookup, protected-customer handling, and trip recommendation behavior.</p>
+        </div>
+
+        <section class="status-band">
+          <div>
+            <p class="label">Runtime Workbook</p>
+            <p class="value" id="runtime-workbook">Loading...</p>
+          </div>
+          <div>
+            <p class="label">Source Workbook</p>
+            <p class="value" id="source-workbook">Loading...</p>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Demo Controls</h2>
+          </div>
+          <div class="button-row">
+            <button id="new-session-btn" class="primary-btn">Start Session</button>
+            <button id="reset-demo-btn" class="ghost-btn">Reset Demo Data</button>
+          </div>
+          <p class="hint">Reset copies the prepared workbook back into the demo runtime file.</p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Workbook Stats</h2>
+          </div>
+          <div class="stats-grid">
+            <div class="stat">
+              <span class="label">Travelers</span>
+              <strong id="traveler-count">0</strong>
+            </div>
+            <div class="stat">
+              <span class="label">Interactions</span>
+              <strong id="interaction-count">0</strong>
+            </div>
+          </div>
+          <div class="trip-status-list" id="trip-status-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>CRM Browser</h2>
+          </div>
+          <p class="hint">Pick a real traveler to test "Existing Traveler" paths.</p>
+          <div class="detail-stack" id="crm-browser">
+            <p class="muted">Loading travelers...</p>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Sales Intelligence</h2>
+          </div>
+          <div class="stats-grid">
+            <div class="stat">
+              <span class="label">Leads</span>
+              <strong id="lead-count">0</strong>
+            </div>
+            <div class="stat">
+              <span class="label">Qualification Rate</span>
+              <strong id="qualification-rate">0%</strong>
+            </div>
+            <div class="stat">
+              <span class="label">Urgent</span>
+              <strong id="urgent-count">0</strong>
+            </div>
+            <div class="stat">
+              <span class="label">Due Today</span>
+              <strong id="due-today-count">0</strong>
+            </div>
+          </div>
+          <div class="trip-status-list" id="lead-stage-list"></div>
+          <div class="detail-stack" id="recent-leads"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Booking Drafts</h2>
+          </div>
+          <div class="stats-grid">
+            <div class="stat">
+              <span class="label">Drafts</span>
+              <strong id="booking-draft-count">0</strong>
+            </div>
+            <div class="stat">
+              <span class="label">Awaiting Deposit</span>
+              <strong id="payment-pending-count">0</strong>
+            </div>
+            <div class="stat">
+              <span class="label">Alerts</span>
+              <strong id="booking-alert-count">0</strong>
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <section class="chat-area">
+          <div class="chat-header">
+            <div>
+              <p class="eyebrow">Conversation Simulator</p>
+              <h2>DM Flow</h2>
+            </div>
+            <div class="session-chip" id="session-chip">No active session</div>
+          </div>
+
+          <div class="chat-log" id="chat-log">
+            <div class="empty-state">
+              <h3>Ready for a live demo</h3>
+              <p>Start a session and test new customers, returning travelers, duplicate phones, or protected CRM cases.</p>
+            </div>
+          </div>
+
+          <div id="intake-panel" class="intake-panel" style="display: none;">
+            <div class="intake-header">
+              <h3>Intake Form</h3>
+              <p>Collect basic identity and contact details for CRM verification.</p>
+            </div>
+            <form id="intake-form" class="intake-form">
+              <div class="form-grid">
+                <div class="form-group">
+                  <label for="intake-name">Full Name</label>
+                  <input type="text" id="intake-name" name="fullName" placeholder="e.g. Mohamed Ali" required>
+                </div>
+                <div class="form-group">
+                  <label for="intake-phone">WhatsApp Number</label>
+                  <div class="phone-input">
+                    <input type="text" id="intake-code" name="countryCode" placeholder="20" style="width: 60px;" required>
+                    <input type="text" id="intake-whatsapp" name="rawPhone" placeholder="10xxxxxxxx" style="flex: 1;" required>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="intake-birthday">Birthday</label>
+                  <input type="text" id="intake-birthday" name="birthday" placeholder="DD/MM/YYYY">
+                </div>
+                <div class="form-group">
+                  <label for="intake-gender">Gender</label>
+                  <select id="intake-gender" name="gender">
+                    <option value="">Select...</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="intake-nationality">Nationality</label>
+                  <input type="text" id="intake-nationality" name="nationality" placeholder="e.g. Egyptian">
+                </div>
+                <div class="form-group">
+                  <label for="intake-language">Preferred Language</label>
+                  <select id="intake-language" name="language">
+                    <option value="en">English</option>
+                    <option value="ar">Arabic</option>
+                  </select>
+                </div>
+              </div>
+              <button type="submit" class="primary-btn" style="width: 100%; margin-top: 16px;">Submit Intake & Check CRM</button>
+            </form>
+          </div>
+
+          <form id="message-form" class="composer">
+            <input id="message-input" type="text" placeholder="Type the next customer reply..." autocomplete="off" disabled>
+            <button type="submit" class="primary-btn" disabled id="send-btn">Send</button>
+          </form>
+        </section>
+
+        <section class="inspector">
+          <div class="panel">
+            <div class="panel-header">
+              <h2>CRM Snapshot</h2>
+            </div>
+            <div id="crm-snapshot" class="detail-stack">
+              <p class="muted">No session data yet.</p>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Trip Result</h2>
+            </div>
+            <div id="trip-result" class="detail-stack">
+              <p class="muted">Trip suggestions will appear here after the customer shares trip type.</p>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Write Result</h2>
+            </div>
+            <div id="write-result" class="detail-stack">
+              <p class="muted">Controlled write activity will appear here once the agent logs or creates data.</p>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Lead Intelligence</h2>
+            </div>
+            <div id="lead-result" class="detail-stack">
+              <p class="muted">Lead stage, priority, and follow-up date will appear here once a session completes.</p>
+            </div>
+            <div id="lead-actions" class="button-row" style="margin-top: 12px; display: none;">
+              <button id="qualify-lead-btn" class="primary-btn" style="padding: 6px 12px; font-size: 0.85rem;">Mark as Qualified</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Create Booking Draft</h2>
+            </div>
+            <div id="booking-form-panel" class="detail-stack">
+              <p class="muted">When confirmed open trips are available, a booking draft form will appear here.</p>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h2>Booking Result</h2>
+            </div>
+            <div id="booking-result" class="detail-stack">
+              <p class="muted">Booking draft details and internal alert output will appear here after reservation.</p>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>

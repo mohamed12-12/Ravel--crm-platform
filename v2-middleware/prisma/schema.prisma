@@ -1,0 +1,130 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Module 2: Identity & Traveler Management
+model MasterAccount {
+  id           String     @id @default(uuid())
+  primaryPhone String     @unique
+  notes        String?
+  travelers    Traveler[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+model Traveler {
+  id               String         @id
+  masterAccountId  String?
+  masterAccount    MasterAccount? @relation(fields: [masterAccountId], references: [id])
+  fullName         String
+  phoneLookupKey   String?
+  whatsappNumber   String?
+  status           String         @default("Active")
+  
+  interactions     Interaction[]
+  leads            Lead[]
+  bookings         Booking[]
+
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@index([phoneLookupKey])
+}
+
+// Module 4: Sales Intelligence
+model Lead {
+  id               String       @id @default(uuid())
+  travelerId       String
+  traveler         Traveler     @relation(fields: [travelerId], references: [id])
+  status           LeadStatus   @default(NEW)
+  currentStage     String       @default("Discovery")
+  automationActive Boolean      @default(true)
+  handoffRequired  Boolean      @default(false)
+  handoffReason    String?
+
+  flowStates       FlowState[]
+  handoffRequests  HandoffQueue[]
+  
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+}
+
+enum LeadStatus {
+  NEW
+  QUALIFIED
+  BOOKING_DRAFT
+  CLOSED_WON
+  CLOSED_LOST
+  BLOCKED
+}
+
+// Module 1: Deterministic Copy Library
+model CopyLibrary {
+  id          String   @id
+  context     String   // e.g. "TRIP_INFO", "GREETING"
+  ar_text     String   // Arabic Template with {vars}
+  en_text     String   // English Template with {vars}
+  variables   String[] // Array of required variable names
+  
+  flowStates  FlowState[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model FlowState {
+  id            String      @id @default(uuid())
+  leadId        String
+  lead          Lead        @relation(fields: [leadId], references: [id])
+  stepKey       String      // current step in the logic
+  lastIntent    String?
+  copyLibraryId String?
+  copyTemplate  CopyLibrary? @relation(fields: [copyLibraryId], references: [id])
+  
+  metadata      Json?       // Stores dynamic variables for interpolation
+
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+}
+
+// Module 3: Handoff Engine
+model HandoffQueue {
+  id          String    @id @default(uuid())
+  leadId      String
+  lead        Lead      @relation(fields: [leadId], references: [id])
+  reason      String
+  priority    Int       @default(1)
+  isResolved  Boolean   @default(false)
+  resolvedAt  DateTime?
+  
+  createdAt   DateTime  @default(now())
+}
+
+model Interaction {
+  id         String   @id @default(uuid())
+  travelerId String
+  traveler   Traveler @relation(fields: [travelerId], references: [id])
+  channel    String   // Instagram, WhatsApp, etc.
+  direction  String   // INBOUND, OUTBOUND
+  content    String
+  
+  createdAt  DateTime @default(now())
+}
+
+model Booking {
+  id         String   @id
+  travelerId String
+  traveler   Traveler @relation(fields: [travelerId], references: [id])
+  tripId     String
+  status     String   @default("Draft")
+  
+  createdAt  DateTime @default(now())
+}

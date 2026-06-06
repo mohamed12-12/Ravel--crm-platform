@@ -1,0 +1,1141 @@
+{% extends "base.html" %}
+
+{% block title %}Handoff Queue - Rahma CRM{% endblock %}
+
+{% block content %}
+<style>
+    /* Premium Glassmorphic Kanban Dashboard */
+    :root {
+        --bg-glass: rgba(15, 23, 42, 0.4);
+        --bg-glass-card: rgba(30, 41, 59, 0.45);
+        --bg-glass-hover: rgba(30, 41, 59, 0.75);
+        --border-glass: rgba(255, 255, 255, 0.08);
+        --text-dim: #94a3b8;
+        --color-pending: #f87171;
+        --color-progress: #fbbf24;
+        --color-resolved: #34d399;
+        --color-critical: #ef4444;
+        --accent: #60a5fa;
+        --accent-glow: rgba(96, 165, 250, 0.15);
+    }
+
+    /* Override container styles for fluid screen estate */
+    .container {
+        max-width: 100% !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        padding: 0 1.5rem !important;
+    }
+
+    .handoff-dashboard {
+        font-family: 'Outfit', 'Inter', sans-serif;
+        color: #f8fafc;
+        min-height: calc(100vh - 100px);
+        background: radial-gradient(circle at top right, #1e293b, #0f172a 70%);
+        padding: 2.2rem;
+        border-radius: 1.75rem;
+        border: 1px solid var(--border-glass);
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(20px);
+    }
+
+    .dashboard-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 2rem;
+        border-bottom: 1px solid var(--border-glass);
+        padding-bottom: 1.5rem;
+    }
+
+    .header-title h1 {
+        font-size: 2.6rem;
+        font-weight: 800;
+        background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 50%, #f472b6 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin: 0;
+        letter-spacing: -0.02em;
+    }
+
+    .header-title p {
+        color: var(--text-dim);
+        margin-top: 0.4rem;
+        font-size: 1rem;
+    }
+
+    .stats-badge {
+        background: rgba(239, 68, 68, 0.08);
+        border: 1px solid rgba(239, 68, 68, 0.2);
+        padding: 0.6rem 1.2rem;
+        border-radius: 999px;
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        box-shadow: 0 0 15px rgba(239, 68, 68, 0.1);
+        transition: all 0.3s ease;
+    }
+
+    .stats-badge:hover {
+        transform: scale(1.03);
+    }
+
+    .pulse-dot {
+        width: 10px;
+        height: 10px;
+        background: var(--color-critical);
+        border-radius: 50%;
+        box-shadow: 0 0 10px var(--color-critical);
+        animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+        0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); }
+        70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+    }
+
+    /* Premium Search and Filter Bar */
+    .filter-toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background: rgba(15, 23, 42, 0.3);
+        border: 1px solid var(--border-glass);
+        padding: 1rem 1.5rem;
+        border-radius: 1.25rem;
+        margin-bottom: 2.2rem;
+        gap: 1.5rem;
+        backdrop-filter: blur(10px);
+    }
+
+    .search-box-wrapper {
+        position: relative;
+        flex: 1;
+        max-width: 400px;
+    }
+
+    .search-box-wrapper svg {
+        position: absolute;
+        left: 1.1rem;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--text-dim);
+        width: 1.1rem;
+        height: 1.1rem;
+    }
+
+    .search-input {
+        width: 100%;
+        background: rgba(30, 41, 59, 0.4);
+        border: 1px solid var(--border-glass);
+        border-radius: 0.75rem;
+        padding: 0.65rem 1rem 0.65rem 2.8rem;
+        color: #fff;
+        font-size: 0.95rem;
+        outline: none;
+        transition: all 0.3s ease;
+    }
+
+    .search-input:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 12px var(--accent-glow);
+        background: rgba(30, 41, 59, 0.65);
+    }
+
+    .filter-group {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+    }
+
+    .filter-pill {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--border-glass);
+        color: var(--text-dim);
+        padding: 0.45rem 1rem;
+        border-radius: 99px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.25s ease;
+    }
+
+    .filter-pill:hover {
+        background: rgba(255, 255, 255, 0.08);
+        color: #fff;
+        transform: translateY(-1px);
+    }
+
+    .filter-pill.active {
+        background: var(--accent);
+        color: #0f172a;
+        border-color: var(--accent);
+        box-shadow: 0 4px 12px var(--accent-glow);
+    }
+
+    .filter-pill.active-critical { background: var(--color-critical); color: #fff; border-color: var(--color-critical); }
+    .filter-pill.active-high { background: var(--color-pending); color: #fff; border-color: var(--color-pending); }
+    .filter-pill.active-medium { background: var(--color-progress); color: #0f172a; border-color: var(--color-progress); }
+    .filter-pill.active-low { background: var(--color-resolved); color: #0f172a; border-color: var(--color-resolved); }
+
+    /* Kanban Board Layout */
+    .kanban-board {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 2.2rem;
+        align-items: start;
+    }
+
+    .kanban-column {
+        background: var(--bg-glass);
+        border: 1px solid var(--border-glass);
+        border-radius: 1.5rem;
+        padding: 1.4rem;
+        min-height: 75vh;
+        backdrop-filter: blur(12px);
+        transition: all 0.3s ease;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .column-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid var(--border-glass);
+    }
+
+    .column-header h2 {
+        font-size: 1.15rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .column-pending h2 { color: var(--color-pending); }
+    .column-progress h2 { color: var(--color-progress); }
+    .column-resolved h2 { color: var(--color-resolved); }
+
+    .item-count {
+        background: rgba(255, 255, 255, 0.05);
+        padding: 0.25rem 0.8rem;
+        border-radius: 0.5rem;
+        font-size: 0.8rem;
+        font-weight: 700;
+        color: var(--text-dim);
+        border: 1px solid var(--border-glass);
+    }
+
+    .column-body {
+        display: flex;
+        flex-direction: column;
+        gap: 1.1rem;
+        min-height: 400px;
+        flex-grow: 1;
+    }
+
+    /* Elegant Kanban Cards with Micro-interactions */
+    .handoff-card {
+        background: var(--bg-glass-card);
+        border: 1px solid var(--border-glass);
+        border-radius: 1.15rem;
+        padding: 1.4rem;
+        cursor: grab;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        position: relative;
+        overflow: hidden;
+        backdrop-filter: blur(10px);
+    }
+
+    .handoff-card:hover {
+        transform: translateY(-5px) scale(1.015);
+        background: var(--bg-glass-hover);
+        border-color: rgba(255, 255, 255, 0.18);
+        box-shadow: 0 15px 30px -10px rgba(0, 0, 0, 0.5);
+    }
+
+    .handoff-card:active {
+        cursor: grabbing;
+    }
+
+    /* Glow overlays for Priorities */
+    .card-glow-critical { border-left: 4px solid var(--color-critical); }
+    .card-glow-high { border-left: 4px solid var(--color-pending); }
+    .card-glow-medium { border-left: 4px solid var(--color-progress); }
+    .card-glow-low { border-left: 4px solid var(--color-resolved); }
+
+    .priority-badge {
+        position: absolute;
+        top: 1.3rem;
+        right: 1.3rem;
+        font-size: 0.65rem;
+        font-weight: 800;
+        padding: 0.25rem 0.65rem;
+        border-radius: 99px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+    }
+
+    .prio-critical { background: rgba(239, 68, 68, 0.12); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.25); }
+    .prio-high { background: rgba(248, 113, 113, 0.12); color: #fca5a5; border: 1px solid rgba(248, 113, 113, 0.25); }
+    .prio-medium { background: rgba(234, 179, 8, 0.12); color: #fde047; border: 1px solid rgba(234, 179, 8, 0.25); }
+    .prio-low { background: rgba(52, 211, 153, 0.12); color: #a7f3d0; border: 1px solid rgba(52, 211, 153, 0.25); }
+
+    .card-traveler {
+        margin-bottom: 0.85rem;
+        padding-right: 4.5rem;
+    }
+
+    .traveler-name {
+        font-size: 1.15rem;
+        font-weight: 700;
+        margin: 0;
+        color: #fff;
+        letter-spacing: -0.01em;
+    }
+
+    .traveler-phone-row {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.85rem;
+        color: var(--text-dim);
+        margin-top: 0.25rem;
+    }
+
+    .card-reason {
+        font-size: 0.95rem;
+        line-height: 1.6;
+        color: #e2e8f0;
+        margin-bottom: 1.35rem;
+        background: rgba(0, 0, 0, 0.15);
+        padding: 0.65rem 0.85rem;
+        border-radius: 0.6rem;
+        border: 1px solid rgba(255, 255, 255, 0.02);
+    }
+
+    .card-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 0.75rem;
+        color: var(--text-dim);
+        border-top: 1px solid var(--border-glass);
+        padding-top: 0.85rem;
+    }
+
+    .footer-time-row {
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+    }
+
+    .footer-id {
+        font-family: 'JetBrains Mono', 'Fira Code', monospace;
+        opacity: 0.75;
+        background: rgba(255, 255, 255, 0.04);
+        padding: 0.1rem 0.4rem;
+        border-radius: 0.25rem;
+    }
+
+    /* Hover Actions Shortcuts Overlay */
+    .card-actions-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(15, 23, 42, 0.9);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 1.25rem;
+        opacity: 0;
+        pointer-events: none;
+        transition: all 0.25s ease;
+        backdrop-filter: blur(4px);
+    }
+
+    .handoff-card:hover .card-actions-overlay {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .card-action-btn {
+        width: 2.8rem;
+        height: 2.8rem;
+        border-radius: 50%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        cursor: pointer;
+        color: #fff;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .card-action-btn:hover {
+        transform: scale(1.15);
+    }
+
+    .btn-resolve-hover { background: rgba(52, 211, 153, 0.2); border-color: var(--color-resolved); color: var(--color-resolved); }
+    .btn-resolve-hover:hover { background: var(--color-resolved); color: #0f172a; box-shadow: 0 0 15px rgba(52, 211, 153, 0.4); }
+
+    .btn-assign-hover { background: rgba(96, 165, 250, 0.2); border-color: var(--accent); color: var(--accent); }
+    .btn-assign-hover:hover { background: var(--accent); color: #0f172a; box-shadow: 0 0 15px rgba(96, 165, 250, 0.4); }
+
+    .btn-view-hover { background: rgba(255, 255, 255, 0.05); border-color: rgba(255, 255, 255, 0.2); }
+    .btn-view-hover:hover { background: #fff; color: #0f172a; box-shadow: 0 0 15px rgba(255, 255, 255, 0.4); }
+
+    /* Drag and drop states */
+    .dragging {
+        opacity: 0.35;
+        transform: scale(0.96) rotate(1deg);
+        border-color: var(--accent);
+    }
+
+    .drag-over {
+        background: rgba(255, 255, 255, 0.06);
+        border-color: var(--accent);
+        box-shadow: inset 0 0 20px rgba(96, 165, 250, 0.08);
+    }
+
+    /* Premium Details Glassmorphic Modal */
+    .modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: rgba(15, 23, 42, 0.85);
+        backdrop-filter: blur(15px);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 2000;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.3s ease;
+    }
+
+    .modal-overlay.active {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .premium-modal {
+        background: radial-gradient(circle at top left, #1e293b, #0f172a);
+        border: 1px solid var(--border-glass);
+        width: 90%;
+        max-width: 650px;
+        border-radius: 1.75rem;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+        transform: translateY(30px) scale(0.95);
+        transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        overflow: hidden;
+    }
+
+    .modal-overlay.active .premium-modal {
+        transform: translateY(0) scale(1);
+    }
+
+    .modal-header {
+        padding: 1.6rem 2rem;
+        border-bottom: 1px solid var(--border-glass);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .modal-header h3 {
+        margin: 0;
+        font-size: 1.4rem;
+        font-weight: 800;
+        color: #fff;
+    }
+
+    .modal-close-btn {
+        background: transparent;
+        border: none;
+        color: var(--text-dim);
+        font-size: 1.5rem;
+        cursor: pointer;
+        transition: color 0.2s ease;
+    }
+
+    .modal-close-btn:hover {
+        color: #fff;
+    }
+
+    .modal-body {
+        padding: 2rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
+        max-height: 70vh;
+        overflow-y: auto;
+    }
+
+    .modal-detail-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.5rem;
+    }
+
+    .modal-field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+    }
+
+    .modal-label {
+        font-size: 0.75rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        color: var(--text-dim);
+        letter-spacing: 0.08em;
+    }
+
+    .modal-value {
+        font-size: 1.05rem;
+        color: #fff;
+        background: rgba(255, 255, 255, 0.03);
+        padding: 0.6rem 0.9rem;
+        border-radius: 0.6rem;
+        border: 1px solid var(--border-glass);
+    }
+
+    .modal-value-reason {
+        line-height: 1.6;
+        font-size: 0.95rem;
+    }
+
+    .modal-textarea {
+        width: 100%;
+        background: rgba(15, 23, 42, 0.4);
+        border: 1px solid var(--border-glass);
+        border-radius: 0.75rem;
+        padding: 0.8rem;
+        color: #fff;
+        font-size: 0.95rem;
+        outline: none;
+        resize: vertical;
+        min-height: 100px;
+        transition: border-color 0.2s ease;
+    }
+
+    .modal-textarea:focus {
+        border-color: var(--accent);
+    }
+
+    .modal-footer {
+        padding: 1.4rem 2rem;
+        border-top: 1px solid var(--border-glass);
+        display: flex;
+        justify-content: flex-end;
+        gap: 1rem;
+    }
+
+    .btn-secondary {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--border-glass);
+        color: #fff;
+        padding: 0.6rem 1.4rem;
+        border-radius: 0.75rem;
+        cursor: pointer;
+        font-weight: 600;
+        transition: all 0.2s ease;
+    }
+
+    .btn-secondary:hover {
+        background: rgba(255, 255, 255, 0.08);
+    }
+
+    .btn-primary {
+        background: var(--accent);
+        border: 1px solid var(--accent);
+        color: #0f172a;
+        padding: 0.6rem 1.4rem;
+        border-radius: 0.75rem;
+        cursor: pointer;
+        font-weight: 700;
+        transition: all 0.2s ease;
+        box-shadow: 0 4px 12px var(--accent-glow);
+    }
+
+    .btn-primary:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 18px var(--accent-glow);
+    }
+
+    /* Notification Animation */
+    .notif-toast {
+        position: fixed;
+        bottom: 2rem;
+        right: 2rem;
+        background: #1e293b;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 1.2rem;
+        border-radius: 1.25rem;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        transform: translateY(200%);
+        transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        z-index: 3000;
+        backdrop-filter: blur(10px);
+    }
+
+    .notif-toast.show {
+        transform: translateY(0);
+    }
+
+    /* Elegant Empty State */
+    .empty-state {
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 3.5rem 1rem;
+        color: var(--text-dim);
+        border: 2px dashed rgba(255, 255, 255, 0.04);
+        border-radius: 1rem;
+        background: rgba(15, 23, 42, 0.2);
+        margin-top: 0.5rem;
+    }
+
+    .empty-state svg {
+        width: 3.5rem;
+        height: 3.5rem;
+        margin-bottom: 1rem;
+        color: rgba(255, 255, 255, 0.1);
+    }
+    
+    .empty-state p {
+        margin: 0;
+        font-size: 0.95rem;
+        font-weight: 500;
+    }
+</style>
+
+{% macro render_card(item) %}
+<div class="handoff-card card-glow-{{ item.priority|lower }}" id="card-{{ item.handoff_id }}" draggable="true" data-id="{{ item.handoff_id }}" data-priority="{{ item.priority }}" data-search="{{ item.traveler_name|lower }} {{ item.handoff_id|lower }} {{ item.reason|lower }}">
+    <!-- Priority Badge -->
+    <div class="priority-badge prio-{{ item.priority|lower }}">
+        {{ item.priority }}
+    </div>
+
+    <!-- Traveler Profile Section -->
+    <div class="card-traveler">
+        <h3 class="traveler-name">{{ item.traveler_name }}</h3>
+        <div class="traveler-phone-row">
+            <!-- WhatsApp SVG Icon -->
+            <svg class="w-4 h-4 text-emerald-400" fill="currentColor" width="16" height="16" viewBox="0 0 24 24">
+                <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946C.06 5.348 5.397.01 11.96.01c3.178.001 6.169 1.24 8.424 3.496 2.254 2.256 3.491 5.252 3.491 8.431-.005 6.56-5.343 11.897-11.9 11.897-2.008-.002-3.98-.51-5.725-1.486L0 24zm6.59-4.846c1.6.95 3.188 1.449 4.725 1.451 5.405 0 9.803-4.379 9.807-9.763.002-2.607-1.01-5.059-2.85-6.902C16.489 2.097 14.054 1.08 11.456 1.08c-5.412 0-9.81 4.382-9.814 9.766-.002 1.812.484 3.585 1.408 5.16l-.994 3.63 3.738-.98z"></path>
+            </svg>
+            <span class="traveler-phone">{{ item.traveler_phone }}</span>
+        </div>
+    </div>
+
+    <!-- Reason Content Box -->
+    <div class="card-reason">
+        {{ item.reason }}
+    </div>
+
+    <!-- Footer Timestamp & ID -->
+    <div class="card-footer">
+        <div class="footer-time-row">
+            <!-- Calendar SVG Icon -->
+            <svg fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+            </svg>
+            <span class="footer-time">{{ item.created_at[:16].replace('T', ' ') if item.created_at else 'N/A' }}</span>
+        </div>
+        <span class="footer-id">#{{ item.handoff_id }}</span>
+    </div>
+
+    <!-- Hover Action Shortcuts -->
+    <div class="card-actions-overlay">
+        <button class="card-action-btn btn-view-hover" onclick="openDetails('{{ item.handoff_id }}')" title="Double Click / View Detail">
+            <svg fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+            </svg>
+        </button>
+        <button class="card-action-btn btn-assign-hover" onclick="quickAssign('{{ item.handoff_id }}')" title="Assign to Me">
+            <svg fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path>
+            </svg>
+        </button>
+        <button class="card-action-btn btn-resolve-hover" onclick="quickResolve('{{ item.handoff_id }}')" title="Quick Resolve">
+            <svg fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+            </svg>
+        </button>
+    </div>
+</div>
+{% endmacro %}
+
+<div class="handoff-dashboard">
+    <header class="dashboard-header">
+        <div class="header-title">
+            <h1>Handoff Queue</h1>
+            <p>Real-time AI conversational conflicts requiring human intervention</p>
+        </div>
+        <div class="stats-badge">
+            <div class="pulse-dot"></div>
+            <span id="pending-count-badge">{{ pending|length }} Pending Requests</span>
+        </div>
+    </header>
+
+    <!-- Search & Filter Controls -->
+    <div class="filter-toolbar">
+        <div class="search-box-wrapper">
+            <!-- Magnifying Glass Icon -->
+            <svg fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+            </svg>
+            <input type="text" id="dashboard-search" class="search-input" placeholder="Search customer, ID, or conflict reason..." oninput="debouncedApplyFilters()">
+        </div>
+        <div class="filter-group">
+            <span style="font-size: 0.85rem; color: var(--text-dim); margin-right: 0.4rem; font-weight: 700; text-transform: uppercase;">Priority:</span>
+            <button class="filter-pill active" onclick="setPriorityFilter('All', this)">All</button>
+            <button class="filter-pill" onclick="setPriorityFilter('Critical', this)">Critical</button>
+            <button class="filter-pill" onclick="setPriorityFilter('High', this)">High</button>
+            <button class="filter-pill" onclick="setPriorityFilter('Medium', this)">Medium</button>
+            <button class="filter-pill" onclick="setPriorityFilter('Low', this)">Low</button>
+        </div>
+    </div>
+
+    <!-- Kanban Grid -->
+    <div class="kanban-board">
+        <!-- Pending -->
+        <div class="kanban-column column-pending" id="pending">
+            <div class="column-header">
+                <h2>Pending</h2>
+                <span class="item-count" id="count-pending">{{ pending|length }}</span>
+            </div>
+            <div class="column-body" id="list-pending">
+                <div class="empty-state">
+                    <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    <p>No pending handoffs</p>
+                </div>
+                {% for item in pending %}
+                    {{ render_card(item) }}
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- In Progress -->
+        <div class="kanban-column column-progress" id="in-progress">
+            <div class="column-header">
+                <h2>In Progress</h2>
+                <span class="item-count" id="count-progress">{{ in_progress|length }}</span>
+            </div>
+            <div class="column-body" id="list-progress">
+                <div class="empty-state">
+                    <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"></path></svg>
+                    <p>Nothing in progress</p>
+                </div>
+                {% for item in in_progress %}
+                    {{ render_card(item) }}
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Resolved -->
+        <div class="kanban-column column-resolved" id="resolved">
+            <div class="column-header">
+                <h2>Resolved</h2>
+                <span class="item-count" id="count-resolved">{{ resolved|length }}</span>
+            </div>
+            <div class="column-body" id="list-resolved">
+                <div class="empty-state">
+                    <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    <p>No resolved handoffs</p>
+                </div>
+                {% for item in resolved %}
+                    {{ render_card(item) }}
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Detailed Popup Dialog Modal -->
+<div id="details-modal" class="modal-overlay" onclick="closeModal(event)">
+    <div class="premium-modal" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h3>Handoff Request Details</h3>
+            <button class="modal-close-btn" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="modal-detail-row">
+                <div class="modal-field">
+                    <span class="modal-label">Traveler Name</span>
+                    <span class="modal-value" id="modal-traveler-name">N/A</span>
+                </div>
+                <div class="modal-field">
+                    <span class="modal-label">WhatsApp ID</span>
+                    <span class="modal-value" id="modal-traveler-phone">N/A</span>
+                </div>
+            </div>
+            <div class="modal-detail-row">
+                <div class="modal-field">
+                    <span class="modal-label">Handoff Ticket ID</span>
+                    <span class="modal-value" id="modal-handoff-id" style="font-family: monospace;">N/A</span>
+                </div>
+                <div class="modal-field">
+                    <span class="modal-label">Priority Level</span>
+                    <span class="modal-value" id="modal-priority">N/A</span>
+                </div>
+            </div>
+            <div class="modal-field">
+                <span class="modal-label">System Conflict / Audit Reason</span>
+                <div class="modal-value modal-value-reason" id="modal-reason">N/A</div>
+            </div>
+            <div class="modal-field">
+                <span class="modal-label">Action Handoff Notes</span>
+                <textarea id="modal-notes" class="modal-textarea" placeholder="Add administrative notes regarding what was discussed or decided with the traveler..."></textarea>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn-secondary" onclick="closeModal()">Close</button>
+            <button class="btn-primary" id="modal-resolve-btn">Resolve Ticket</button>
+        </div>
+    </div>
+</div>
+
+<!-- WebSocket Toast Notifications -->
+<div id="notification-toast" class="notif-toast">
+    <div class="pulse-dot"></div>
+    <div class="notif-content">
+        <strong id="notif-title">New Conflict Handoff</strong>
+        <p id="notif-body" style="font-size: 0.85rem; color: var(--text-dim); margin: 0; padding-top: 0.2rem;"></p>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+<script>
+    let activePriorityFilter = 'All';
+    let currentHandoffData = null;
+
+    // Filter Logic
+    function setPriorityFilter(priority, buttonEl) {
+        document.querySelectorAll('.filter-pill').forEach(btn => {
+            btn.className = 'filter-pill';
+        });
+
+        // Add correct color matching class on active state
+        if (priority === 'All') buttonEl.classList.add('active');
+        else if (priority === 'Critical') buttonEl.classList.add('active-critical');
+        else if (priority === 'High') buttonEl.classList.add('active-high');
+        else if (priority === 'Medium') buttonEl.classList.add('active-medium');
+        else if (priority === 'Low') buttonEl.classList.add('active-low');
+
+        activePriorityFilter = priority;
+        applyFilters();
+    }
+
+    let filterTimeout;
+    function debouncedApplyFilters() {
+        clearTimeout(filterTimeout);
+        filterTimeout = setTimeout(applyFilters, 300);
+    }
+
+    function applyFilters() {
+        const searchQuery = document.getElementById('dashboard-search').value.trim().toLowerCase();
+        const cards = document.querySelectorAll('.handoff-card');
+
+        cards.forEach(card => {
+            const searchData = card.getAttribute('data-search') || '';
+            const cardPriority = card.getAttribute('data-priority') || '';
+
+            const matchesSearch = searchData.includes(searchQuery);
+            const matchesPriority = (activePriorityFilter === 'All' || cardPriority === activePriorityFilter);
+
+            if (matchesSearch && matchesPriority) {
+                card.style.display = 'block';
+            } else {
+                card.style.display = 'none';
+            }
+        });
+
+        updateCounts();
+    }
+
+    // Modal Details Box
+    function openDetails(handoffId) {
+        const card = document.getElementById(`card-${handoffId}`);
+        if (!card) return;
+
+        const name = card.querySelector('.traveler-name').innerText;
+        const phone = card.querySelector('.traveler-phone').innerText;
+        const reason = card.querySelector('.card-reason').innerText;
+        const priority = card.getAttribute('data-priority');
+
+        document.getElementById('modal-traveler-name').innerText = name;
+        document.getElementById('modal-traveler-phone').innerText = phone;
+        document.getElementById('modal-handoff-id').innerText = `#${handoffId}`;
+        document.getElementById('modal-priority').innerText = priority;
+        document.getElementById('modal-reason').innerText = reason;
+        
+        // Fetch current notes or settings if any
+        document.getElementById('modal-notes').value = '';
+
+        const resolveBtn = document.getElementById('modal-resolve-btn');
+        resolveBtn.onclick = () => {
+            const notes = document.getElementById('modal-notes').value;
+            submitResolution(handoffId, notes);
+        };
+
+        document.getElementById('details-modal').classList.add('active');
+    }
+
+    function closeModal(e) {
+        document.getElementById('details-modal').classList.remove('active');
+    }
+
+    function submitResolution(handoffId, notes) {
+        fetch(`/admin/handoffs/${handoffId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'Resolved', notes: notes })
+        })
+        .then(r => r.json())
+        .then(() => {
+            const card = document.getElementById(`card-${handoffId}`);
+            if (card) {
+                document.getElementById('list-resolved').appendChild(card);
+                closeModal();
+                applyFilters();
+                updatePendingBadge();
+            }
+        });
+    }
+
+    // Hover Shortcuts Actions
+    function quickResolve(handoffId) {
+        event.stopPropagation();
+        submitResolution(handoffId, "Quick resolved from shortcuts bar.");
+    }
+
+    function quickAssign(handoffId) {
+        event.stopPropagation();
+        fetch(`/admin/handoffs/${handoffId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'In Progress', assigned_to: 'Administrator' })
+        })
+        .then(r => r.json())
+        .then(() => {
+            const card = document.getElementById(`card-${handoffId}`);
+            if (card) {
+                document.getElementById('list-progress').appendChild(card);
+                applyFilters();
+                updatePendingBadge();
+            }
+        });
+    }
+
+    // Double-click triggers card detail modal
+    document.querySelectorAll('.handoff-card').forEach(card => {
+        card.addEventListener('dblclick', () => {
+            const hId = card.getAttribute('data-id');
+            openDetails(hId);
+        });
+    });
+
+    // Drag and Drop Logic
+    const columns = document.querySelectorAll('.kanban-column');
+
+    function initDragEvents(card) {
+        card.addEventListener('dragstart', (e) => {
+            card.classList.add('dragging');
+            e.dataTransfer.setData('text/plain', card.id);
+        });
+
+        card.addEventListener('dragend', () => {
+            card.classList.remove('dragging');
+        });
+
+        card.addEventListener('dblclick', () => {
+            const hId = card.getAttribute('data-id');
+            openDetails(hId);
+        });
+    }
+
+    document.querySelectorAll('.handoff-card').forEach(initDragEvents);
+
+    columns.forEach(column => {
+        column.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            column.classList.add('drag-over');
+        });
+
+        column.addEventListener('dragleave', () => {
+            column.classList.remove('drag-over');
+        });
+
+        column.addEventListener('drop', (e) => {
+            e.preventDefault();
+            column.classList.remove('drag-over');
+            
+            const cardId = e.dataTransfer.getData('text/plain');
+            const card = document.getElementById(cardId);
+            const body = column.querySelector('.column-body');
+            
+            if (card && body) {
+                body.appendChild(card);
+                applyFilters();
+                
+                // API Update
+                const handoffId = card.getAttribute('data-id');
+                const statusMap = {
+                    'pending': 'Pending',
+                    'in-progress': 'In Progress',
+                    'resolved': 'Resolved'
+                };
+                const newStatus = statusMap[column.id];
+                
+                fetch(`/admin/handoffs/${handoffId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: newStatus })
+                })
+                .then(r => r.json())
+                .then(data => {
+                    console.log('Status updated:', newStatus);
+                    updatePendingBadge();
+                });
+            }
+        });
+    });
+
+    function updateCounts() {
+        columns.forEach(col => {
+            const body = col.querySelector('.column-body');
+            const cards = Array.from(body.querySelectorAll('.handoff-card'));
+            const visibleCards = cards.filter(child => child.style.display !== 'none');
+            
+            col.querySelector('.item-count').innerText = visibleCards.length;
+            
+            // Toggle empty state
+            const emptyState = body.querySelector('.empty-state');
+            if (emptyState) {
+                emptyState.style.display = visibleCards.length === 0 ? 'flex' : 'none';
+            }
+        });
+    }
+
+    // Initialize counts and empty states on load
+    updateCounts();
+
+    // WebSocket Integration via socket.io
+    const socket = io();
+
+    socket.on('new_handoff', function(data) {
+        console.log('New WebSocket Handoff Incoming:', data);
+        
+        // Show native browser notification if allowed
+        if (Notification.permission === "granted") {
+            new Notification(`CRM Alert: ${data.traveler_name || 'New Customer'}`, {
+                body: data.reason,
+                icon: 'https://cdn-icons-png.flaticon.com/512/179/179386.png'
+            });
+        }
+
+        // Show elegant glass overlay UI Toast notification
+        const toast = document.getElementById('notification-toast');
+        document.getElementById('notif-title').innerText = `Conflict: ${data.traveler_name || 'New Customer'}`;
+        document.getElementById('notif-body').innerText = data.reason;
+        toast.classList.add('show');
+        setTimeout(() => toast.classList.remove('show'), 6000);
+
+        // Add Card DOM element dynamically to Pending List
+        const pendingList = document.getElementById('list-pending');
+        const prioLower = (data.priority || 'Medium').toLowerCase();
+        const tName = data.traveler_name || 'New Customer';
+        const tSearch = `${tName} ${data.handoff_id} ${data.reason}`.toLowerCase();
+        
+        const cardHtml = `
+            <div class="handoff-card card-glow-${prioLower}" id="card-${data.handoff_id}" draggable="true" data-id="${data.handoff_id}" data-priority="${data.priority}" data-search="${tSearch}">
+                <div class="priority-badge prio-${prioLower}">
+                    ${data.priority || 'Medium'}
+                </div>
+                <div class="card-traveler">
+                    <h3 class="traveler-name">${tName}</h3>
+                    <div class="traveler-phone-row">
+                        <svg class="w-4 h-4 text-emerald-400" fill="currentColor" width="16" height="16" viewBox="0 0 24 24">
+                            <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946C.06 5.348 5.397.01 11.96.01c3.178.001 6.169 1.24 8.424 3.496 2.254 2.256 3.491 5.252 3.491 8.431-.005 6.56-5.343 11.897-11.9 11.897-2.008-.002-3.98-.51-5.725-1.486L0 24zm6.59-4.846c1.6.95 3.188 1.449 4.725 1.451 5.405 0 9.803-4.379 9.807-9.763.002-2.607-1.01-5.059-2.85-6.902C16.489 2.097 14.054 1.08 11.456 1.08c-5.412 0-9.81 4.382-9.814 9.766-.002 1.812.484 3.585 1.408 5.16l-.994 3.63 3.738-.98z"></path>
+                        </svg>
+                        <span class="traveler-phone">New Agent Handoff</span>
+                    </div>
+                </div>
+                <div class="card-reason">
+                    ${data.reason}
+                </div>
+                <div class="card-footer">
+                    <div class="footer-time-row">
+                        <svg fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                        </svg>
+                        <span class="footer-time">Just now</span>
+                    </div>
+                    <span class="footer-id">#${data.handoff_id}</span>
+                </div>
+                
+                <div class="card-actions-overlay">
+                    <button class="card-action-btn btn-view-hover" onclick="openDetails('${data.handoff_id}')" title="Double Click / View Detail">
+                        <svg fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                        </svg>
+                    </button>
+                    <button class="card-action-btn btn-assign-hover" onclick="quickAssign('${data.handoff_id}')" title="Assign to Me">
+                        <svg fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path>
+                        </svg>
+                    </button>
+                    <button class="card-action-btn btn-resolve-hover" onclick="quickResolve('${data.handoff_id}')" title="Quick Resolve">
+                        <svg fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        `;
+        pendingList.insertAdjacentHTML('afterbegin', cardHtml);
+        
+        // Register events on new dynamic element
+        const newCard = document.getElementById(`card-${data.handoff_id}`);
+        initDragEvents(newCard);
+        
+        applyFilters();
+        updatePendingBadge();
+    });
+
+    function updatePendingBadge() {
+        fetch('/admin/handoffs/pending')
+            .then(res => res.json())
+            .then(data => {
+                const badge = document.getElementById('pending-count-badge');
+                if (badge) badge.innerText = `${data.count} Pending Requests`;
+            });
+    }
+
+    // Request permissions for background notification
+    if (Notification.permission !== "granted" && Notification.permission !== "denied") {
+        Notification.requestPermission();
+    }
+</script>
+{% endblock %}

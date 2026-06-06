@@ -1,0 +1,351 @@
+{% extends "base.html" %}
+{% block title %}Lead {{ lead.lead_id }} — Rahma CRM{% endblock %}
+{% block topbar_title %}Lead Detail{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ url_for('leads.index') }}" class="btn btn-ghost btn-sm">← All Leads</a>
+<button onclick="openModal('editLead')" class="btn btn-primary btn-sm">✏ Edit Lead</button>
+{% endblock %}
+
+{% block content %}
+<div style="display:grid;grid-template-columns:2fr 1fr;gap:1.25rem">
+
+    <!-- Left -->
+    <div style="display:flex;flex-direction:column;gap:1.25rem">
+
+        <!-- Lead Header -->
+        <div class="card">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+                <div>
+                    <div style="display:flex;align-items:center;gap:0.65rem;flex-wrap:wrap;margin-bottom:0.5rem">
+                        <span class="mono" style="color:var(--accent-2)">{{ lead.lead_id }}</span>
+                        {% if lead.lead_stage == 'Qualified' or lead.lead_stage == 'Booked' %}
+                            <span class="badge badge-green">{{ lead.lead_stage }}</span>
+                        {% elif lead.lead_stage == 'Lost' %}
+                            <span class="badge badge-red">{{ lead.lead_stage }}</span>
+                        {% elif lead.lead_stage == 'New' %}
+                            <span class="badge badge-blue">{{ lead.lead_stage }}</span>
+                        {% else %}
+                            <span class="badge badge-yellow">{{ lead.lead_stage }}</span>
+                        {% endif %}
+                        {% if lead.priority == 'High' %}<span class="badge badge-red">🔴 High</span>
+                        {% elif lead.priority == 'Medium' %}<span class="badge badge-yellow">🟡 Medium</span>
+                        {% else %}<span class="badge badge-gray">🟢 Low</span>{% endif %}
+                        {% if lead.handoff_required %}<span class="badge badge-purple">🔔 Handoff Required</span>{% endif %}
+                    </div>
+                    <h1 style="font-size:1.5rem;font-weight:800;color:var(--text-main)">{{ lead.customer_name or 'Unknown' }}</h1>
+                    {% if lead.raw_phone %}
+                    <div style="color:var(--text-muted);font-size:0.83rem;margin-top:4px">📱 {{ lead.raw_phone }}</div>
+                    {% endif %}
+                </div>
+                <!-- Stage Advance -->
+                {% if lead.lead_stage not in ['Booked', 'Lost'] %}
+                <button id="advanceBtn" class="btn btn-success btn-sm" onclick="advanceStage('{{ lead.lead_id }}')">
+                    Advance Stage →
+                </button>
+                {% endif %}
+            </div>
+
+            <!-- Stage Pipeline Visual -->
+            <div style="display:flex;gap:0;margin-top:1.25rem;overflow:hidden;border-radius:0.5rem">
+                {% set stage_list = ['New','Contacted','Interested','Qualified','Booked'] %}
+                {% set current_idx = stage_list.index(lead.lead_stage) if lead.lead_stage in stage_list else -1 %}
+                {% for s in stage_list %}
+                {% set s_idx = loop.index0 %}
+                <div style="flex:1;padding:0.35rem 0.5rem;text-align:center;font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;
+                    background:{% if s_idx < current_idx %}rgba(99,102,241,0.25){% elif s_idx == current_idx %}var(--accent){% else %}rgba(255,255,255,0.04){% endif %};
+                    color:{% if s_idx <= current_idx %}#fff{% else %}var(--text-muted){% endif %};
+                    border-right:1px solid var(--border)">{{ s }}</div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Details -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">📋 Lead Details</span>
+                <button onclick="openModal('editLead')" class="btn btn-ghost btn-sm">✏ Edit</button>
+            </div>
+            <div class="grid-2" style="gap:1rem">
+                <div>
+                    <div class="form-label">Source</div>
+                    <div style="color:var(--text-main)">{{ lead.lead_source or '—' }}</div>
+                </div>
+                <div>
+                    <div class="form-label">Channel</div>
+                    <div style="color:var(--text-main)">{{ lead.channel or '—' }}</div>
+                </div>
+                <div>
+                    <div class="form-label">Trip Type Preference</div>
+                    <div style="color:var(--text-main)">{{ lead.preferred_trip_type or '—' }}</div>
+                </div>
+                <div>
+                    <div class="form-label">Language</div>
+                    <div style="color:var(--text-main)">{{ lead.language or '—' }}</div>
+                </div>
+                <div>
+                    <div class="form-label">Interested Trip IDs</div>
+                    <div style="color:var(--text-main);font-family:'JetBrains Mono',monospace;font-size:0.8rem">{{ lead.interested_trip_ids or '—' }}</div>
+                </div>
+                <div>
+                    <div class="form-label">Suggested Trip IDs</div>
+                    <div style="color:var(--text-main);font-family:'JetBrains Mono',monospace;font-size:0.8rem">{{ lead.suggested_trip_ids or '—' }}</div>
+                </div>
+                <div>
+                    <div class="form-label">Follow-Up Status</div>
+                    <div style="color:var(--text-main)">{{ lead.follow_up_status or '—' }}</div>
+                </div>
+                <div>
+                    <div class="form-label">Follow-Up Date</div>
+                    <div style="color:{% if lead.follow_up_due_date and lead.follow_up_due_date.isoformat() < '' %}var(--red){% else %}var(--text-main){% endif %}">
+                        {{ lead.follow_up_due_date.strftime('%d %B %Y') if lead.follow_up_due_date else '—' }}
+                    </div>
+                </div>
+                {% if lead.notes %}
+                <div class="col-span-2">
+                    <div class="form-label">Notes</div>
+                    <div style="color:var(--text-dim);font-size:0.83rem;line-height:1.6;white-space:pre-wrap">{{ lead.notes }}</div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Linked Traveler -->
+        {% if traveler %}
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">👤 Linked Traveler</span>
+                <a href="{{ url_for('travelers.detail', traveler_id=traveler.traveler_id) }}" class="btn btn-ghost btn-sm">View Profile →</a>
+            </div>
+            <div style="display:flex;align-items:center;gap:1rem">
+                <div style="width:48px;height:48px;background:linear-gradient(135deg,var(--accent),var(--accent-2));border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.1rem;color:#fff;flex-shrink:0">
+                    {{ (traveler.full_name or 'U')[0].upper() }}
+                </div>
+                <div>
+                    <div style="font-weight:700;color:var(--text-main)">{{ traveler.full_name }}</div>
+                    <div style="font-size:0.78rem;color:var(--text-muted)">{{ traveler.traveler_id }} · {{ traveler.status }} · {{ traveler.total_trips }} trips</div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Booking Event Trail</span>
+            </div>
+            {% if event_trail %}
+            <div style="display:flex;flex-direction:column;gap:0.7rem">
+                {% for event in event_trail %}
+                <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:0.75rem 0.9rem">
+                    <div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start">
+                        <div>
+                            <div style="font-weight:700;color:var(--text-main)">{{ event.event_label or event.event_type }}</div>
+                            <div style="font-size:0.75rem;color:var(--text-muted)">{{ event.event_id }}{% if event.booking_id %} · {{ event.booking_id }}{% endif %}</div>
+                        </div>
+                        <div style="font-size:0.72rem;color:var(--text-muted);white-space:nowrap">{{ event.occurred_at.strftime('%d %b %Y %H:%M') if event.occurred_at else 'Pending time' }}</div>
+                    </div>
+                    {% if event.notes %}
+                    <div style="font-size:0.78rem;color:var(--text-dim);margin-top:0.25rem">{{ event.notes }}</div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p style="color:var(--text-muted);font-size:0.83rem">No booking events recorded yet.</p>
+            {% endif %}
+        </div>
+
+        <!-- Interactions -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">💬 Interactions ({{ interactions|length }})</span>
+            </div>
+            {% if interactions %}
+            <div style="display:flex;flex-direction:column;gap:0.75rem">
+            {% for i in interactions %}
+            <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:0.85rem 1rem">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.35rem">
+                    <span class="badge {% if i.direction == 'inbound' %}badge-blue{% else %}badge-green{% endif %}">{{ i.direction }}</span>
+                    <span style="font-size:0.7rem;color:var(--text-muted)">{{ i.created_at.strftime('%d %b %Y %H:%M') if i.created_at else '—' }}</span>
+                </div>
+                {% if i.message_text %}
+                <div style="color:var(--text-dim);font-size:0.82rem;margin-bottom:0.35rem">{{ i.message_text[:200] }}{% if i.message_text|length > 200 %}…{% endif %}</div>
+                {% endif %}
+                {% if i.intent %}<div style="font-size:0.72rem;color:var(--text-muted)">Intent: {{ i.intent }}</div>{% endif %}
+            </div>
+            {% endfor %}
+            </div>
+            {% else %}
+            <p style="color:var(--text-muted);font-size:0.83rem">No interactions recorded.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Right: Actions -->
+    <div style="display:flex;flex-direction:column;gap:1rem">
+        <div class="card">
+            <div class="card-title" style="margin-bottom:1rem">⚡ Actions</div>
+            <div style="display:flex;flex-direction:column;gap:0.5rem">
+                {% if lead.lead_stage not in ['Booked', 'Lost'] %}
+                <button class="btn btn-primary" onclick="advanceStage('{{ lead.lead_id }}')">→ Advance Stage</button>
+                {% endif %}
+                <button class="btn btn-ghost" onclick="openModal('triggerHandoff')">🔔 Create Handoff</button>
+                <a href="{{ url_for('bookings.index') }}" class="btn btn-ghost">📋 Create Booking</a>
+                <button onclick="openModal('editLead')" class="btn btn-ghost">✏ Edit Lead</button>
+                <form action="{{ url_for('leads.update', lead_id=lead.lead_id) }}" method="POST" onsubmit="return confirm('Mark as Lost?')">
+                    <input type="hidden" name="_method" value="DELETE">
+                    <button type="submit" class="btn btn-danger" style="width:100%">✕ Mark as Lost</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title" style="margin-bottom:0.75rem">ℹ Meta</div>
+            <div style="display:flex;flex-direction:column;gap:0.5rem;font-size:0.78rem">
+                <div style="display:flex;justify-content:space-between">
+                    <span style="color:var(--text-muted)">Created</span>
+                    <span>{{ lead.created_at.strftime('%d %b %Y') if lead.created_at else '—' }}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between">
+                    <span style="color:var(--text-muted)">Updated</span>
+                    <span>{{ lead.updated_at.strftime('%d %b %Y') if lead.updated_at else '—' }}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between">
+                    <span style="color:var(--text-muted)">Interactions</span>
+                    <span>{{ lead.interaction_count or interactions|length }}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between">
+                    <span style="color:var(--text-muted)">Traveler ID</span>
+                    <span class="mono" style="color:var(--accent-2)">{{ lead.traveler_id or '—' }}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between">
+                    <span style="color:var(--text-muted)">Handoff ID</span>
+                    <span class="mono" style="color:var(--accent-2)">{{ lead.handoff_id or '—' }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- EDIT LEAD MODAL -->
+<div id="editLead" class="modal-overlay">
+    <div class="modal-box">
+        <div class="modal-header">
+            <span class="modal-title">✏ Edit Lead</span>
+            <button class="modal-close" onclick="closeModal('editLead')">✕</button>
+        </div>
+        <form action="{{ url_for('leads.update', lead_id=lead.lead_id) }}" method="POST">
+            <div class="grid-2">
+                <div class="form-group col-span-2">
+                    <label class="form-label">Customer Name</label>
+                    <input class="form-input" type="text" name="customer_name" value="{{ lead.customer_name or '' }}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Phone</label>
+                    <input class="form-input" type="text" name="raw_phone" value="{{ lead.raw_phone or '' }}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Stage</label>
+                    <select class="form-select" name="lead_stage">
+                        {% for s in stages %}
+                        <option value="{{ s }}" {% if lead.lead_stage == s %}selected{% endif %}>{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Priority</label>
+                    <select class="form-select" name="priority">
+                        {% for p in ['High','Medium','Low'] %}
+                        <option value="{{ p }}" {% if lead.priority == p %}selected{% endif %}>{{ p }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Follow-Up Status</label>
+                    <select class="form-select" name="follow_up_status">
+                        {% for fs in ['Pending','Contacted','Done','No Answer'] %}
+                        <option value="{{ fs }}" {% if lead.follow_up_status == fs %}selected{% endif %}>{{ fs }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Follow-Up Date</label>
+                    <input class="form-input" type="date" name="follow_up_due_date" value="{{ lead.follow_up_due_date.strftime('%Y-%m-%d') if lead.follow_up_due_date else '' }}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Interested Trip IDs</label>
+                    <input class="form-input" type="text" name="interested_trip_ids" value="{{ lead.interested_trip_ids or '' }}">
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Notes</label>
+                    <textarea class="form-textarea" name="notes">{{ lead.notes or '' }}</textarea>
+                </div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1rem">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('editLead')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- HANDOFF MODAL -->
+<div id="triggerHandoff" class="modal-overlay">
+    <div class="modal-box" style="max-width:420px">
+        <div class="modal-header">
+            <span class="modal-title">🔔 Create Handoff</span>
+            <button class="modal-close" onclick="closeModal('triggerHandoff')">✕</button>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Reason</label>
+            <textarea class="form-textarea" id="handoff-reason" placeholder="Why does this lead need human attention?">{{ lead.notes or '' }}</textarea>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Priority</label>
+            <select class="form-select" id="handoff-priority">
+                <option value="High">High</option>
+                <option value="Medium" selected>Medium</option>
+                <option value="Low">Low</option>
+            </select>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1rem">
+            <button type="button" class="btn btn-ghost" onclick="closeModal('triggerHandoff')">Cancel</button>
+            <button type="button" class="btn btn-primary" onclick="triggerHandoff()">Create Handoff</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(m => {
+    m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+});
+
+function advanceStage(leadId) {
+    fetch(`/leads/${leadId}/advance`, { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            if (d.new_stage) { location.reload(); }
+        });
+}
+
+function triggerHandoff() {
+    const reason = document.getElementById('handoff-reason').value;
+    const priority = document.getElementById('handoff-priority').value;
+    fetch('{{ url_for("leads.create_handoff", lead_id=lead.lead_id) }}', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason, priority })
+    }).then(r => r.json()).then(d => {
+        closeModal('triggerHandoff');
+        if (d.handoff_id) {
+            alert('Handoff created: ' + d.handoff_id);
+            location.reload();
+        }
+    });
+}
+</script>
+{% endblock %}

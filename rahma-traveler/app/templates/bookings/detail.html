@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}{{ booking.booking_id }} — Rahma CRM{% endblock %}
+{% block topbar_title %}Booking Detail{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ url_for('bookings.index') }}" class="btn btn-ghost btn-sm">← All Bookings</a>
+{% endblock %}
+
+{% block content %}
+<div style="display:grid;grid-template-columns:2fr 1fr;gap:1.25rem">
+    <div style="display:flex;flex-direction:column;gap:1.25rem">
+
+        <!-- Header -->
+        <div class="card">
+            <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.5rem">
+                <span class="mono" style="color:var(--accent-2)">{{ booking.booking_id }}</span>
+                {% if booking.booking_status == 'Confirmed' %}<span class="badge badge-green">Confirmed</span>
+                {% elif booking.booking_status == 'Cancelled' %}<span class="badge badge-red">Cancelled</span>
+                {% else %}<span class="badge badge-yellow">Draft</span>{% endif %}
+                {% if booking.payment_status == 'Fully Paid' %}<span class="badge badge-green">{{ booking.payment_status }}</span>
+                {% elif booking.payment_status == 'Deposit Paid' %}<span class="badge badge-yellow">{{ booking.payment_status }}</span>
+                {% elif booking.payment_status == 'Refunded' %}<span class="badge badge-red">{{ booking.payment_status }}</span>
+                {% else %}<span class="badge badge-gray">Payment: {{ booking.payment_status or 'Pending' }}</span>{% endif %}
+            </div>
+            <h1 style="font-size:1.4rem;font-weight:800;color:var(--text-main);margin-bottom:0.35rem">
+                {{ booking.traveler_name or 'Unknown Traveler' }}
+            </h1>
+            <div style="color:var(--text-muted);font-size:0.83rem">
+                {{ booking.trip_name or booking.trip_id or 'No trip linked' }} · {{ booking.room_type or '—' }} Room
+            </div>
+        </div>
+
+        <!-- Details -->
+        <div class="card">
+            <div class="card-title" style="margin-bottom:1rem">📋 Booking Details</div>
+            <div class="grid-2">
+                <div><div class="form-label">Trip</div><div style="color:var(--text-main)">{{ booking.trip_name or '—' }}</div></div>
+                <div><div class="form-label">Trip ID</div><div class="mono" style="color:var(--accent-2)">{{ booking.trip_id or '—' }}</div></div>
+                <div><div class="form-label">Room Type</div><div style="color:var(--text-main)">{{ booking.room_type or '—' }}</div></div>
+                <div><div class="form-label">Flight Option</div><div style="color:var(--text-main)">{{ booking.flight_option or '—' }}</div></div>
+                <div><div class="form-label">Currency</div><div style="color:var(--text-main)">{{ booking.currency or '—' }}</div></div>
+                <div><div class="form-label">Source</div><div style="color:var(--text-main)">{{ booking.booking_source or '—' }}</div></div>
+                <div><div class="form-label">Lead ID</div><div class="mono" style="color:var(--accent-2)">{{ booking.lead_id or '—' }}</div></div>
+                <div><div class="form-label">Created</div><div style="color:var(--text-main)">{{ booking.draft_created_at.strftime('%d %B %Y %H:%M') if booking.draft_created_at else '—' }}</div></div>
+                {% if booking.booking_notes %}
+                <div class="col-span-2"><div class="form-label">Notes</div>
+                <div style="color:var(--text-dim);font-size:0.83rem;white-space:pre-wrap">{{ booking.booking_notes }}</div></div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Booking Event Trail</span>
+            </div>
+            {% if event_trail %}
+            <div style="display:flex;flex-direction:column;gap:0.7rem">
+                {% for event in event_trail %}
+                <div style="display:grid;grid-template-columns:9rem 1fr;gap:0.75rem;background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:0.75rem 0.9rem">
+                    <div style="font-size:0.72rem;color:var(--text-muted)">
+                        {{ event.occurred_at.strftime('%d %b %Y %H:%M') if event.occurred_at else 'Pending time' }}
+                    </div>
+                    <div>
+                        <div style="font-weight:700;color:var(--text-main)">{{ event.event_label or event.event_type }}</div>
+                        <div style="font-size:0.75rem;color:var(--text-muted)">
+                            {{ event.event_id }}
+                            {% if event.interaction_id %} · {{ event.interaction_id }}{% endif %}
+                            {% if event.channel %} · {{ event.channel }}{% endif %}
+                        </div>
+                        {% if event.notes %}
+                        <div style="font-size:0.78rem;color:var(--text-dim);margin-top:0.25rem">{{ event.notes }}</div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p style="color:var(--text-muted);font-size:0.83rem">No booking events recorded yet.</p>
+            {% endif %}
+        </div>
+
+        <!-- Linked Traveler -->
+        {% if traveler %}
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">👤 Traveler</span>
+                <a href="{{ url_for('travelers.detail', traveler_id=traveler.traveler_id) }}" class="btn btn-ghost btn-sm">View Profile →</a>
+            </div>
+            <div style="display:flex;align-items:center;gap:1rem">
+                <div style="width:44px;height:44px;background:linear-gradient(135deg,var(--accent),var(--accent-2));border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;flex-shrink:0">
+                    {{ (traveler.full_name or 'U')[0].upper() }}
+                </div>
+                <div>
+                    <div style="font-weight:700;color:var(--text-main)">{{ traveler.full_name }}</div>
+                    <div style="font-size:0.78rem;color:var(--text-muted)">{{ traveler.traveler_id }} · {{ traveler.status }} · {{ traveler.total_trips }} trips · ${{ '{:,.0f}'.format(traveler.lifetime_revenue or 0) }} lifetime</div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Right: Actions -->
+    <div style="display:flex;flex-direction:column;gap:1rem">
+        <div class="card">
+            <div class="card-title" style="margin-bottom:1rem">⚡ Update Status</div>
+            <form action="{{ url_for('bookings.update_status', booking_id=booking.booking_id) }}" method="POST">
+                <div class="form-group">
+                    <label class="form-label">Booking Status</label>
+                    <select class="form-select" name="booking_status">
+                        {% for s in booking_statuses %}
+                        <option value="{{ s }}" {% if booking.booking_status == s %}selected{% endif %}>{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Payment Status</label>
+                    <select class="form-select" name="payment_status">
+                        {% for s in payment_statuses %}
+                        <option value="{{ s }}" {% if booking.payment_status == s %}selected{% endif %}>{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Add Note</label>
+                    <textarea class="form-textarea" name="booking_notes" placeholder="Add a note…">{{ booking.booking_notes or '' }}</textarea>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width:100%">Save Changes</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <div class="card-title" style="margin-bottom:0.75rem">🔗 Links</div>
+            <div style="display:flex;flex-direction:column;gap:0.5rem">
+                {% if trip %}
+                <a href="{{ url_for('trips.detail', trip_id=trip.trip_id) }}" class="btn btn-ghost btn-sm">✈️ View Trip</a>
+                {% endif %}
+                {% if traveler %}
+                <a href="{{ url_for('travelers.detail', traveler_id=traveler.traveler_id) }}" class="btn btn-ghost btn-sm">👤 View Traveler</a>
+                {% endif %}
+                {% if booking.lead_id %}
+                <a href="{{ url_for('leads.detail', lead_id=booking.lead_id) }}" class="btn btn-ghost btn-sm">🎯 View Lead</a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

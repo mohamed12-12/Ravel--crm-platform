@@ -1,0 +1,21 @@
+{% extends "crm_base.html" %}
+{% set active_page = 'trips' %}
+
+{% block content %}
+<div class="animate-fade-in">
+    <h2>Trip Inventory</h2>
+    <p style="color: var(--text-secondary); margin-bottom: 2rem;">Monitor availability and manage sales status for upcoming trips.</p>
+
+    <div class="data-panel">
+        <div class="panel-header">
+            <h3>Live Availability</h3>
+            <span class="badge badge-green">Connected to Google Sheets</span>
+        </div>
+        <div style="padding: 3rem; text-align: center; color: var(--text-secondary);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 48px; height: 48px; margin-bottom: 1rem; opacity: 0.2;"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+            <p>Trips module integration in progress...</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">Booking capacity is being tracked in real-time by the AI Agent.</p>
+        </div>
+    </div>
+</div>
+{% endblock %}

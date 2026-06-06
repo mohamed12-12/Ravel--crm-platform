@@ -1,0 +1,287 @@
+{% extends "base.html" %}
+{% block title %}{{ trip.trip_name }} — Rahma CRM{% endblock %}
+{% block topbar_title %}Trip Detail{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ url_for('trips.index') }}" class="btn btn-ghost btn-sm">← All Trips</a>
+<button onclick="openModal('editTrip')" class="btn btn-primary btn-sm">✏ Edit Trip</button>
+{% endblock %}
+
+{% block content %}
+<div style="display:grid;grid-template-columns:2fr 1fr;gap:1.25rem">
+
+    <!-- Left: Main info -->
+    <div style="display:flex;flex-direction:column;gap:1.25rem">
+
+        <!-- Header Card -->
+        <div class="card">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem">
+                <div>
+                    <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.5rem">
+                        <span class="mono" style="color:var(--accent-2)">{{ trip.trip_id }}</span>
+                        {% if trip.sales_status == 'Open' %}<span class="badge badge-green">Open</span>
+                        {% elif trip.sales_status == 'Closed' %}<span class="badge badge-red">Closed</span>
+                        {% elif trip.sales_status == 'Cancelled' %}<span class="badge badge-gray">Cancelled</span>
+                        {% else %}<span class="badge badge-yellow">{{ trip.sales_status }}</span>{% endif %}
+                        {% if trip.type %}<span class="badge badge-purple">{{ trip.type }}</span>{% endif %}
+                    </div>
+                    <h1 style="font-size:1.6rem;font-weight:800;color:var(--text-main);margin-bottom:0.35rem">{{ trip.trip_name }}</h1>
+                    {% if trip.trip_leader %}
+                    <div style="color:var(--text-muted);font-size:0.83rem">👤 {{ trip.trip_leader }}</div>
+                    {% endif %}
+                </div>
+                <div style="text-align:right;flex-shrink:0">
+                    <div style="font-size:1.4rem;font-weight:800;color:var(--text-main)">{{ trip.public_price or '—' }}</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted)">per person</div>
+                </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1.25rem;padding-top:1.25rem;border-top:1px solid var(--border)">
+                <div>
+                    <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Start Date</div>
+                    <div style="color:var(--text-main);font-weight:600">{{ trip.start_date.strftime('%d %B %Y') if trip.start_date else 'TBD' }}</div>
+                </div>
+                <div>
+                    <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">End Date</div>
+                    <div style="color:var(--text-main);font-weight:600">{{ trip.end_date.strftime('%d %B %Y') if trip.end_date else 'TBD' }}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Capacity Card -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">🛏 Room Inventory</span>
+                <button onclick="openModal('editInventory')" class="btn btn-ghost btn-sm">Adjust</button>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem">
+                {% for label, total, remaining in [
+                    ('Single', trip.single_total, trip.single_remaining),
+                    ('Double', trip.double_total, trip.double_remaining),
+                    ('Triple', trip.triple_total, trip.triple_remaining)
+                ] %}
+                {% set pct = (remaining / total * 100) if total else 0 %}
+                <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:1rem">
+                    <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em">{{ label }}</div>
+                    <div style="font-size:1.5rem;font-weight:800;margin:0.35rem 0;color:{% if pct > 30 %}var(--green){% elif pct > 0 %}var(--yellow){% else %}var(--red){% endif %}">{{ remaining }}</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted)">of {{ total }} remaining</div>
+                    <div class="cap-bar" style="margin-top:0.5rem">
+                        <div class="cap-fill {% if pct > 30 %}good{% elif pct > 0 %}warn{% else %}empty{% endif %}" style="width:{{ pct }}%"></div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Description -->
+        {% if trip.public_description %}
+        <div class="card">
+            <div class="card-title" style="margin-bottom:0.75rem">📝 Description</div>
+            <div style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;white-space:pre-wrap">{{ trip.public_description }}</div>
+        </div>
+        {% endif %}
+
+        {% if trip.sales_notes %}
+        <div class="card">
+            <div class="card-title" style="margin-bottom:0.75rem">🔒 Sales Notes (Internal)</div>
+            <div style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;white-space:pre-wrap">{{ trip.sales_notes }}</div>
+        </div>
+        {% endif %}
+
+        <!-- Bookings -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">📋 Bookings ({{ bookings|length }})</span>
+                <a href="{{ url_for('bookings.index') }}?q={{ trip.trip_id }}" class="btn btn-ghost btn-sm">View all</a>
+            </div>
+            {% if bookings %}
+            <table class="data-table">
+                <thead><tr><th>Booking ID</th><th>Traveler</th><th>Room</th><th>Status</th><th>Payment</th><th>Date</th></tr></thead>
+                <tbody>
+                {% for b in bookings %}
+                <tr onclick="window.location='{{ url_for('bookings.detail', booking_id=b.booking_id) }}'">
+                    <td class="mono">{{ b.booking_id }}</td>
+                    <td class="primary">{{ b.traveler_name or '—' }}</td>
+                    <td>{{ b.room_type or '—' }}</td>
+                    <td>
+                        {% if b.booking_status == 'Confirmed' %}<span class="badge badge-green">Confirmed</span>
+                        {% elif b.booking_status == 'Cancelled' %}<span class="badge badge-red">Cancelled</span>
+                        {% else %}<span class="badge badge-yellow">Draft</span>{% endif %}
+                    </td>
+                    <td>{{ b.payment_status or '—' }}</td>
+                    <td>{{ b.draft_created_at.strftime('%d %b') if b.draft_created_at else '—' }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p style="color:var(--text-muted);font-size:0.83rem;padding:1rem 0">No bookings yet for this trip.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Right: Actions -->
+    <div style="display:flex;flex-direction:column;gap:1rem">
+        <div class="card">
+            <div class="card-title" style="margin-bottom:1rem">⚡ Actions</div>
+            <div style="display:flex;flex-direction:column;gap:0.5rem">
+                <button onclick="openModal('editTrip')" class="btn btn-primary">✏ Edit Details</button>
+                <button onclick="openModal('editInventory')" class="btn btn-ghost">🛏 Adjust Inventory</button>
+                <a href="{{ url_for('bookings.index') }}" class="btn btn-ghost">📋 All Bookings</a>
+                <form action="{{ url_for('trips.update', trip_id=trip.trip_id) }}" method="POST" onsubmit="return confirm('Mark as Cancelled?')">
+                    <input type="hidden" name="_method" value="DELETE">
+                    <button type="submit" class="btn btn-danger" style="width:100%">✕ Cancel Trip</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title" style="margin-bottom:0.75rem">ℹ Info</div>
+            <div style="display:flex;flex-direction:column;gap:0.6rem;font-size:0.8rem">
+                <div style="display:flex;justify-content:space-between">
+                    <span style="color:var(--text-muted)">Year</span>
+                    <span style="color:var(--text-main)">{{ trip.year or '—' }}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between">
+                    <span style="color:var(--text-muted)">Window Status</span>
+                    <span style="color:var(--text-main)">{{ trip.trip_window_status or '—' }}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between">
+                    <span style="color:var(--text-muted)">Total Bookings</span>
+                    <span style="color:var(--text-main)">{{ bookings|length }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- EDIT TRIP MODAL -->
+<div id="editTrip" class="modal-overlay">
+    <div class="modal-box" style="max-width:680px">
+        <div class="modal-header">
+            <span class="modal-title">✏ Edit Trip</span>
+            <button class="modal-close" onclick="closeModal('editTrip')">✕</button>
+        </div>
+        <form action="{{ url_for('trips.update', trip_id=trip.trip_id) }}" method="POST">
+            <div class="grid-2">
+                <div class="form-group col-span-2">
+                    <label class="form-label">Trip Name</label>
+                    <input class="form-input" type="text" name="trip_name" value="{{ trip.trip_name }}" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Type</label>
+                    <select class="form-select" name="type">
+                        <option value="Local" {% if trip.type == 'Local' %}selected{% endif %}>Local</option>
+                        <option value="International" {% if trip.type == 'International' %}selected{% endif %}>International</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Sales Status</label>
+                    <select class="form-select" name="sales_status">
+                        {% for s in ['Open','Closed','Cancelled'] %}
+                        <option value="{{ s }}" {% if trip.sales_status == s %}selected{% endif %}>{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Start Date</label>
+                    <input class="form-input" type="date" name="start_date" value="{{ trip.start_date.strftime('%Y-%m-%d') if trip.start_date else '' }}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">End Date</label>
+                    <input class="form-input" type="date" name="end_date" value="{{ trip.end_date.strftime('%Y-%m-%d') if trip.end_date else '' }}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Trip Leader</label>
+                    <input class="form-input" type="text" name="trip_leader" value="{{ trip.trip_leader or '' }}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Public Price</label>
+                    <input class="form-input" type="text" name="public_price" value="{{ trip.public_price or '' }}">
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Single / Double / Triple Total</label>
+                    <div style="display:flex;gap:0.5rem">
+                        <input class="form-input" type="number" name="single_total" value="{{ trip.single_total }}" placeholder="Single" min="0">
+                        <input class="form-input" type="number" name="double_total" value="{{ trip.double_total }}" placeholder="Double" min="0">
+                        <input class="form-input" type="number" name="triple_total" value="{{ trip.triple_total }}" placeholder="Triple" min="0">
+                    </div>
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Single / Double / Triple Remaining</label>
+                    <div style="display:flex;gap:0.5rem">
+                        <input class="form-input" type="number" name="single_remaining" value="{{ trip.single_remaining }}" placeholder="Single" min="0">
+                        <input class="form-input" type="number" name="double_remaining" value="{{ trip.double_remaining }}" placeholder="Double" min="0">
+                        <input class="form-input" type="number" name="triple_remaining" value="{{ trip.triple_remaining }}" placeholder="Triple" min="0">
+                    </div>
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-textarea" name="public_description">{{ trip.public_description or '' }}</textarea>
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Sales Notes</label>
+                    <textarea class="form-textarea" name="sales_notes">{{ trip.sales_notes or '' }}</textarea>
+                </div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1rem">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('editTrip')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- INVENTORY QUICK EDIT MODAL -->
+<div id="editInventory" class="modal-overlay">
+    <div class="modal-box" style="max-width:420px">
+        <div class="modal-header">
+            <span class="modal-title">🛏 Adjust Inventory</span>
+            <button class="modal-close" onclick="closeModal('editInventory')">✕</button>
+        </div>
+        <div class="grid-2">
+            <div class="form-group">
+                <label class="form-label">Single Remaining</label>
+                <input class="form-input" type="number" id="inv-single" value="{{ trip.single_remaining }}" min="0" max="{{ trip.single_total }}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Double Remaining</label>
+                <input class="form-input" type="number" id="inv-double" value="{{ trip.double_remaining }}" min="0" max="{{ trip.double_total }}">
+            </div>
+            <div class="form-group col-span-2">
+                <label class="form-label">Triple Remaining</label>
+                <input class="form-input" type="number" id="inv-triple" value="{{ trip.triple_remaining }}" min="0" max="{{ trip.triple_total }}">
+            </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1rem">
+            <button type="button" class="btn btn-ghost" onclick="closeModal('editInventory')">Cancel</button>
+            <button type="button" class="btn btn-primary" onclick="saveInventory()">Save Inventory</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(m => {
+    m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+});
+
+function saveInventory() {
+    const body = {
+        single_remaining: parseInt(document.getElementById('inv-single').value) || 0,
+        double_remaining: parseInt(document.getElementById('inv-double').value) || 0,
+        triple_remaining: parseInt(document.getElementById('inv-triple').value) || 0,
+    };
+    fetch('{{ url_for("trips.update_inventory", trip_id=trip.trip_id) }}', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+    }).then(r => r.json()).then(d => {
+        if (d.status === 'ok') { closeModal('editInventory'); location.reload(); }
+    });
+}
+</script>
+{% endblock %}

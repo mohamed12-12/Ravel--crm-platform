@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+{% block title %}Bookings — Rahma CRM{% endblock %}
+{% block topbar_title %}Bookings{% endblock %}
+
+{% block topbar_actions %}
+<button onclick="openModal('createBooking')" class="btn btn-primary btn-sm">+ New Booking</button>
+{% endblock %}
+
+{% block content %}
+<!-- Status summary -->
+<div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:1.25rem">
+    {% for s, color in [('Draft','badge-yellow'),('Confirmed','badge-green'),('Cancelled','badge-red')] %}
+    <a href="{{ url_for('bookings.index', status=s) }}" style="text-decoration:none">
+        <div class="kpi-card" style="border-left:3px solid {% if s == 'Draft' %}var(--yellow){% elif s == 'Confirmed' %}var(--green){% else %}var(--red){% endif %}">
+            <div class="kpi-label">{{ s }}</div>
+            <div class="kpi-value">{{ counts.get(s, 0) }}</div>
+        </div>
+    </a>
+    {% endfor %}
+</div>
+
+<!-- Search -->
+<form method="GET" action="{{ url_for('bookings.index') }}" class="search-bar">
+    <div class="search-input-wrap">
+        <span class="search-icon">🔍</span>
+        <input class="form-input" type="text" name="q" value="{{ q }}" placeholder="Search traveler, booking ID, trip…">
+    </div>
+    <select class="form-select" name="status" style="width:160px">
+        <option value="">All Statuses</option>
+        {% for s in statuses %}
+        <option value="{{ s }}" {% if current_status == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+    </select>
+    <button type="submit" class="btn btn-ghost">Filter</button>
+    {% if q or current_status %}
+    <a href="{{ url_for('bookings.index') }}" class="btn btn-ghost">✕ Clear</a>
+    {% endif %}
+</form>
+
+{% if bookings %}
+<div class="card" style="padding:0;overflow:hidden">
+    <table class="data-table">
+        <thead><tr>
+            <th>Booking ID</th><th>Traveler</th><th>Trip</th><th>Room</th><th>Status</th><th>Payment</th><th>Date</th>
+        </tr></thead>
+        <tbody>
+        {% for b in bookings %}
+        <tr onclick="window.location='{{ url_for('bookings.detail', booking_id=b.booking_id) }}'">
+            <td class="mono">{{ b.booking_id }}</td>
+            <td>
+                <div class="primary">{{ b.traveler_name or '—' }}</div>
+                {% if b.traveler_id %}<div style="font-size:0.7rem;color:var(--text-muted)">{{ b.traveler_id }}</div>{% endif %}
+            </td>
+            <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ b.trip_name or b.trip_id or '—' }}</td>
+            <td>{{ b.room_type or '—' }}</td>
+            <td>
+                {% if b.booking_status == 'Confirmed' %}<span class="badge badge-green">Confirmed</span>
+                {% elif b.booking_status == 'Cancelled' %}<span class="badge badge-red">Cancelled</span>
+                {% else %}<span class="badge badge-yellow">Draft</span>{% endif %}
+            </td>
+            <td>
+                {% if b.payment_status == 'Fully Paid' %}<span class="badge badge-green">{{ b.payment_status }}</span>
+                {% elif b.payment_status == 'Deposit Paid' %}<span class="badge badge-yellow">{{ b.payment_status }}</span>
+                {% elif b.payment_status == 'Refunded' %}<span class="badge badge-red">{{ b.payment_status }}</span>
+                {% else %}<span class="badge badge-gray">{{ b.payment_status or 'Pending' }}</span>{% endif %}
+            </td>
+            <td style="font-size:0.78rem;color:var(--text-muted)">{{ b.draft_created_at.strftime('%d %b %Y') if b.draft_created_at else '—' }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="pagination">
+    <span style="font-size:0.78rem;color:var(--text-muted);margin-right:0.5rem">{{ total_count }} total</span>
+    {% if pagination.has_prev %}
+    <a href="{{ url_for('bookings.index', page=pagination.prev_num, q=q, status=current_status) }}" class="page-btn">← Prev</a>
+    {% endif %}
+    {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+        {% if p %}<a href="{{ url_for('bookings.index', page=p, q=q, status=current_status) }}" class="page-btn {% if p == pagination.page %}active{% endif %}">{{ p }}</a>
+        {% else %}<span style="padding:0 0.25rem;color:var(--text-muted)">…</span>{% endif %}
+    {% endfor %}
+    {% if pagination.has_next %}
+    <a href="{{ url_for('bookings.index', page=pagination.next_num, q=q, status=current_status) }}" class="page-btn">Next →</a>
+    {% endif %}
+</div>
+{% else %}
+<div class="card" style="text-align:center;padding:3rem">
+    <div style="font-size:2.5rem;margin-bottom:0.75rem">📋</div>
+    <div style="font-weight:700;color:var(--text-main);margin-bottom:0.4rem">No bookings found</div>
+    <div style="color:var(--text-muted);font-size:0.83rem;margin-bottom:1.25rem">Bookings are created by the agent or manually.</div>
+    <button onclick="openModal('createBooking')" class="btn btn-primary">+ Create Booking</button>
+</div>
+{% endif %}
+
+<!-- CREATE MODAL -->
+<div id="createBooking" class="modal-overlay">
+    <div class="modal-box">
+        <div class="modal-header">
+            <span class="modal-title">📋 New Booking</span>
+            <button class="modal-close" onclick="closeModal('createBooking')">✕</button>
+        </div>
+        <form action="{{ url_for('bookings.create') }}" method="POST">
+            <div class="grid-2">
+                <div class="form-group col-span-2">
+                    <label class="form-label">Trip Selection</label>
+                    <select class="form-select" name="trip_id" id="tripSelector" required onchange="handleTripSelection()">
+                        <option value="">-- Select an Active Trip --</option>
+                        {% for t in trips_data %}
+                        <option value="{{ t.trip_id }}">{{ t.trip_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Auto-populated trip context -->
+                <div class="form-group col-span-2" id="tripDetailsCard" style="display:none;background:var(--bg-card);border:1px solid var(--border-color);padding:0.75rem;border-radius:6px;font-size:0.8rem">
+                    <div style="display:flex;justify-content:space-between;margin-bottom:0.25rem">
+                        <span style="color:var(--text-muted)">Type:</span>
+                        <strong id="tdType"></strong>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;margin-bottom:0.25rem">
+                        <span style="color:var(--text-muted)">Dates:</span>
+                        <strong id="tdDates"></strong>
+                    </div>
+                    <div style="display:flex;justify-content:space-between">
+                        <span style="color:var(--text-muted)">Remaining Rooms:</span>
+                        <strong id="tdRooms"></strong>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Traveler ID</label>
+                    <input class="form-input" type="text" name="traveler_id" placeholder="e.g. TR001">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Traveler Name</label>
+                    <input class="form-input" type="text" name="traveler_name" placeholder="Full name">
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Room Type</label>
+                    <select class="form-select" name="room_type" id="roomTypeSelector" required disabled>
+                        <option value="">-- Select Trip First --</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Currency</label>
+                    <select class="form-select" name="currency">
+                        <option value="USD">USD</option>
+                        <option value="EGP">EGP</option>
+                        <option value="EUR">EUR</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Source</label>
+                    <input class="form-input" type="text" name="booking_source" value="Admin" placeholder="Admin / WhatsApp / Web">
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Notes</label>
+                    <textarea class="form-textarea" name="booking_notes" placeholder="Any booking notes…"></textarea>
+                </div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1rem">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('createBooking')">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="submitBookingBtn" disabled>Create Draft</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TRIPS_DATA = {{ trips_data | tojson | safe }};
+
+function handleTripSelection() {
+    const tripId = document.getElementById('tripSelector').value;
+    const card = document.getElementById('tripDetailsCard');
+    const roomSelector = document.getElementById('roomTypeSelector');
+    const submitBtn = document.getElementById('submitBookingBtn');
+    
+    if (!tripId) {
+        card.style.display = 'none';
+        roomSelector.innerHTML = '<option value="">-- Select Trip First --</option>';
+        roomSelector.disabled = true;
+        submitBtn.disabled = true;
+        return;
+    }
+    
+    const trip = TRIPS_DATA.find(t => t.trip_id === tripId);
+    if (!trip) return;
+    
+    document.getElementById('tdType').innerText = trip.type || 'Unknown';
+    const sDate = trip.start_date || 'TBD';
+    const eDate = trip.end_date || 'TBD';
+    document.getElementById('tdDates').innerText = `${sDate} to ${eDate}`;
+    
+    const sRem = trip.single_remaining || 0;
+    const dRem = trip.double_remaining || 0;
+    const tRem = trip.triple_remaining || 0;
+    
+    document.getElementById('tdRooms').innerHTML = 
+        `<span style="color:${sRem > 0 ? 'var(--green)' : 'var(--red)'}">S: ${sRem}</span> | ` +
+        `<span style="color:${dRem > 0 ? 'var(--green)' : 'var(--red)'}">D: ${dRem}</span> | ` +
+        `<span style="color:${tRem > 0 ? 'var(--green)' : 'var(--red)'}">T: ${tRem}</span>`;
+        
+    card.style.display = 'block';
+    
+    roomSelector.innerHTML = '';
+    let hasRooms = false;
+    if (sRem > 0) { roomSelector.innerHTML += '<option value="Single">Single</option>'; hasRooms = true; }
+    if (dRem > 0) { roomSelector.innerHTML += '<option value="Double">Double</option>'; hasRooms = true; }
+    if (tRem > 0) { roomSelector.innerHTML += '<option value="Triple">Triple</option>'; hasRooms = true; }
+    
+    if (!hasRooms) {
+        roomSelector.innerHTML = '<option value="">-- Trip Full --</option>';
+        roomSelector.disabled = true;
+        submitBtn.disabled = true;
+    } else {
+        roomSelector.disabled = false;
+        submitBtn.disabled = false;
+    }
+}
+
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(m => {
+    m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+});
+</script>
+{% endblock %}

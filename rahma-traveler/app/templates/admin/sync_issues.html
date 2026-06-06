@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Sync Issues — Rahma CRM{% endblock %}
+{% block topbar_title %}Sync Issues{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">⚠️ Sheet Synchronization Issues</span>
+        <span class="badge badge-red" style="font-size:0.75rem">{{ issues|length }} Failed</span>
+    </div>
+    
+    <div style="padding:0 1.5rem 1rem 1.5rem">
+        <p style="color:var(--text-muted);font-size:0.85rem;margin:0">
+            These records were successfully saved in the database but failed to sync to Google Sheets or Excel. Retrying will re-attempt the sheet update.
+        </p>
+    </div>
+
+    {% if issues %}
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Entity Type</th>
+                <th>Record ID</th>
+                <th>Status</th>
+                <th>Error Message</th>
+                <th>Last Attempt</th>
+                <th style="text-align:right">Action</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for issue in issues %}
+        <tr id="row-{{ issue.mapping_name }}-{{ issue.record_id }}">
+            <td class="primary">{{ issue.mapping_name }}</td>
+            <td class="mono">{{ issue.record_id }}</td>
+            <td>
+                {% if issue.status == 'failed' %}
+                    <span class="badge badge-red">Failed</span>
+                {% else %}
+                    <span class="badge badge-blue">{{ issue.status }}</span>
+                {% endif %}
+            </td>
+            <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted)" title="{{ issue.error_message }}">
+                {{ issue.error_message or '—' }}
+            </td>
+            <td>{{ issue.updated_at[:16].replace('T', ' ') if issue.updated_at else '—' }}</td>
+            <td style="text-align:right">
+                <button onclick="retrySync('{{ issue.mapping_name }}', '{{ issue.record_id }}', event)" class="btn btn-primary btn-sm">
+                    Retry Sync
+                </button>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--text-muted);font-size:0.83rem;text-align:center;padding:2.5rem">
+        🎉 No sync issues found. All records are safely mirrored.
+    </p>
+    {% endif %}
+<!-- Floating Toast Notification Container -->
+<div id="toast-container" style="position:fixed;bottom:2rem;right:2rem;z-index:9999;display:flex;flex-direction:column;gap:0.75rem;pointer-events:none;"></div>
+
+<script>
+function showToast(message, type = 'error') {
+    const container = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+    toast.style.background = type === 'success' ? '#238636' : '#f85149';
+    toast.style.color = '#ffffff';
+    toast.style.padding = '0.75rem 1.5rem';
+    toast.style.borderRadius = '6px';
+    toast.style.boxShadow = '0 4px 15px rgba(0,0,0,0.3)';
+    toast.style.fontSize = '0.85rem';
+    toast.style.fontWeight = '600';
+    toast.style.fontFamily = 'system-ui, -apple-system, sans-serif';
+    toast.style.transition = 'all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(10px)';
+    toast.style.border = type === 'success' ? '1px solid #2ea043' : '1px solid #ff7b72';
+    toast.innerText = message;
+    
+    container.appendChild(toast);
+    
+    // Trigger animations
+    setTimeout(() => {
+        toast.style.opacity = '1';
+        toast.style.transform = 'translateY(0)';
+    }, 20);
+    
+    // Auto-dismiss
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(-10px)';
+        setTimeout(() => toast.remove(), 300);
+    }, 4500);
+}
+
+async function retrySync(mapping_name, record_id, event) {
+    const btn = event.currentTarget || event.target;
+    const originalText = btn.innerText;
+    btn.innerText = "Retrying...";
+    btn.disabled = true;
+
+    try {
+        const res = await fetch("{{ url_for('admin.retry_sync') }}", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ mapping_name, record_id })
+        });
+        const data = await res.json();
+        
+        if (res.ok && data.status === 'ok') {
+            showToast(`Successfully synchronized ${mapping_name} record ${record_id}!`, 'success');
+            const row = document.getElementById(`row-${mapping_name}-${record_id}`);
+            row.style.transition = "opacity 0.4s";
+            row.style.opacity = "0";
+            setTimeout(() => {
+                row.remove();
+                if (document.querySelectorAll('tbody tr').length === 0) {
+                    location.reload();
+                }
+            }, 400);
+        } else {
+            showToast("Failed to retry sync: " + (data.error || "Unknown error"), 'error');
+            btn.innerText = "Retry Failed";
+            setTimeout(() => {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }, 2000);
+        }
+    } catch (err) {
+        showToast("Network error: " + err.message, 'error');
+        btn.innerText = originalText;
+        btn.disabled = false;
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,65 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Next.js / React / Node build artifacts
+.next/
+.next-cache/
+dist/
+build/
+out/
+coverage/
+*.tsbuildinfo
+*.tsbuildinfo.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.service-account.json
+*.credentials.json
+
+# Prisma
+prisma/dev.db
+prisma/*.db
+
+# Logs and temporary files
+logs/
+.tmp-test-workdirs/
+scratch/
+*.log
+*.tmp
+*.temp
+*.resolved
+
+# Large internal artifacts
+*.pdf
+*.xlsx
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local history and caches
+.history/
+pytest-cache-files-*/

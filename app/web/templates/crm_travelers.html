@@ -1,0 +1,67 @@
+{% extends "crm_base.html" %}
+{% set active_page = 'travelers' %}
+
+{% block content %}
+<div class="animate-fade-in">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+        <h2>Travelers Database</h2>
+        <div class="button-row">
+            <button onclick="loadTravelers()" class="btn btn-outline">Refresh</button>
+        </div>
+    </div>
+
+    <div class="data-panel">
+        <div class="panel-header">
+            <div style="display: flex; gap: 1rem; align-items: center;">
+                <span class="label">Filter by Status:</span>
+                <select id="status-filter" class="btn btn-outline" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">
+                    <option value="all">All</option>
+                    <option value="Active">Active</option>
+                    <option value="Inactive">Inactive</option>
+                </select>
+            </div>
+            <span class="label" id="results-count">Showing -- results</span>
+        </div>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Traveler ID</th>
+                    <th>Full Name</th>
+                    <th>Status</th>
+                    <th>Phone</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="travelers-list">
+                <!-- Loaded via JS -->
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function loadTravelers() {
+        const list = document.getElementById('travelers-list');
+        list.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 3rem;">Loading travelers from live spreadsheet...</td></tr>';
+        
+        const data = await CRM_API.fetchCrmPreview(50);
+        document.getElementById('results-count').textContent = `Showing ${data.travelers.length} results`;
+        
+        list.innerHTML = data.travelers.map(t => `
+            <tr>
+                <td><code style="color: var(--accent-blue);">${t.id}</code></td>
+                <td style="font-weight: 500;">${t.name}</td>
+                <td><span class="badge ${t.status === 'Active' ? 'badge-green' : 'badge-blue'}">${t.status}</span></td>
+                <td style="color: var(--text-secondary);">${t.phone}</td>
+                <td>
+                    <button class="btn btn-outline" style="padding: 0.25rem 0.5rem; font-size: 0.7rem;">Profile</button>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    window.addEventListener('DOMContentLoaded', loadTravelers);
+</script>
+{% endblock %}

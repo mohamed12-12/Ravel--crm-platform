@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Rahma CRM{% endblock %}
+{% block topbar_title %}Admin Dashboard{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ url_for('admin.import_data') }}" class="btn btn-ghost btn-sm">⬆ Import / Sync</a>
+<a href="{{ url_for('handoffs.index') }}" class="btn btn-primary btn-sm">🔔 Handoff Queue</a>
+{% endblock %}
+
+{% block content %}
+<!-- KPI Cards -->
+<div class="kpi-grid">
+    <div class="kpi-card" style="border-left:3px solid #6366f1">
+        <div class="kpi-label">Travelers</div>
+        <div class="kpi-value">{{ traveler_count }}</div>
+        <div class="kpi-sub">All registered travelers</div>
+    </div>
+    <div class="kpi-card" style="border-left:3px solid #eab308">
+        <div class="kpi-label">Active Leads</div>
+        <div class="kpi-value">{{ active_lead_count }}</div>
+        <div class="kpi-sub">Not Booked or Lost</div>
+    </div>
+    <div class="kpi-card" style="border-left:3px solid #22c55e">
+        <div class="kpi-label">Open Trips</div>
+        <div class="kpi-value">{{ open_trip_count }}</div>
+        <div class="kpi-sub">Currently available</div>
+    </div>
+    <div class="kpi-card" style="border-left:3px solid #ef4444">
+        <div class="kpi-label">Pending Handoffs</div>
+        <div class="kpi-value" id="kpi-handoffs">{{ pending_handoff_count }}</div>
+        <div class="kpi-sub">Awaiting agent action</div>
+    </div>
+    <div class="kpi-card" style="border-left:3px solid #a78bfa">
+        <div class="kpi-label">Draft Bookings</div>
+        <div class="kpi-value">{{ draft_booking_count }}</div>
+        <div class="kpi-sub">Awaiting confirmation</div>
+    </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem">
+    <!-- Recent Leads -->
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">🎯 Recent Leads (7 days)</span>
+            <a href="{{ url_for('leads.index') }}" class="btn btn-ghost btn-sm">View all</a>
+        </div>
+        {% if recent_leads %}
+        <table class="data-table">
+            <thead><tr>
+                <th>Name</th><th>Stage</th><th>Priority</th><th>Date</th>
+            </tr></thead>
+            <tbody>
+            {% for lead in recent_leads %}
+            <tr onclick="window.location='{{ url_for('leads.detail', lead_id=lead.lead_id) }}'">
+                <td class="primary">{{ lead.customer_name or '—' }}</td>
+                <td>
+                    {% if lead.lead_stage in ['Qualified','Booked'] %}
+                        <span class="badge badge-green">{{ lead.lead_stage }}</span>
+                    {% elif lead.lead_stage == 'Lost' %}
+                        <span class="badge badge-red">{{ lead.lead_stage }}</span>
+                    {% else %}
+                        <span class="badge badge-blue">{{ lead.lead_stage }}</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if lead.priority == 'High' %}<span class="badge badge-red">High</span>
+                    {% elif lead.priority == 'Medium' %}<span class="badge badge-yellow">Medium</span>
+                    {% else %}<span class="badge badge-gray">Low</span>{% endif %}
+                </td>
+                <td>{{ lead.created_at.strftime('%d %b') if lead.created_at else '—' }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color:var(--text-muted);font-size:0.83rem;text-align:center;padding:1.5rem">No recent leads.</p>
+        {% endif %}
+    </div>
+
+    <!-- Urgent Leads -->
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">🚨 High Priority Leads</span>
+            <a href="{{ url_for('leads.index', priority='High') }}" class="btn btn-ghost btn-sm">View all</a>
+        </div>
+        {% if urgent_leads %}
+        <div style="display:flex;flex-direction:column;gap:0.6rem">
+        {% for lead in urgent_leads %}
+        <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" style="text-decoration:none">
+            <div style="background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.15);border-radius:0.6rem;padding:0.75rem 1rem;transition:background 0.15s" onmouseover="this.style.background='rgba(239,68,68,0.12)'" onmouseout="this.style.background='rgba(239,68,68,0.06)'">
+                <div style="font-weight:600;color:var(--text-main);font-size:0.83rem">{{ lead.customer_name or '—' }}</div>
+                <div style="color:var(--text-muted);font-size:0.72rem;margin-top:2px">{{ lead.lead_stage }} · {{ lead.interested_trip_ids or 'No trip specified' }}</div>
+            </div>
+        </a>
+        {% endfor %}
+        </div>
+        {% else %}
+        <p style="color:var(--text-muted);font-size:0.83rem;text-align:center;padding:1.5rem">No urgent leads 🎉</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Recent Handoffs -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">🔔 Recent Handoffs</span>
+        <a href="{{ url_for('handoffs.index') }}" class="btn btn-ghost btn-sm">Manage queue</a>
+    </div>
+    {% if recent_handoffs %}
+    <table class="data-table">
+        <thead><tr>
+            <th>ID</th><th>Lead / Traveler</th><th>Reason</th><th>Priority</th><th>Status</th><th>Date</th>
+        </tr></thead>
+        <tbody>
+        {% for h in recent_handoffs %}
+        <tr>
+            <td class="mono">{{ h.handoff_id }}</td>
+            <td class="primary">{{ h.traveler_id or h.lead_id or '—' }}</td>
+            <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ h.reason or '—' }}</td>
+            <td>
+                {% if h.priority == 'High' %}<span class="badge badge-red">High</span>
+                {% elif h.priority == 'Medium' %}<span class="badge badge-yellow">Medium</span>
+                {% else %}<span class="badge badge-gray">Low</span>{% endif %}
+            </td>
+            <td>
+                {% if h.status == 'Pending' or h.status == 'New' %}<span class="badge badge-red">Pending</span>
+                {% elif h.status == 'In Progress' %}<span class="badge badge-yellow">In Progress</span>
+                {% else %}<span class="badge badge-green">Resolved</span>{% endif %}
+            </td>
+            <td>{{ h.created_at.strftime('%d %b %H:%M') if h.created_at else '—' }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--text-muted);font-size:0.83rem;text-align:center;padding:1.5rem">No handoffs yet.</p>
+    {% endif %}
+</div>
+
+<!-- Quick Actions -->
+<div style="margin-top:1.25rem;display:flex;gap:0.75rem;flex-wrap:wrap">
+    <a href="{{ url_for('travelers.index') }}" class="btn btn-ghost">👥 Manage Travelers</a>
+    <a href="{{ url_for('trips.index') }}" class="btn btn-ghost">✈️ Manage Trips</a>
+    <a href="{{ url_for('leads.index') }}" class="btn btn-ghost">🎯 View Pipeline</a>
+    <a href="{{ url_for('admin.import_data') }}" class="btn btn-ghost">⬆ Import Data</a>
+    <a href="{{ url_for('admin.sync_issues') }}" class="btn btn-ghost">🔄 Sync Issues</a>
+    <a href="{{ url_for('admin.duplicates') }}" class="btn btn-ghost">⚠ Check Duplicates</a>
+</div>
+{% endblock %}

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Rahma Traveler CRM{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='crm.css') }}">
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='logo.png') }}">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <div class="crm-shell">
+        <aside class="crm-sidebar">
+            <h1>Rahma Traveler</h1>
+            
+            <nav class="nav-list">
+                <div class="nav-item">
+                    <a href="/crm" class="nav-link {% if active_page == 'dashboard' %}active{% endif %}">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+                        <span>Dashboard</span>
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="/crm/travelers" class="nav-link {% if active_page == 'travelers' %}active{% endif %}">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                        <span>Travelers</span>
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="/crm/leads" class="nav-link {% if active_page == 'leads' %}active{% endif %}">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                        <span>Leads</span>
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="/crm/trips" class="nav-link {% if active_page == 'trips' %}active{% endif %}">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                        <span>Trips</span>
+                    </a>
+                </div>
+            </nav>
+
+            <div style="margin-top: auto; padding-top: 1rem; border-top: 1px solid var(--border-color);">
+                <button onclick="handleReset()" class="btn btn-outline" style="width: 100%; text-align: left; display: flex; align-items: center;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 16px; margin-right: 8px;"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
+                    <span>Reset Demo</span>
+                </button>
+            </div>
+        </aside>
+
+        <main class="crm-main">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    <script src="{{ url_for('static', filename='crm_api.js') }}"></script>
+    <script>
+        async function handleReset() {
+            if (confirm("Reset the demo database? This will clear all changes since last reset.")) {
+                const res = await CRM_API.reset();
+                if (res.ok) window.location.reload();
+            }
+        }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Import & Sync — Rahma CRM{% endblock %}
+{% block topbar_title %}Data Synchronization Center{% endblock %}
+
+{% block content %}
+<div class="grid-2" style="gap:1.5rem">
+    <!-- Google Sheets Sync -->
+    <div class="card" style="display:flex;flex-direction:column;justify-content:space-between">
+        <div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+                <span class="card-title">🟢 Live Google Sheets Sync</span>
+                <span class="badge badge-green">Recommended</span>
+            </div>
+            <p style="color:var(--text-dim);font-size:0.85rem;line-height:1.6;margin-bottom:1.5rem">
+                Directly synchronize all data (Travelers, Leads, Trips, Bookings, Interactions, Community Events, and Copy Templates) from the configured Google Sheet.
+            </p>
+            {% if sheet_id %}
+            <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;padding:0.75rem 1rem;font-size:0.78rem;margin-bottom:1.5rem">
+                <div style="color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Configured Sheet ID</div>
+                <div class="mono" style="color:var(--text-main);word-break:break-all">{{ sheet_id }}</div>
+            </div>
+            {% else %}
+            <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.25);border-radius:0.5rem;padding:0.75rem 1rem;font-size:0.78rem;color:#fca5a5;margin-bottom:1.5rem">
+                ⚠ GOOGLE_SHEET_ID is not configured in your .env file.
+            </div>
+            {% endif %}
+        </div>
+        <div>
+            <form action="{{ url_for('admin.import_data') }}" method="POST">
+                <input type="hidden" name="source" value="sheets">
+                <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center" {% if not sheet_id %}disabled{% endif %}>
+                    ⚡ Run Live Google Sheets Sync
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Excel File Upload -->
+    <div class="card" style="display:flex;flex-direction:column;justify-content:space-between">
+        <div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+                <span class="card-title">📊 Excel Backup Import</span>
+                <span class="badge badge-gray">Manual</span>
+            </div>
+            <p style="color:var(--text-dim);font-size:0.85rem;line-height:1.6;margin-bottom:1.5rem">
+                Upload an offline Excel workbook (.xlsx) containing standard Rahma Traveler sheets. Useful for local backups or initial migration.
+            </p>
+            <form action="{{ url_for('admin.import_data') }}" method="POST" enctype="multipart/form-data" id="excelForm">
+                <input type="hidden" name="source" value="excel">
+                <div class="form-group">
+                    <label class="form-label">Select Excel File</label>
+                    <input class="form-input" type="file" name="excel_file" accept=".xlsx,.xls" required style="background:var(--bg-base);padding:0.5rem">
+                </div>
+            </form>
+        </div>
+        <div>
+            <button type="submit" form="excelForm" class="btn btn-ghost" style="width:100%;justify-content:center">
+                ⬆ Upload & Import Excel
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Import Results Summary -->
+{% if results %}
+<div class="card" style="margin-top:1.5rem;border-color:rgba(34,197,94,0.3)">
+    <div class="card-title" style="color:#86efac;margin-bottom:1rem">🎉 Synchronization Results</div>
+    <div class="kpi-grid">
+        {% for entity, info in results.items() %}
+        <div class="kpi-card" style="background:var(--bg-base)">
+            <div class="kpi-label">{{ entity }}</div>
+            <div class="kpi-value" style="font-size:1.5rem">{{ info.get('inserted', 0) }}</div>
+            <div class="kpi-sub">updated / upserted</div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}

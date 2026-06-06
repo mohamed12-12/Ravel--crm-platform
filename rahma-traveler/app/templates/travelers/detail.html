@@ -1,0 +1,571 @@
+{% extends "base.html" %}
+{% block title %}{{ traveler.full_name }} - Rahma CRM{% endblock %}
+{% block topbar_title %}Traveler 360 Profile{% endblock %}
+
+{% block topbar_actions %}
+<div style="display:flex;gap:0.75rem">
+    <button onclick="markInactive('{{ traveler.traveler_id }}')" class="btn btn-ghost btn-sm" style="color:var(--red);border-color:rgba(239,68,68,0.3)">
+        Mark Inactive
+    </button>
+    <button onclick="openModal('editModal')" class="btn btn-primary btn-sm">
+        Edit Profile
+    </button>
+</div>
+{% endblock %}
+
+{% block content %}
+<div style="display:flex;flex-direction:column;gap:1.5rem">
+    <div class="card" style="position:relative;overflow:hidden;background:linear-gradient(135deg, rgba(99,102,241,0.1), rgba(16,185,129,0.05));border:1px solid rgba(99,102,241,0.3)">
+        <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap">
+            <div style="width:72px;height:72px;border-radius:1rem;background:linear-gradient(135deg, var(--accent), var(--accent-2));display:flex;align-items:center;justify-content:center;font-size:2rem;font-weight:800;color:#fff;box-shadow:0 10px 25px rgba(99,102,241,0.4)">
+                {{ traveler.full_name[0] if traveler.full_name else '?' }}
+            </div>
+            <div style="flex:1;min-width:240px">
+                <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:0.25rem">
+                    <h1 style="font-size:1.6rem;font-weight:800;color:var(--text-main);margin:0">{{ traveler.full_name }}</h1>
+                    <span class="badge {% if traveler.status == 'VIP' %}badge-purple{% elif traveler.status == 'Repeat' %}badge-green{% else %}badge-blue{% endif %}">
+                        {{ traveler.status or 'Active' }}
+                    </span>
+                    <span class="mono" style="color:var(--text-muted);font-size:0.85rem">ID: {{ traveler.traveler_id }}</span>
+                </div>
+                <p style="font-size:0.85rem;color:var(--text-muted);margin:0">
+                    Primary language: <strong>{{ traveler.primary_language or 'English' }}</strong> -
+                    Created: {{ traveler.created_at.strftime('%d %b %Y') if traveler.created_at else '—' }}
+                </p>
+            </div>
+            <div style="text-align:right;min-width:180px">
+                <span style="font-size:0.75rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;display:block">Lifetime Revenue</span>
+                <strong style="font-size:1.8rem;font-weight:800;color:var(--green)">${{ "{:,.2f}".format(traveler.lifetime_revenue or 0) }}</strong>
+            </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1rem;margin-top:1.5rem;padding-top:1.25rem;border-top:1px solid var(--border)">
+            <div>
+                <span style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;display:block">WhatsApp</span>
+                <strong style="font-size:0.95rem;color:var(--text-main)" class="mono">{{ traveler.normalized_whatsapp or traveler.whatsapp_raw or '—' }}</strong>
+            </div>
+            <div>
+                <span style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;display:block">Email</span>
+                <strong style="font-size:0.95rem;color:var(--text-main)">{{ traveler.email or '—' }}</strong>
+            </div>
+            <div>
+                <span style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;display:block">Nationality / Code</span>
+                <strong style="font-size:0.95rem;color:var(--text-main)">{{ traveler.nationality or '—' }} ({{ traveler.phone_code or '+20' }})</strong>
+            </div>
+            <div>
+                <span style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;display:block">Trips / Events</span>
+                    <strong style="font-size:0.95rem;color:var(--text-main)">{{ traveler.total_trips or 0 }} trips - {{ traveler.community_events_count or 0 }} events</strong>
+            </div>
+        </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1.6fr;gap:1.5rem">
+        <div style="display:flex;flex-direction:column;gap:1.5rem">
+            <div class="card">
+                <div class="card-header"><h3 class="card-title">Demographic and Preferences</h3></div>
+                <div style="display:flex;flex-direction:column;gap:0.75rem">
+                    <div style="display:flex;justify-content:space-between;padding-bottom:0.5rem;border-bottom:1px solid var(--border)">
+                        <span style="font-size:0.8rem;color:var(--text-muted)">Residence City</span>
+                        <strong style="font-size:0.85rem;color:var(--text-main)">{{ traveler.residence or '—' }}</strong>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;padding-bottom:0.5rem;border-bottom:1px solid var(--border)">
+                        <span style="font-size:0.8rem;color:var(--text-muted)">Birthday</span>
+                        <strong style="font-size:0.85rem;color:var(--text-main)">{{ traveler.birthday.strftime('%d %b %Y') if traveler.birthday else '—' }}</strong>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;padding-bottom:0.5rem;border-bottom:1px solid var(--border)">
+                        <span style="font-size:0.8rem;color:var(--text-muted)">Gender</span>
+                        <strong style="font-size:0.85rem;color:var(--text-main)">{{ traveler.gender or '—' }}</strong>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;padding-bottom:0.5rem;border-bottom:1px solid var(--border)">
+                        <span style="font-size:0.8rem;color:var(--text-muted)">Room Preference</span>
+                        <strong style="font-size:0.85rem;color:var(--text-main)">{{ traveler.room_preference or 'Double Room' }}</strong>
+                    </div>
+                    <div style="display:flex;justify-content:space-between">
+                        <span style="font-size:0.8rem;color:var(--text-muted)">Customer Rating</span>
+                        <strong style="font-size:0.85rem;color:var(--yellow)">{{ traveler.rating or '5.0' }} / 5.0</strong>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="border-left:4px solid var(--red)">
+                <div class="card-header"><h3 class="card-title">Emergency and Medical</h3></div>
+                <div style="display:flex;flex-direction:column;gap:0.75rem">
+                    <div>
+                        <span style="font-size:0.75rem;color:var(--text-muted);display:block">Emergency Contact</span>
+                        <strong style="font-size:0.88rem;color:var(--text-main)">{{ traveler.emergency_contact or '—' }}</strong>
+                        <span class="mono" style="color:var(--text-dim);font-size:0.8rem;margin-left:0.5rem">{{ traveler.emergency_phone or '—' }}</span>
+                    </div>
+                    <div style="margin-top:0.5rem">
+                        <span style="font-size:0.75rem;color:var(--text-muted);display:block">Medical Notes</span>
+                        <p style="font-size:0.85rem;color:var(--red);margin-top:2px;font-style:italic">
+                            {{ traveler.medical_notes or 'No medical allergies or restrictions noted.' }}
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header"><h3 class="card-title">Related Leads</h3></div>
+                {% if leads %}
+                    <div style="display:flex;flex-direction:column;gap:0.75rem;max-height:280px;overflow-y:auto;padding-right:0.35rem">
+                        {% for lead in leads %}
+                        <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:0.75rem 0.9rem">
+                            <div style="display:flex;justify-content:space-between;gap:1rem;align-items:center">
+                                <div>
+                                    <strong style="font-size:0.88rem;color:var(--text-main)">{{ lead.lead_stage or 'Lead' }}</strong>
+                                    <div class="mono" style="font-size:0.72rem;color:var(--text-muted)">{{ lead.lead_id }}</div>
+                                </div>
+                                <span class="badge {% if lead.priority == 'High' %}badge-red{% elif lead.priority == 'Medium' %}badge-yellow{% else %}badge-blue{% endif %}">
+                                    {{ lead.priority or 'Medium' }}
+                                </span>
+                            </div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-top:0.55rem;font-size:0.76rem;color:var(--text-muted)">
+                                <div>Source: <strong style="color:var(--text-main)">{{ lead.lead_source or 'Unknown' }}</strong></div>
+                                <div>Channel: <strong style="color:var(--text-main)">{{ lead.channel or '—' }}</strong></div>
+                                <div>Follow-up: <strong style="color:var(--text-main)">{{ lead.follow_up_status or '—' }}</strong></div>
+                                <div>Updated: <strong style="color:var(--text-main)">{{ lead.updated_at.strftime('%d %b %Y') if lead.updated_at else '—' }}</strong></div>
+                            </div>
+                            <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" class="btn btn-ghost btn-sm" style="margin-top:0.65rem;justify-content:center">Open Lead</a>
+                        </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <p style="font-size:0.85rem;color:var(--text-muted)">No related leads were found for this traveler.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:1.5rem">
+            <!-- Trip Stats Summary -->
+            <div class="card" style="background:linear-gradient(135deg,rgba(99,102,241,0.07),rgba(16,185,129,0.05));border:1px solid rgba(99,102,241,0.2)">
+                <div class="card-header">
+                    <h3 class="card-title">Travel Summary</h3>
+                    <span style="font-size:0.75rem;color:var(--text-muted)">Auto-calculated from bookings</span>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem">
+                    <div style="text-align:center;padding:1rem;background:rgba(59,130,246,0.1);border-radius:0.75rem;border:1px solid rgba(59,130,246,0.2)">
+                        <div style="font-size:1.8rem;font-weight:800;color:#60a5fa">{{ traveler.local_trips_count or 0 }}</div>
+                        <div style="font-size:0.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-top:0.25rem">Local Trips</div>
+                    </div>
+                    <div style="text-align:center;padding:1rem;background:rgba(139,92,246,0.1);border-radius:0.75rem;border:1px solid rgba(139,92,246,0.2)">
+                        <div style="font-size:1.8rem;font-weight:800;color:#a78bfa">{{ traveler.international_trips_count or 0 }}</div>
+                        <div style="font-size:0.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-top:0.25rem">Int'l Trips</div>
+                    </div>
+                    <div style="text-align:center;padding:1rem;background:rgba(16,185,129,0.1);border-radius:0.75rem;border:1px solid rgba(16,185,129,0.2)">
+                        <div style="font-size:1.8rem;font-weight:800;color:#34d399">{{ traveler.community_events_count or 0 }}</div>
+                        <div style="font-size:0.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-top:0.25rem">CE Events</div>
+                    </div>
+                    <div style="text-align:center;padding:1rem;background:rgba(234,179,8,0.1);border-radius:0.75rem;border:1px solid rgba(234,179,8,0.2)">
+                        <div style="font-size:1.8rem;font-weight:800;color:#fbbf24">{{ traveler.total_trips or 0 }}</div>
+                        <div style="font-size:0.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-top:0.25rem">Total Trips</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Enhanced Trip Bookings History -->
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">Trip Bookings History</h3>
+                    <span style="font-size:0.75rem;color:var(--text-muted)">{{ bookings|length }} booking(s)</span>
+                </div>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Trip</th>
+                            <th>Type</th>
+                            <th>Room</th>
+                            <th>Date</th>
+                            <th>Payment</th>
+                            <th style="text-align:right">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for booking in bookings %}
+                        {% set ttype = trip_type_map.get(booking.trip_id, '') %}
+                        <tr onclick="window.location.href='{{ url_for('bookings.detail', booking_id=booking.booking_id) }}'" style="cursor:pointer">
+                            <td>
+                                <strong style="color:var(--text-main);display:block;font-size:0.88rem">{{ booking.trip_name or booking.trip_id or '—' }}</strong>
+                                <span class="mono" style="color:var(--text-muted);font-size:0.72rem">{{ booking.booking_id }}</span>
+                            </td>
+                            <td>
+                                {% if ttype == 'Local' %}
+                                    <span class="badge badge-blue" style="font-size:0.68rem">🏠 Local</span>
+                                {% elif ttype == 'International' %}
+                                    <span class="badge badge-purple" style="font-size:0.68rem">✈️ Int'l</span>
+                                {% else %}
+                                    <span style="color:var(--text-muted);font-size:0.8rem">—</span>
+                                {% endif %}
+                            </td>
+                            <td style="font-size:0.82rem">{{ booking.room_type or '—' }}</td>
+                            <td style="font-size:0.82rem">{{ booking.draft_created_at.strftime('%d %b %Y') if booking.draft_created_at else '—' }}</td>
+                            <td>
+                                <span class="badge {% if booking.payment_status == 'Fully Paid' %}badge-green{% elif booking.payment_status == 'Deposit Paid' %}badge-yellow{% elif booking.payment_status == 'Refunded' %}badge-red{% else %}badge-blue{% endif %}" style="font-size:0.68rem">
+                                    {{ booking.payment_status or 'Pending' }}
+                                </span>
+                            </td>
+                            <td style="text-align:right">
+                                <span class="badge {% if booking.booking_status == 'Confirmed' %}badge-green{% elif booking.booking_status == 'Cancelled' %}badge-red{% else %}badge-yellow{% endif %}">
+                                    {{ booking.booking_status or 'Draft' }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--text-muted)">
+                            <div style="font-size:1.5rem;margin-bottom:0.5rem">🗺️</div>
+                            No trip reservations recorded for this traveler.
+                        </td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Community Events History -->
+            <div class="card" style="border-left:4px solid rgba(16,185,129,0.6)">
+                <div class="card-header">
+                    <h3 class="card-title">Community Events History</h3>
+                    <span style="font-size:0.75rem;color:var(--text-muted)">{{ ce_bookings|length }} event(s)</span>
+                </div>
+                {% if ce_bookings %}
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Event Name / ID</th>
+                            <th>Booking ID</th>
+                            <th>Date</th>
+                            <th style="text-align:right">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for ce in ce_bookings %}
+                        <tr>
+                            <td>
+                                <strong style="color:var(--text-main);display:block;font-size:0.88rem">{{ ce.event_name or ce.event_id or '—' }}</strong>
+                                <span class="mono" style="color:var(--text-muted);font-size:0.72rem">{{ ce.event_id or '—' }}</span>
+                            </td>
+                            <td class="mono" style="font-size:0.8rem;color:var(--text-muted)">{{ ce.booking_id }}</td>
+                            <td style="font-size:0.82rem">{{ ce.created_at.strftime('%d %b %Y') if ce.created_at else '—' }}</td>
+                            <td style="text-align:right">
+                                <span class="badge {% if ce.status == 'Confirmed' or ce.status == 'Attended' %}badge-green{% elif ce.status == 'Cancelled' %}badge-red{% else %}badge-blue{% endif %}">
+                                    {{ ce.status or 'Registered' }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div style="text-align:center;padding:2rem;color:var(--text-muted)">
+                    <div style="font-size:1.5rem;margin-bottom:0.5rem">🎪</div>
+                    No community events recorded for this traveler.
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="card">
+                <div class="card-header"><h3 class="card-title">Handoffs</h3></div>
+                {% if handoffs %}
+                <div style="display:flex;flex-direction:column;gap:0.7rem;max-height:260px;overflow-y:auto;padding-right:0.35rem">
+                    {% for handoff in handoffs %}
+                    <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:0.75rem 0.9rem">
+                        <div style="display:flex;justify-content:space-between;gap:1rem;align-items:center">
+                            <strong style="font-size:0.85rem;color:var(--text-main)">{{ handoff.reason or 'Manual handoff' }}</strong>
+                            <span class="badge {% if handoff.status == 'Resolved' %}badge-green{% elif handoff.status == 'In Progress' %}badge-yellow{% else %}badge-blue{% endif %}">
+                                {{ handoff.status or 'Pending' }}
+                            </span>
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-top:0.55rem;font-size:0.76rem;color:var(--text-muted)">
+                            <div>Priority: <strong style="color:var(--text-main)">{{ handoff.priority or 'Medium' }}</strong></div>
+                            <div>Channel: <strong style="color:var(--text-main)">{{ handoff.channel or '—' }}</strong></div>
+                            <div>Owner: <strong style="color:var(--text-main)">{{ handoff.owner or '—' }}</strong></div>
+                            <div>Created: <strong style="color:var(--text-main)">{{ handoff.created_at.strftime('%d %b %Y') if handoff.created_at else '—' }}</strong></div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p style="font-size:0.85rem;color:var(--text-muted)">No handoffs have been logged for this traveler.</p>
+                {% endif %}
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">Booking Event Trail</h3>
+                    <span style="font-size:0.75rem;color:var(--text-muted)">Total: {{ event_trail|length }} events</span>
+                </div>
+                {% if event_trail %}
+                <div style="display:flex;flex-direction:column;gap:0.7rem;max-height:300px;overflow-y:auto;padding-right:0.5rem">
+                    {% for event in event_trail %}
+                    <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:0.75rem 0.9rem">
+                        <div style="display:flex;justify-content:space-between;gap:1rem">
+                            <strong style="font-size:0.85rem;color:var(--text-main)">{{ event.event_label or event.event_type }}</strong>
+                            <span style="font-size:0.72rem;color:var(--text-muted);white-space:nowrap">{{ event.occurred_at.strftime('%d %b %Y %H:%M') if event.occurred_at else 'Pending time' }}</span>
+                        </div>
+                        <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem">
+                            {{ event.event_id }}{% if event.booking_id %} - {{ event.booking_id }}{% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p style="font-size:0.85rem;color:var(--text-muted)">No booking events recorded for this traveler.</p>
+                {% endif %}
+            </div>
+
+            {% if traveler.ce_bookings %}
+            <div class="card">
+                <div class="card-header"><h3 class="card-title">Community Events Attendance</h3></div>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Event Name</th>
+                            <th>Booking ID</th>
+                            <th>Registration Date</th>
+                            <th style="text-align:right">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for ce in traveler.ce_bookings|sort(attribute='created_at', reverse=True) %}
+                        <tr>
+                            <td><strong style="color:var(--text-main)">{{ ce.event_name }}</strong></td>
+                            <td class="mono">{{ ce.booking_id }}</td>
+                            <td>{{ ce.created_at.strftime('%d %b %Y') if ce.created_at else '—' }}</td>
+                            <td style="text-align:right"><span class="badge badge-purple">{{ ce.status or 'Registered' }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">AI Agent Interaction Audit Log</h3>
+                    <span style="font-size:0.75rem;color:var(--text-muted)">Total: {{ interactions|length }} events</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:0.75rem;max-height:350px;overflow-y:auto;padding-right:0.5rem">
+                    {% for interaction in interactions %}
+                    <div style="background:rgba(0,0,0,0.25);border:1px solid var(--border);border-radius:0.75rem;padding:0.85rem 1rem;display:flex;flex-direction:column;gap:0.4rem">
+                        <div style="display:flex;justify-content:space-between;align-items:center">
+                            <div style="display:flex;align-items:center;gap:0.5rem">
+                                <span class="badge {% if interaction.direction == 'inbound' %}badge-blue{% else %}badge-purple{% endif %}" style="font-size:0.7rem">
+                                    {{ interaction.direction|upper if interaction.direction else 'INBOUND' }}
+                                </span>
+                                <strong style="font-size:0.85rem;color:var(--text-main)">{{ interaction.intent or 'General Inquiry' }}</strong>
+                            </div>
+                            <span style="font-size:0.75rem;color:var(--text-muted)">{{ interaction.timestamp.strftime('%d %b %Y %H:%M') if interaction.timestamp else '—' }}</span>
+                        </div>
+                        <div class="mono" style="font-size:0.72rem;color:var(--text-muted)">ID: {{ interaction.interaction_id }}</div>
+                        <p style="font-size:0.85rem;color:var(--text-dim);margin:0;line-height:1.4">
+                            {{ interaction.action_taken or 'Message received via WhatsApp.' }}
+                        </p>
+                        {% if interaction.agent_notes %}
+                        <div style="background:rgba(99,102,241,0.1);border-left:2px solid var(--accent);padding:0.4rem 0.6rem;border-radius:0 0.4rem 0.4rem 0;font-size:0.78rem;color:var(--accent-2);margin-top:0.25rem">
+                            <strong>Agent Note:</strong> {{ interaction.agent_notes }}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% else %}
+                    <p style="font-size:0.85rem;color:var(--text-muted);text-align:center;padding:2rem">No conversational interactions logged.</p>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="editModal" class="modal-overlay">
+    <div class="modal-box" style="max-width:760px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem;padding-bottom:0.75rem;border-bottom:1px solid var(--border)">
+            <h3 style="font-size:1.25rem;font-weight:800;color:var(--text-main);margin:0">Edit Traveler Profile</h3>
+            <button onclick="closeModal('editModal')" style="background:transparent;border:none;color:var(--text-muted);font-size:1.25rem;cursor:pointer">✕</button>
+        </div>
+
+        <!-- Live Validation Alert Box -->
+        <div id="modal-error-alert" style="display:none; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.25); color:#fca5a5; padding:0.75rem 1rem; border-radius:0.5rem; font-size:0.85rem; margin-bottom:1rem; font-weight:600"></div>
+
+        <div style="display:flex;flex-direction:column;gap:1rem">
+            <div>
+                <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Full Name</label>
+                <input type="text" id="edit_full_name" value="{{ traveler.full_name }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+                <div>
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">CRM Status</label>
+                    <select id="edit_status" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+                        <option value="New" {% if traveler.status == 'New' %}selected{% endif %}>New</option>
+                        <option value="Repeat" {% if traveler.status == 'Repeat' %}selected{% endif %}>Repeat</option>
+                        <option value="VIP" {% if traveler.status == 'VIP' %}selected{% endif %}>VIP</option>
+                        <option value="Inactive" {% if traveler.status == 'Inactive' %}selected{% endif %}>Inactive</option>
+                        <option value="Active" {% if traveler.status == 'Active' %}selected{% endif %}>Active</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Customer Rating (0-5)</label>
+                    <input type="number" id="edit_rating" step="0.1" value="{{ traveler.rating or 5.0 }}" min="0" max="5" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+                </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+                <div>
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">WhatsApp / Phone</label>
+                    <input type="text" id="edit_whatsapp_raw" value="{{ traveler.whatsapp_raw or '' }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+                </div>
+                <div>
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Email</label>
+                    <input type="email" id="edit_email" value="{{ traveler.email or '' }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+                </div>
+                <div>
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Birthday</label>
+                    <input type="date" id="edit_birthday" value="{{ traveler.birthday.strftime('%Y-%m-%d') if traveler.birthday else '' }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+                </div>
+                <div>
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Nationality</label>
+                    <input type="text" id="edit_nationality" value="{{ traveler.nationality or '' }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+                </div>
+                <div>
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Residence City</label>
+                    <input type="text" id="edit_residence" value="{{ traveler.residence or '' }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+                </div>
+                <div>
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Lead Source</label>
+                    <input type="text" id="edit_lead_source" value="{{ traveler.lead_source or '' }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+                </div>
+                <div>
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Primary Language</label>
+                    <input type="text" id="edit_primary_language" value="{{ traveler.primary_language or '' }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+                </div>
+                <div>
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Room Preference</label>
+                    <input type="text" id="edit_room_preference" value="{{ traveler.room_preference or '' }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+                </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+                <div>
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Emergency Contact</label>
+                    <input type="text" id="edit_emergency_contact" value="{{ traveler.emergency_contact or '' }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+                </div>
+                <div>
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Emergency Phone</label>
+                    <input type="text" id="edit_emergency_phone" value="{{ traveler.emergency_phone or '' }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+                </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+                <div>
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Community WhatsApp Group</label>
+                    <input type="text" id="edit_community_whatsapp" value="{{ traveler.community_whatsapp or '' }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+                </div>
+                <div>
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Lifetime Revenue ($)</label>
+                    <input type="number" step="0.01" id="edit_lifetime_revenue" value="{{ traveler.lifetime_revenue or 0.0 }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+                </div>
+            </div>
+
+            <div>
+                <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Introduce Yourself</label>
+                <textarea id="edit_introduce_yourself" rows="2" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem;resize:vertical">{{ traveler.introduce_yourself or '' }}</textarea>
+            </div>
+
+            <div>
+                <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Medical Notes</label>
+                <textarea id="edit_medical_notes" rows="2" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem;resize:vertical">{{ traveler.medical_notes or '' }}</textarea>
+            </div>
+            <div>
+                <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Notes</label>
+                <textarea id="edit_notes" rows="3" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem;resize:vertical">{{ traveler.notes or '' }}</textarea>
+            </div>
+        </div>
+
+        <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border)">
+            <button onclick="closeModal('editModal')" class="btn btn-ghost">Cancel</button>
+            <button onclick="saveChanges()" class="btn btn-primary">Save Changes</button>
+        </div>
+    </div>
+</div>
+
+<script>
+function openModal(id) {
+    const el = document.getElementById(id);
+    if (el) {
+        el.classList.add('open');
+        const alertBox = document.getElementById('modal-error-alert');
+        if (alertBox) alertBox.style.display = 'none';
+    }
+}
+function closeModal(id) {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('open');
+}
+
+async function saveChanges() {
+    const alertBox = document.getElementById('modal-error-alert');
+    if (alertBox) alertBox.style.display = 'none';
+
+    const data = {
+        full_name: document.getElementById('edit_full_name').value,
+        status: document.getElementById('edit_status').value,
+        rating: parseFloat(document.getElementById('edit_rating').value),
+        whatsapp_raw: document.getElementById('edit_whatsapp_raw').value,
+        email: document.getElementById('edit_email').value,
+        birthday: document.getElementById('edit_birthday').value,
+        nationality: document.getElementById('edit_nationality').value,
+        residence: document.getElementById('edit_residence').value,
+        lead_source: document.getElementById('edit_lead_source').value,
+        primary_language: document.getElementById('edit_primary_language').value,
+        room_preference: document.getElementById('edit_room_preference').value,
+        emergency_contact: document.getElementById('edit_emergency_contact').value,
+        emergency_phone: document.getElementById('edit_emergency_phone').value,
+        community_whatsapp: document.getElementById('edit_community_whatsapp').value,
+        lifetime_revenue: parseFloat(document.getElementById('edit_lifetime_revenue').value) || 0.0,
+        introduce_yourself: document.getElementById('edit_introduce_yourself').value,
+        medical_notes: document.getElementById('edit_medical_notes').value,
+        notes: document.getElementById('edit_notes').value
+    };
+
+    try {
+        const response = await fetch("{{ url_for('travelers.update', traveler_id=traveler.traveler_id) }}", {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        
+        const resData = await response.json();
+        
+        if (response.ok) {
+            location.reload();
+        } else {
+            const errorMsg = resData.error || 'Failed to update traveler profile.';
+            if (alertBox) {
+                alertBox.textContent = errorMsg;
+                alertBox.style.display = 'block';
+                alertBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            } else {
+                alert(errorMsg);
+            }
+        }
+    } catch (error) {
+        if (alertBox) {
+            alertBox.textContent = 'An error occurred while saving details.';
+            alertBox.style.display = 'block';
+        } else {
+            alert('An error occurred while saving.');
+        }
+    }
+}
+
+async function markInactive(id) {
+    if (!confirm('Are you sure you want to mark this traveler as Inactive?')) return;
+    try {
+        const response = await fetch(`/travelers/${id}`, { method: 'DELETE' });
+        if (response.ok) {
+            location.reload();
+        } else {
+            alert('Failed to update status.');
+        }
+    } catch (error) {
+        alert('An error occurred.');
+    }
+}
+</script>
+{% endblock %}

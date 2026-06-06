@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Copy Library — Rahma CRM{% endblock %}
+{% block topbar_title %}AI Communication Templates & Copy Guard Library{% endblock %}
+
+{% block content %}
+<div style="margin-bottom:1.5rem">
+    <p style="color:var(--text-dim);font-size:0.85rem">
+        These templates serve as the foundation for our AI agents. The **DM Copy Library** dictates automated conversational flows across channels, while the **Language Templates** enforce strict approved wording to prevent AI hallucinations.
+    </p>
+</div>
+
+<div style="display:flex;gap:1rem;margin-bottom:1.5rem">
+    <button onclick="showTab('dmCopy')" id="btn-dmCopy" class="btn btn-primary">💬 DM Copy Library ({{ dm_copies|length }})</button>
+    <button onclick="showTab('langTemp')" id="btn-langTemp" class="btn btn-ghost">🌐 Language Templates ({{ lang_templates|length }})</button>
+</div>
+
+<!-- DM COPY LIBRARY TAB -->
+<div id="tab-dmCopy">
+    <div class="card" style="padding:0;overflow:hidden">
+        <table class="data-table">
+            <thead><tr>
+                <th>Message Key</th>
+                <th>Flow / Step</th>
+                <th>Channel</th>
+                <th>Arabic Copy</th>
+                <th>English Copy</th>
+                <th>Variables</th>
+                <th>Status</th>
+            </tr></thead>
+            <tbody>
+            {% for copy in dm_copies %}
+            <tr>
+                <td class="mono">{{ copy.message_key }}</td>
+                <td>
+                    <div style="font-weight:600;color:var(--text-main)">{{ copy.flow_key or '—' }}</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted)">{{ copy.step_key or '—' }}</div>
+                </td>
+                <td><span class="badge badge-blue">{{ copy.channel or 'WhatsApp' }}</span></td>
+                <td style="max-width:240px;font-size:0.8rem;white-space:pre-wrap;direction:rtl;text-align:right">{{ copy.arabic_copy or '—' }}</td>
+                <td style="max-width:240px;font-size:0.8rem;white-space:pre-wrap">{{ copy.english_copy or '—' }}</td>
+                <td><code style="font-size:0.72rem;color:var(--yellow)">{{ copy.variables or '—' }}</code></td>
+                <td>
+                    {% if copy.active %}
+                        <span class="badge badge-green">Active</span>
+                    {% else %}
+                        <span class="badge badge-gray">Inactive</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- LANGUAGE TEMPLATES TAB -->
+<div id="tab-langTemp" style="display:none">
+    <div class="card" style="padding:0;overflow:hidden">
+        <table class="data-table">
+            <thead><tr>
+                <th>Template Key</th>
+                <th>Language</th>
+                <th>Use Case</th>
+                <th>Approved Copy</th>
+                <th>Variables</th>
+                <th>Status</th>
+            </tr></thead>
+            <tbody>
+            {% for lang in lang_templates %}
+            <tr>
+                <td class="mono">{{ lang.template_key }}</td>
+                <td><span class="badge {% if lang.language == 'ar' %}badge-purple{% else %}badge-blue{% endif %}">{{ lang.language|upper }}</span></td>
+                <td style="color:var(--text-main);font-weight:600">{{ lang.use_case or '—' }}</td>
+                <td style="max-width:320px;font-size:0.8rem;white-space:pre-wrap;{% if lang.language == 'ar' %}direction:rtl;text-align:right{% endif %}">{{ lang.approved_copy or '—' }}</td>
+                <td><code style="font-size:0.72rem;color:var(--yellow)">{{ lang.variables or '—' }}</code></td>
+                <td><span class="badge badge-green">{{ lang.status or 'Approved' }}</span></td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showTab(tab) {
+    if (tab === 'dmCopy') {
+        document.getElementById('tab-dmCopy').style.display = 'block';
+        document.getElementById('tab-langTemp').style.display = 'none';
+        document.getElementById('btn-dmCopy').className = 'btn btn-primary';
+        document.getElementById('btn-langTemp').className = 'btn btn-ghost';
+    } else {
+        document.getElementById('tab-dmCopy').style.display = 'none';
+        document.getElementById('tab-langTemp').style.display = 'block';
+        document.getElementById('btn-dmCopy').className = 'btn btn-ghost';
+        document.getElementById('btn-langTemp').className = 'btn btn-primary';
+    }
+}
+</script>
+{% endblock %}
