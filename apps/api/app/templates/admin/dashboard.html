@@ -54,8 +54,10 @@
             <tr onclick="window.location='{{ url_for('leads.detail', lead_id=lead.lead_id) }}'">
                 <td class="primary">{{ lead.customer_name or '—' }}</td>
                 <td>
-                    {% if lead.lead_stage in ['Qualified','Booked'] %}
+                    {% if lead.lead_stage in ['Qualified','Booking Draft','Won'] %}
                         <span class="badge badge-green">{{ lead.lead_stage }}</span>
+                    {% elif lead.lead_stage == 'Handoff Needed' %}
+                        <span class="badge badge-red">{{ lead.lead_stage }}</span>
                     {% elif lead.lead_stage == 'Lost' %}
                         <span class="badge badge-red">{{ lead.lead_stage }}</span>
                     {% else %}

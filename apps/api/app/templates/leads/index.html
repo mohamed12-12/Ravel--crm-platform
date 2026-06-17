@@ -286,7 +286,17 @@
 
 <!-- Stage Filters -->
 <div class="stage-filters-container">
-    {% set stage_colors = {'New':'active-New','Contacted':'active-Contacted','Interested':'active-Interested','Qualified':'active-Qualified','Booked':'active-Booked','Lost':'active-Lost'} %}
+    {% set stage_colors = {
+        'New Lead':'active-all',
+        'Contacted':'active-Contacted',
+        'Qualified':'active-Qualified',
+        'Waiting Customer Reply':'active-Waiting Customer Reply',
+        'Proposal Sent':'active-Proposal Sent',
+        'Booking Draft':'active-Booking Draft',
+        'Won':'active-Won',
+        'Lost':'active-Lost',
+        'Handoff Needed':'active-Handoff Needed'
+    } %}
     <a href="{{ url_for('leads.index') }}" class="stage-filter-link {% if not current_stage %}active-all{% endif %}">
         All Stages
     </a>
@@ -324,10 +334,11 @@
             <tr>
                 <th style="width:110px">Lead ID</th>
                 <th>Customer</th>
-                <th>Stage & Path</th>
+                <th>Stage & Next Action</th>
                 <th>Priority</th>
                 <th>Source</th>
                 <th>Trip Interest</th>
+                <th>Links</th>
                 <th>Follow-Up</th>
                 <th>Created</th>
             </tr>
@@ -366,24 +377,22 @@
             </td>
             <td>
                 <div>
-                {% if lead.lead_stage == 'Qualified' or lead.lead_stage == 'Booked' %}
+                {% if lead.lead_stage in ['Qualified','Booking Draft','Won'] %}
                     <span class="badge badge-green">{{ lead.lead_stage }}</span>
-                {% elif lead.lead_stage == 'Lost' or lead.lead_stage == 'Blocked' or lead.lead_stage == 'Needs Review' %}
+                {% elif lead.lead_stage == 'Handoff Needed' %}
                     <span class="badge badge-red">{{ lead.lead_stage }}</span>
-                {% elif lead.lead_stage == 'New' or lead.lead_stage == 'New Lead' %}
+                {% elif lead.lead_stage == 'Lost' %}
+                    <span class="badge badge-red">{{ lead.lead_stage }}</span>
+                {% elif lead.lead_stage == 'New Lead' %}
                     <span class="badge badge-blue">{{ lead.lead_stage }}</span>
                 {% else %}
                     <span class="badge badge-yellow">{{ lead.lead_stage }}</span>
                 {% endif %}
                 </div>
                 
-                {% if lead.handoff_reason %}
-                <div style="font-size:0.72rem;color:var(--red);margin-top:0.4rem;line-height:1.2;font-weight:600" title="{{ lead.handoff_reason }}">
-                    ↳ {{ lead.handoff_reason | replace('_', ' ') | title }}
-                </div>
-                {% elif lead.current_step %}
+                {% if lead.current_step or lead.notes %}
                 <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.4rem;line-height:1.2">
-                    ↳ {{ lead.current_step | replace('_', ' ') | title }}
+                    ↳ {{ lead.current_step or lead.notes }}
                 </div>
                 {% endif %}
             </td>
@@ -407,6 +416,17 @@
                 {% else %}
                     —
                 {% endif %}
+            </td>
+            <td>
+                <div style="display:flex;flex-wrap:wrap;gap:0.35rem">
+                    <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" class="lead-action-pill">View</a>
+                    {% if lead.traveler_id %}
+                    <a href="{{ url_for('travelers.detail', traveler_id=lead.traveler_id) }}" class="lead-action-pill">Traveler</a>
+                    {% endif %}
+                    {% if lead.booking_id %}
+                    <a href="{{ url_for('bookings.detail', booking_id=lead.booking_id) }}" class="lead-action-pill">Booking</a>
+                    {% endif %}
+                </div>
             </td>
             <td>
                 {% if lead.follow_up_due_date %}
@@ -511,6 +531,10 @@
                 <div class="form-group col-span-2">
                     <label class="form-label">Notes</label>
                     <textarea class="form-textarea" name="notes" placeholder="Any relevant inquiry context or notes…" style="min-height: 90px;"></textarea>
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Next Action</label>
+                    <input class="form-input" type="text" name="current_step" placeholder="e.g. Send proposal, call back tomorrow">
                 </div>
             </div>
             <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1.5rem">

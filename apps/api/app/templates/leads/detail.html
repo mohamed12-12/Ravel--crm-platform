@@ -19,11 +19,13 @@
                 <div>
                     <div style="display:flex;align-items:center;gap:0.65rem;flex-wrap:wrap;margin-bottom:0.5rem">
                         <span class="mono" style="color:var(--accent-2)">{{ lead.lead_id }}</span>
-                        {% if lead.lead_stage == 'Qualified' or lead.lead_stage == 'Booked' %}
+                        {% if lead.lead_stage in ['Qualified', 'Booking Draft', 'Won'] %}
                             <span class="badge badge-green">{{ lead.lead_stage }}</span>
+                        {% elif lead.lead_stage == 'Handoff Needed' %}
+                            <span class="badge badge-red">{{ lead.lead_stage }}</span>
                         {% elif lead.lead_stage == 'Lost' %}
                             <span class="badge badge-red">{{ lead.lead_stage }}</span>
-                        {% elif lead.lead_stage == 'New' %}
+                        {% elif lead.lead_stage == 'New Lead' %}
                             <span class="badge badge-blue">{{ lead.lead_stage }}</span>
                         {% else %}
                             <span class="badge badge-yellow">{{ lead.lead_stage }}</span>
@@ -39,7 +41,7 @@
                     {% endif %}
                 </div>
                 <!-- Stage Advance -->
-                {% if lead.lead_stage not in ['Booked', 'Lost'] %}
+                {% if lead.lead_stage not in ['Won', 'Lost'] %}
                 <button id="advanceBtn" class="btn btn-success btn-sm" onclick="advanceStage('{{ lead.lead_id }}')">
                     Advance Stage →
                 </button>
@@ -48,7 +50,7 @@
 
             <!-- Stage Pipeline Visual -->
             <div style="display:flex;gap:0;margin-top:1.25rem;overflow:hidden;border-radius:0.5rem">
-                {% set stage_list = ['New','Contacted','Interested','Qualified','Booked'] %}
+                {% set stage_list = ['New Lead','Contacted','Qualified','Waiting Customer Reply','Proposal Sent','Booking Draft','Won','Lost','Handoff Needed'] %}
                 {% set current_idx = stage_list.index(lead.lead_stage) if lead.lead_stage in stage_list else -1 %}
                 {% for s in stage_list %}
                 {% set s_idx = loop.index0 %}

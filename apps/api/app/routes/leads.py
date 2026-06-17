@@ -16,16 +16,60 @@ from services.crm.system_services.phone_normalization import normalize_phone_inp
 
 leads_bp = Blueprint('leads', __name__, url_prefix='/leads')
 
-PIPELINE_GROUPS = {
-    'New': ['New', 'New Lead', 'New Inquiry', 'Existing Traveler'],
-    'Contacted': ['Contacted', 'Follow Up Needed', 'VIP Follow Up', 'Repeat Follow Up'],
-    'Interested': ['Interested', 'Needs Review'],
-    'Qualified': ['Qualified', 'VIP Priority', 'Repeat Priority'],
-    'Booked': ['Booked', 'Booking Draft Created', 'VIP Booking Draft', 'Repeat Booking Draft'],
-    'Lost': ['Lost', 'Blocked']
+PIPELINE_STAGES = [
+    'New Lead',
+    'Contacted',
+    'Qualified',
+    'Waiting Customer Reply',
+    'Proposal Sent',
+    'Booking Draft',
+    'Won',
+    'Lost',
+    'Handoff Needed',
+]
+
+PIPELINE_ALIASES = {
+    'New': 'New Lead',
+    'New Lead': 'New Lead',
+    'New Inquiry': 'New Lead',
+    'Existing Traveler': 'Qualified',
+    'Interested': 'Contacted',
+    'Follow Up Needed': 'Waiting Customer Reply',
+    'VIP Follow Up': 'Waiting Customer Reply',
+    'Repeat Follow Up': 'Waiting Customer Reply',
+    'Needs Review': 'Handoff Needed',
+    'VIP Priority': 'Qualified',
+    'Repeat Priority': 'Qualified',
+    'Booked': 'Booking Draft',
+    'Booking Draft Created': 'Booking Draft',
+    'VIP Booking Draft': 'Booking Draft',
+    'Repeat Booking Draft': 'Booking Draft',
+    'Blocked': 'Handoff Needed',
 }
 
-PIPELINE_STAGES = ['New', 'Contacted', 'Interested', 'Qualified', 'Booked', 'Lost']
+PIPELINE_TRANSITIONS = {
+    'New Lead': {'Contacted', 'Qualified', 'Handoff Needed', 'Lost'},
+    'Contacted': {'Qualified', 'Waiting Customer Reply', 'Proposal Sent', 'Handoff Needed', 'Lost'},
+    'Qualified': {'Waiting Customer Reply', 'Proposal Sent', 'Booking Draft', 'Handoff Needed', 'Won', 'Lost'},
+    'Waiting Customer Reply': {'Proposal Sent', 'Booking Draft', 'Handoff Needed', 'Won', 'Lost'},
+    'Proposal Sent': {'Booking Draft', 'Won', 'Lost', 'Handoff Needed'},
+    'Booking Draft': {'Won', 'Lost', 'Handoff Needed'},
+    'Won': set(),
+    'Lost': set(),
+    'Handoff Needed': {'Contacted', 'Qualified', 'Waiting Customer Reply', 'Proposal Sent', 'Booking Draft', 'Won', 'Lost'},
+}
+
+PIPELINE_GROUPS = {
+    'New Lead': ['New Lead', 'New', 'New Inquiry', 'Existing Traveler'],
+    'Contacted': ['Contacted', 'Interested'],
+    'Qualified': ['Qualified', 'VIP Priority', 'Repeat Priority'],
+    'Waiting Customer Reply': ['Waiting Customer Reply', 'Follow Up Needed', 'VIP Follow Up', 'Repeat Follow Up'],
+    'Proposal Sent': ['Proposal Sent'],
+    'Booking Draft': ['Booking Draft', 'Booked', 'Booking Draft Created', 'VIP Booking Draft', 'Repeat Booking Draft'],
+    'Won': ['Won'],
+    'Lost': ['Lost'],
+    'Handoff Needed': ['Handoff Needed', 'Needs Review', 'Blocked'],
+}
 
 
 def _phone_match_filter(service: UnifiedCRMService, phone_info: dict[str, str]):
@@ -39,6 +83,25 @@ def _phone_match_filter(service: UnifiedCRMService, phone_info: dict[str, str]):
     if lookup_keys:
         clauses.append(Traveler.phone_lookup_key.in_(lookup_keys))
     return or_(*clauses)
+
+
+def _canonical_stage(stage: str | None) -> str:
+    raw = (stage or '').strip()
+    return PIPELINE_ALIASES.get(raw, raw or 'New Lead')
+
+
+def _allowed_transitions(stage: str) -> set[str]:
+    return PIPELINE_TRANSITIONS.get(stage, set())
+
+
+def _validate_lead_transition(current_stage: str | None, new_stage: str | None) -> None:
+    current = _canonical_stage(current_stage)
+    target = _canonical_stage(new_stage)
+    if target == current:
+        return
+    allowed = _allowed_transitions(current)
+    if target not in allowed:
+        raise ValueError(f"Invalid lead stage transition: {current} -> {target}")
 
 
 @leads_bp.route('/')
@@ -55,6 +118,8 @@ def index():
             Lead.customer_name.ilike(f'%{q}%'),
             Lead.raw_phone.ilike(f'%{q}%'),
             Lead.lead_id.ilike(f'%{q}%'),
+            Lead.notes.ilike(f'%{q}%'),
+            Lead.current_step.ilike(f'%{q}%'),
         ))
     if stage and stage in PIPELINE_GROUPS:
         query = query.filter(Lead.lead_stage.in_(PIPELINE_GROUPS[stage]))
@@ -72,8 +137,8 @@ def index():
     qualified_count = Lead.query.filter(Lead.lead_stage.in_(PIPELINE_GROUPS['Qualified'])).count()
     handoff_required_count = Lead.query.filter(Lead.handoff_required == True).count()
     overdue_follow_up_count = Lead.query.filter(Lead.follow_up_due_date < today).count()
-    booked_count = Lead.query.filter(Lead.lead_stage.in_(PIPELINE_GROUPS['Booked'])).count()
-    blocked_count = Lead.query.filter(Lead.lead_stage == 'Blocked').count()
+    booked_count = Lead.query.filter(Lead.lead_stage.in_(PIPELINE_GROUPS['Booking Draft'])).count()
+    blocked_count = Lead.query.filter(Lead.lead_stage.in_(PIPELINE_GROUPS['Handoff Needed'])).count()
     
     analytics = {
         "total": total_count,
@@ -93,6 +158,7 @@ def index():
                            current_stage=stage,
                            current_priority=priority,
                            stages=PIPELINE_STAGES,
+                           stage_aliases=PIPELINE_ALIASES,
                            today=today)
 
 
@@ -128,7 +194,8 @@ def create():
     service = UnifiedCRMService()
     customer_name = data.get('customer_name', '').strip()
     raw_phone = data.get('raw_phone', '').strip()
-    lead_stage = data.get('lead_stage', '').strip()
+    requested_stage = (data.get('lead_stage', '') or '').strip()
+    lead_stage = _canonical_stage(requested_stage) if requested_stage in PIPELINE_STAGES else requested_stage
     priority = data.get('priority', '').strip()
     lead_source = data.get('lead_source', '').strip() or 'Manual Web UI'
     channel = data.get('channel', '').strip() or 'System UI'
@@ -282,16 +349,27 @@ def update(lead_id):
         
         lead.raw_phone = new_phone
 
-    lead.lead_stage = data.get('lead_stage', lead.lead_stage)
+    if data.get('lead_stage'):
+        next_stage = _canonical_stage(data.get('lead_stage'))
+        try:
+            _validate_lead_transition(lead.lead_stage, next_stage)
+        except ValueError as exc:
+            flash(str(exc), 'error')
+            return redirect(url_for('leads.detail', lead_id=lead_id))
+        lead.lead_stage = next_stage
     lead.priority = data.get('priority', lead.priority)
     lead.lead_source = data.get('lead_source', lead.lead_source)
     lead.channel = data.get('channel', lead.channel)
     lead.preferred_trip_type = data.get('preferred_trip_type', lead.preferred_trip_type)
     lead.interested_trip_ids = data.get('interested_trip_ids', lead.interested_trip_ids)
     lead.notes = data.get('notes', lead.notes)
+    if data.get('current_step'):
+        lead.current_step = data.get('current_step')
     lead.follow_up_status = data.get('follow_up_status', lead.follow_up_status)
     lead.follow_up_due_date = to_date(data.get('follow_up_due_date')) or lead.follow_up_due_date
     lead.updated_at = datetime.utcnow()
+    if data.get('booking_id'):
+        lead.booking_id = data.get('booking_id')
 
     db.session.commit()
     flash('Lead updated.', 'success')
@@ -311,26 +389,18 @@ def delete(lead_id):
 def advance_stage(lead_id):
     """Advance lead to next stage logically based on pipeline groups."""
     lead = Lead.query.get_or_404(lead_id)
-    
-    current_group = None
-    for group, stages in PIPELINE_GROUPS.items():
-        if lead.lead_stage in stages:
-            current_group = group
+    current_stage = _canonical_stage(lead.lead_stage)
+    if current_stage not in PIPELINE_TRANSITIONS:
+        current_stage = 'New Lead'
+    next_stage = None
+    for candidate in PIPELINE_STAGES:
+        if candidate in _allowed_transitions(current_stage):
+            next_stage = candidate
             break
-            
-    if current_group:
-        idx = PIPELINE_STAGES.index(current_group)
-        if idx < len(PIPELINE_STAGES) - 1:
-            next_group = PIPELINE_STAGES[idx + 1]
-            lead.lead_stage = next_group
-            lead.updated_at = datetime.utcnow()
-            db.session.commit()
-    else:
-        # Fallback for unknown granular stages
-        lead.lead_stage = 'Contacted'
+    if next_stage:
+        lead.lead_stage = next_stage
         lead.updated_at = datetime.utcnow()
         db.session.commit()
-        
     return jsonify({'status': 'ok', 'new_stage': lead.lead_stage})
 
 
@@ -354,6 +424,7 @@ def create_handoff(lead_id):
     )
     lead.handoff_required = True
     lead.handoff_id = handoff_id
+    lead.lead_stage = 'Handoff Needed'
     db.session.add(handoff)
     db.session.commit()
     try:
