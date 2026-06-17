@@ -35,6 +35,7 @@ def detect_language(text: str) -> str:
 class SessionState:
     id: str
     stage: str = "awaiting_phone"
+    previous_stage: str = ""
     language: str = "en"
     customer_name: str = ""
     birthday: str = ""
@@ -54,6 +55,9 @@ class SessionState:
     room_type: str = ""
     flight_option: str = ""
     currency: str = ""
+    lead_status: str = ""
+    booking_status: str = ""
+    handoff_state: str = ""
     # Passport fields (populated for international trips)
     passport_name: str = ""
     passport_number: str = ""
@@ -115,12 +119,30 @@ class SessionFlowManager:
     def get(self, session_id: str) -> SessionState | None:
         return self._sessions.get(session_id)
 
+    def _set_stage(self, session: SessionState, stage: str) -> None:
+        if session.stage != stage:
+            session.previous_stage = session.stage
+            session.stage = stage
+
     def submit_intake(self, session: SessionState, payload: dict[str, Any], gateway) -> SessionState:
         if session.stage == "completed":
             session.messages.append(
                 {
                     "role": "assistant",
                     "text": self._copy_text(gateway, "session.completed", "This session is already completed. Start a new session to continue.", language=session.language),
+                }
+            )
+            return session
+        if session.stage in {"handed_off", "cancelled"}:
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "text": self._copy_text(
+                        gateway,
+                        "session.terminal",
+                        "This session has ended. Start a new session to continue.",
+                        language=session.language,
+                    ),
                 }
             )
             return session
@@ -163,7 +185,7 @@ class SessionFlowManager:
         )
         if not country_code and parsed.requires_country_confirmation:
             session.messages.append({"role": "assistant", "text": "Please confirm the country code for this WhatsApp number before I continue."})
-            session.stage = "awaiting_country_code"
+            self._set_stage(session, "awaiting_country_code")
             session.pending_raw_phone = raw_phone
             session.phone_normalization = parsed.to_dict()
             return session
@@ -208,11 +230,12 @@ class SessionFlowManager:
                 nationality=session.nationality,
             )
             session.final_result = result
-            session.stage = "completed"
+            session.handoff_state = "handed_off"
+            self._set_stage(session, "handed_off")
             session.messages.append({"role": "assistant", "text": self._handoff_message(gateway, session.language, result.get("handoff_reason", ""))})
             return session
 
-        session.stage = "awaiting_trip_type"
+        self._set_stage(session, "awaiting_trip_type")
         session.messages.append(
             {
                 "role": "assistant",
@@ -285,7 +308,7 @@ class SessionFlowManager:
             session.phone_normalization = detected.to_dict()
             if detected.requires_country_confirmation:
                 session.pending_raw_phone = clean_text
-                session.stage = "awaiting_country_code"
+                self._set_stage(session, "awaiting_country_code")
                 session.messages.append(
                     {
                         "role": "assistant",
@@ -322,7 +345,8 @@ class SessionFlowManager:
                     nationality=session.nationality,
                 )
                 session.final_result = result
-                session.stage = "completed"
+                session.handoff_state = "handed_off"
+                self._set_stage(session, "handed_off")
                 session.messages.append({"role": "assistant", "text": self._handoff_message(gateway, session.language, result.get("handoff_reason", ""))})
                 return session
 
@@ -332,7 +356,7 @@ class SessionFlowManager:
                 session.country_code = str(traveler.get("code") or session.country_code or "").strip()
 
             if preview.get("match_status") == "not_found":
-                session.stage = "awaiting_intake"
+                self._set_stage(session, "awaiting_intake")
                 session.messages.append(
                     {
                         "role": "assistant",
@@ -346,7 +370,7 @@ class SessionFlowManager:
                 )
                 return session
 
-            session.stage = "awaiting_trip_type"
+            self._set_stage(session, "awaiting_trip_type")
             session.messages.append(
                 {
                     "role": "assistant",
@@ -395,7 +419,7 @@ class SessionFlowManager:
                 country_code=session.country_code,
             )
             session.preview = preview
-            session.stage = "awaiting_trip_type"
+            self._set_stage(session, "awaiting_trip_type")
             session.messages.append(
                 {
                     "role": "assistant",
@@ -412,6 +436,7 @@ class SessionFlowManager:
         if session.stage == "awaiting_trip_type":
             normalized = self._resolve_trip_type(clean_text)
             if normalized is None:
+                self._set_stage(session, "awaiting_clarification")
                 session.messages.append(
                     {
                         "role": "assistant",
@@ -433,13 +458,14 @@ class SessionFlowManager:
                 trip_type=session.trip_type,
             )
             session.preview = preview
-            session.stage = "awaiting_confirmation"
+            self._set_stage(session, "awaiting_confirmation")
             session.messages.append({"role": "assistant", "text": self._preview_message(preview, gateway, session.language)})
             return session
 
         if session.stage == "awaiting_confirmation":
             if self._is_negative_confirmation(clean_text):
-                session.stage = "completed"
+                self._set_stage(session, "cancelled")
+                session.handoff_state = "cancelled"
                 session.messages.append(
                     {
                         "role": "assistant",
@@ -471,6 +497,7 @@ class SessionFlowManager:
                         break
 
             if not selected_trip:
+                self._set_stage(session, "awaiting_clarification")
                 session.messages.append(
                     {
                         "role": "assistant",
@@ -496,10 +523,11 @@ class SessionFlowManager:
                 nationality=session.nationality,
             )
             session.final_result = result
+            session.lead_status = str(((result.get("write_result") or {}).get("lead_update") or {}).get("lead_stage") or "")
 
             # For international trips: collect passport info before room booking
             if session.trip_type == "international":
-                session.stage = "awaiting_passport_name"
+                self._set_stage(session, "awaiting_passport_name")
                 session._passport_step = "name"
                 session.messages.append(
                     {
@@ -516,7 +544,7 @@ class SessionFlowManager:
                 return session
 
             # Local trip: go straight to room type
-            session.stage = "awaiting_room_type"
+            self._set_stage(session, "awaiting_room_type")
             session.messages.append(
                 {
                     "role": "assistant",
@@ -531,7 +559,7 @@ class SessionFlowManager:
 
         if session.stage == "awaiting_passport_name":
             session.passport_name = clean_text
-            session.stage = "awaiting_passport_number"
+            self._set_stage(session, "awaiting_passport_number")
             session.messages.append(
                 {
                     "role": "assistant",
@@ -547,7 +575,7 @@ class SessionFlowManager:
 
         if session.stage == "awaiting_passport_number":
             session.passport_number = clean_text
-            session.stage = "awaiting_passport_expiry"
+            self._set_stage(session, "awaiting_passport_expiry")
             session.messages.append(
                 {
                     "role": "assistant",
@@ -563,7 +591,7 @@ class SessionFlowManager:
 
         if session.stage == "awaiting_passport_expiry":
             session.passport_expiry = clean_text
-            session.stage = "awaiting_passport_nationality"
+            self._set_stage(session, "awaiting_passport_nationality")
             session.messages.append(
                 {
                     "role": "assistant",
@@ -582,7 +610,7 @@ class SessionFlowManager:
             # Passport image upload is handled via the /upload endpoint on the frontend;
             # here we just prompt and move on. The attachment_ref will be set later via
             # the POST /api/session/<id>/passport_attachment endpoint.
-            session.stage = "awaiting_passport_upload"
+            self._set_stage(session, "awaiting_passport_upload")
             session.messages.append(
                 {
                     "role": "assistant",
@@ -606,7 +634,7 @@ class SessionFlowManager:
                     discount_note = gateway.get_trip_discount_notes(session.selected_trip_id)
                 except Exception:
                     pass
-                session.stage = "awaiting_room_type"
+                self._set_stage(session, "awaiting_room_type")
                 room_msg = self._room_type_prompt(gateway, session)
                 if discount_note:
                     room_msg = f"{room_msg}\n\n📢 Special offer: {discount_note}"
@@ -632,6 +660,7 @@ class SessionFlowManager:
         if session.stage == "awaiting_room_type":
             room = self._resolve_room_type(clean_text)
             if room is None:
+                self._set_stage(session, "awaiting_clarification")
                 session.messages.append(
                     {
                         "role": "assistant",
@@ -657,7 +686,7 @@ class SessionFlowManager:
                 return session
 
             session.room_type = room
-            session.stage = "awaiting_flight"
+            self._set_stage(session, "awaiting_flight")
             session.messages.append(
                 {
                     "role": "assistant",
@@ -677,7 +706,7 @@ class SessionFlowManager:
             else:
                 session.flight_option = "Without Flight"
 
-            session.stage = "awaiting_currency"
+            self._set_stage(session, "awaiting_currency")
             session.messages.append(
                 {
                     "role": "assistant",
@@ -712,13 +741,15 @@ class SessionFlowManager:
             if not trip_id:
                 agent_logger.error(f"Cannot create booking: trip_id is empty. Preview: {session.preview}")
                 session.messages.append({"role": "assistant", "text": "I encountered an error: could not identify the trip you are booking. Please start a new session."})
-                session.stage = "completed"
+                self._set_stage(session, "cancelled")
+                session.handoff_state = "cancelled"
                 return session
 
             if not session.final_result:
                 agent_logger.error(f"Cannot create booking: final_result is missing.")
                 session.messages.append({"role": "assistant", "text": "I encountered an error: lead data is missing. Please start a new session."})
-                session.stage = "completed"
+                self._set_stage(session, "cancelled")
+                session.handoff_state = "cancelled"
                 return session
 
             agent_logger.info(f"Finalizing booking: traveler={session.customer_name}, trip={trip_id}, room={session.room_type}, flight={session.flight_option}, currency={session.currency}")
@@ -736,7 +767,8 @@ class SessionFlowManager:
                 agent_notes=f"Room: {session.room_type}, Flight: {session.flight_option}, Currency: {session.currency}",
             )
             session.booking_result = booking
-            session.stage = "booking_created"
+            session.booking_status = str(booking.get("booking_status") or "Draft")
+            self._set_stage(session, "booking_created")
 
             booking_id = (booking.get("write_result") or {}).get("booking_draft", {}).get("booking_id", "NEW")
             booking_status = booking.get("booking_status") or "Draft"
@@ -750,6 +782,17 @@ class SessionFlowManager:
                         f"Thank you. I have created booking draft {booking_id}. Current booking status is {booking_status} and payment status is {payment_status}. Would you like to confirm it by paying the deposit?",
                         language=session.language,
                         booking_id=booking_id,
+                    ),
+                }
+            )
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "text": self._copy_text(
+                        gateway,
+                        "session.ask_booking_confirmation",
+                        "Please reply yes to continue with confirmation, or no if you want to stop here.",
+                        language=session.language,
                     ),
                 }
             )
@@ -779,13 +822,76 @@ class SessionFlowManager:
 
             return session
 
+        if session.stage == "booking_created":
+            if self._is_positive_confirmation(clean_text):
+                session.handoff_state = "completed"
+                self._set_stage(session, "completed")
+                session.messages.append(
+                    {
+                        "role": "assistant",
+                        "text": self._copy_text(
+                            gateway,
+                            "session.booking_completed",
+                            "Thank you. The booking flow is complete and the customer can now continue with payment follow-up.",
+                            language=session.language,
+                        ),
+                    }
+                )
+                return session
+            if self._is_negative_confirmation(clean_text):
+                self._set_stage(session, "cancelled")
+                session.handoff_state = "cancelled"
+                session.messages.append(
+                    {
+                        "role": "assistant",
+                        "text": self._copy_text(
+                            gateway,
+                            "session.booking_cancelled",
+                            "Understood. I will keep the booking draft open for follow-up and end this session for now.",
+                            language=session.language,
+                        ),
+                    }
+                )
+                return session
+            self._set_stage(session, "awaiting_clarification")
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "text": self._copy_text(
+                        gateway,
+                        "session.booking_clarification",
+                        "Please reply with yes or no so I can finish the booking flow.",
+                        language=session.language,
+                    ),
+                }
+            )
+            return session
+
+        if session.stage == "awaiting_clarification":
+            resume_stage = session.previous_stage or "awaiting_trip_type"
+            if resume_stage == "awaiting_clarification":
+                resume_stage = "awaiting_trip_type"
+            self._set_stage(session, resume_stage)
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "text": self._copy_text(
+                        gateway,
+                        "session.clarification_retry",
+                        "Thanks. I’m back on the previous step now. Please answer with one of the available options.",
+                        language=session.language,
+                    ),
+                }
+            )
+            return session
+
         session.messages.append(
             {
                 "role": "assistant",
                 "text": self._copy_text(
                     gateway,
                     "session.fallback",
-                    "I could not process that message in the current stage. Please start a new session.",
+                    "I could not process that message in the current stage. Please choose one of the available options.",
                 ),
             }
         )

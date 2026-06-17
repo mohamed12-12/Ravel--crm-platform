@@ -125,8 +125,8 @@ function renderSession(session) {
   renderStats(session.stats);
 
   const canIntake = session.stage === "awaiting_intake";
-  const canChat = ["awaiting_phone", "awaiting_trip_type", "awaiting_confirmation", "awaiting_room_type", "awaiting_flight", "awaiting_currency"].includes(session.stage);
-  const isCompleted = session.stage === "completed" || session.stage === "booking_created";
+  const canChat = ["awaiting_phone", "awaiting_trip_type", "awaiting_confirmation", "awaiting_room_type", "awaiting_flight", "awaiting_currency", "booking_created", "awaiting_clarification"].includes(session.stage);
+  const isCompleted = ["completed", "handed_off", "cancelled"].includes(session.stage);
 
   if (session.rawPhone && !els.phoneInput.value) {
     els.phoneInput.value = session.rawPhone;
@@ -156,7 +156,7 @@ function renderSession(session) {
 }
 
 function messagePlaceholder(stage) {
-  if (stage === "completed") return "Session finished.";
+  if (["completed", "handed_off", "cancelled"].includes(stage)) return "Session finished.";
   if (stage === "awaiting_phone") return "Enter WhatsApp number first...";
   if (stage === "awaiting_trip_type") return "Type local or international...";
   if (stage === "awaiting_confirmation") return "Type the trip number/name, or no...";
@@ -164,13 +164,15 @@ function messagePlaceholder(stage) {
   if (stage === "awaiting_flight") return "Type with flights or no flights...";
   if (stage === "awaiting_currency") return "Type EGP or USD...";
   if (stage === "booking_created") return "Booking draft created.";
+  if (stage === "booking_created") return "Confirm booking draft...";
+  if (stage === "awaiting_clarification") return "Please clarify your choice...";
   return "Waiting for intake form...";
 }
 
 function renderQuickActions(session) {
   const stage = session.stage;
   const availableRooms = getAvailableRoomReplies(session);
-  const visible = ["awaiting_trip_type", "awaiting_confirmation", "awaiting_room_type", "awaiting_flight", "awaiting_currency"].includes(stage);
+  const visible = ["awaiting_trip_type", "awaiting_confirmation", "awaiting_room_type", "awaiting_flight", "awaiting_currency", "booking_created", "awaiting_clarification"].includes(stage);
   els.quickActions.hidden = !visible;
   els.quickActions.querySelectorAll("button").forEach((button) => {
     const reply = button.dataset.reply;
@@ -179,12 +181,15 @@ function renderQuickActions(session) {
     const roomBtn = ["single", "double", "triple"].includes(reply);
     const flightBtn = ["with flights", "no flights"].includes(reply);
     const currencyBtn = ["egp", "usd"].includes(reply);
+    const confirmBookingBtn = ["yes", "no"].includes(reply);
 
     if (stage === "awaiting_trip_type") button.hidden = !tripTypeBtn;
     else if (stage === "awaiting_confirmation") button.hidden = !confirmBtn;
     else if (stage === "awaiting_room_type") button.hidden = !roomBtn || (availableRooms && !availableRooms.includes(reply));
     else if (stage === "awaiting_flight") button.hidden = !flightBtn;
     else if (stage === "awaiting_currency") button.hidden = !currencyBtn;
+    else if (stage === "booking_created") button.hidden = !confirmBookingBtn;
+    else if (stage === "awaiting_clarification") button.hidden = true;
     else button.hidden = true;
   });
 }
@@ -299,6 +304,7 @@ function renderLeadResult(session) {
     <div class="detail-card">
       <h3>${escapeHtml(lead.lead_id)}</h3>
       <div class="tag-row"><span class="tag ok">${escapeHtml(lead.lead_stage)}</span></div>
+      <div class="meta-item"><span>Lead status</span><strong>${escapeHtml(session.leadStatus || lead.lead_stage || "Unknown")}</strong></div>
     </div>
   `;
 }
@@ -333,6 +339,7 @@ function renderBookingResult(session) {
   els.bookingResult.innerHTML = `
     <div class="detail-card">
       <h3>${escapeHtml(booking.booking_id)}</h3>
+      <div class="meta-item"><span>Session</span><strong>${escapeHtml(session.stage)}</strong></div>
       <div class="meta-item"><span>Status</span><strong>${escapeHtml(booking.booking_status || "Draft")}</strong></div>
       <div class="meta-item"><span>Payment</span><strong>${escapeHtml(booking.payment_status || "Pending")}</strong></div>
       <div class="meta-item"><span>Trip</span><strong>${escapeHtml(booking.trip_name)}</strong></div>
