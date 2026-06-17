@@ -55,16 +55,22 @@
                 <button onclick="openModal('editInventory')" class="btn btn-ghost btn-sm">Adjust</button>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem">
-                {% for label, total, remaining in [
-                    ('Single', trip.single_total, trip.single_remaining),
-                    ('Double', trip.double_total, trip.double_remaining),
-                    ('Triple', trip.triple_total, trip.triple_remaining)
+                {% for label, total, remaining, boys, girls in [
+                    ('Single', trip.single_total, trip.single_remaining, None, None),
+                    ('Double', trip.double_total, trip.double_remaining, trip.boys_double, trip.girls_double),
+                    ('Triple', trip.triple_total, trip.triple_remaining, trip.boys_triple, trip.girls_triple)
                 ] %}
                 {% set pct = (remaining / total * 100) if total else 0 %}
                 <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:1rem">
                     <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em">{{ label }}</div>
                     <div style="font-size:1.5rem;font-weight:800;margin:0.35rem 0;color:{% if pct > 30 %}var(--green){% elif pct > 0 %}var(--yellow){% else %}var(--red){% endif %}">{{ remaining }}</div>
                     <div style="font-size:0.72rem;color:var(--text-muted)">of {{ total }} remaining</div>
+                    {% if boys is not none or girls is not none %}
+                    <div style="display:flex;justify-content:space-between;gap:0.75rem;font-size:0.7rem;color:var(--text-muted);margin-top:0.35rem">
+                        <span>Boys {{ boys or 0 }}</span>
+                        <span>Girls {{ girls or 0 }}</span>
+                    </div>
+                    {% endif %}
                     <div class="cap-bar" style="margin-top:0.5rem">
                         <div class="cap-fill {% if pct > 30 %}good{% elif pct > 0 %}warn{% else %}empty{% endif %}" style="width:{{ pct }}%"></div>
                     </div>
@@ -165,6 +171,10 @@
         <form action="{{ url_for('trips.update', trip_id=trip.trip_id) }}" method="POST">
             <div class="grid-2">
                 <div class="form-group col-span-2">
+                    <label class="form-label">Trip ID</label>
+                    <input class="form-input" type="text" name="trip_id" value="{{ trip.trip_id }}" placeholder="Leave blank to keep current ID">
+                </div>
+                <div class="form-group col-span-2">
                     <label class="form-label">Trip Name</label>
                     <input class="form-input" type="text" name="trip_name" value="{{ trip.trip_name }}" required>
                 </div>
@@ -213,6 +223,12 @@
                         <input class="form-input" type="number" name="single_remaining" value="{{ trip.single_remaining }}" placeholder="Single" min="0">
                         <input class="form-input" type="number" name="double_remaining" value="{{ trip.double_remaining }}" placeholder="Double" min="0">
                         <input class="form-input" type="number" name="triple_remaining" value="{{ trip.triple_remaining }}" placeholder="Triple" min="0">
+                    </div>
+                    <div style="display:flex;gap:0.5rem;margin-top:0.45rem">
+                        <input class="form-input" type="number" name="boys_double" value="{{ trip.boys_double or 0 }}" placeholder="Double boys" min="0">
+                        <input class="form-input" type="number" name="girls_double" value="{{ trip.girls_double or 0 }}" placeholder="Double girls" min="0">
+                        <input class="form-input" type="number" name="boys_triple" value="{{ trip.boys_triple or 0 }}" placeholder="Triple boys" min="0">
+                        <input class="form-input" type="number" name="girls_triple" value="{{ trip.girls_triple or 0 }}" placeholder="Triple girls" min="0">
                     </div>
                 </div>
                 <div class="form-group col-span-2">

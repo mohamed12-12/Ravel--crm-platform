@@ -54,6 +54,14 @@ TRIPS_EXPECTED_HEADERS = [
     "Data Audit",
 ]
 
+TRIPS_HELPER_HEADERS = [
+    "Boys Double",
+    "Girls Double",
+    "Boys Triple",
+    "Girls Triple",
+    "Public Price",
+]
+
 BLOCKED_STATUSES = {"Blacklisted"}
 REVIEW_STATUSES = {"Payment Risk", "High Maintenance"}
 SUPPORTED_TRIP_TYPES = {"Local", "International"}
@@ -92,6 +100,11 @@ class TripRecord:
     draft_holds_single: int = 0
     draft_holds_double: int = 0
     draft_holds_triple: int = 0
+    boys_double: int | None = None
+    girls_double: int | None = None
+    boys_triple: int | None = None
+    girls_triple: int | None = None
+    public_price: str = ""
     available_single: int | None = None
     available_double: int | None = None
     available_triple: int | None = None
@@ -193,7 +206,7 @@ def load_headers(workbook_path: Path) -> tuple[Any, Any, dict[str, int], dict[st
         trips_ws,
         header_row=2,
         expected_headers=TRIPS_EXPECTED_HEADERS,
-        helper_headers=[],
+        helper_headers=TRIPS_HELPER_HEADERS,
     )
     return wb, travelers_ws, trips_ws, traveler_headers, trip_headers
 
@@ -241,9 +254,14 @@ def collect_trips(trips_ws, header_map: dict[str, int]) -> list[TripRecord]:
         remaining_single = normalize_int(trips_ws.cell(row_idx, 11).value)
         remaining_double = normalize_int(trips_ws.cell(row_idx, 12).value)
         remaining_triple = normalize_int(trips_ws.cell(row_idx, 13).value)
+        boys_double = normalize_int(trips_ws.cell(row_idx, header_map.get("Boys Double", 0)).value) if header_map.get("Boys Double") else None
+        girls_double = normalize_int(trips_ws.cell(row_idx, header_map.get("Girls Double", 0)).value) if header_map.get("Girls Double") else None
+        boys_triple = normalize_int(trips_ws.cell(row_idx, header_map.get("Boys Triple", 0)).value) if header_map.get("Boys Triple") else None
+        girls_triple = normalize_int(trips_ws.cell(row_idx, header_map.get("Girls Triple", 0)).value) if header_map.get("Girls Triple") else None
         draft_holds_single = (normalize_int(trips_ws.cell(row_idx, header_map.get("Draft Holds Single", 0)).value) or 0) if header_map.get("Draft Holds Single") else 0
         draft_holds_double = (normalize_int(trips_ws.cell(row_idx, header_map.get("Draft Holds Double", 0)).value) or 0) if header_map.get("Draft Holds Double") else 0
         draft_holds_triple = (normalize_int(trips_ws.cell(row_idx, header_map.get("Draft Holds Triple", 0)).value) or 0) if header_map.get("Draft Holds Triple") else 0
+        public_price = str(trips_ws.cell(row_idx, header_map.get("Public Price", 0)).value or "").strip() if header_map.get("Public Price") else ""
         available_single = max(remaining_single - draft_holds_single, 0) if remaining_single is not None else None
         available_double = max(remaining_double - draft_holds_double, 0) if remaining_double is not None else None
         available_triple = max(remaining_triple - draft_holds_triple, 0) if remaining_triple is not None else None
@@ -274,6 +292,11 @@ def collect_trips(trips_ws, header_map: dict[str, int]) -> list[TripRecord]:
                 draft_holds_single=draft_holds_single,
                 draft_holds_double=draft_holds_double,
                 draft_holds_triple=draft_holds_triple,
+                boys_double=boys_double,
+                girls_double=girls_double,
+                boys_triple=boys_triple,
+                girls_triple=girls_triple,
+                public_price=public_price,
                 available_single=available_single,
                 available_double=available_double,
                 available_triple=available_triple,

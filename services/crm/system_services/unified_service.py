@@ -1548,6 +1548,7 @@ class UnifiedCRMService:
             self._ensure_booking_event_trail_table(connection)
             self._ensure_sync_queue_table(connection)
             self._migrate_travelers_passport_columns(connection)
+            self._migrate_trips_room_columns(connection)
             connection.commit()
 
     @staticmethod
@@ -1583,6 +1584,64 @@ class UnifiedCRMService:
             if col_name not in existing_cols:
                 connection.execute(f"ALTER TABLE travelers ADD COLUMN {col_name} {col_type}")
                 _log.info(f"[MIGRATION] Added column travelers.{col_name} ({col_type}) -- Demo Phase 1 passport support")
+
+    @staticmethod
+    def _migrate_trips_room_columns(connection: sqlite3.Connection) -> None:
+        try:
+            rows = connection.execute("PRAGMA table_info(trips)").fetchall()
+        except Exception:
+            return
+        existing_cols = {row[1] for row in rows}
+        if not existing_cols:
+            return
+        room_columns = [
+            ("boys_double", "INTEGER"),
+            ("girls_double", "INTEGER"),
+            ("boys_triple", "INTEGER"),
+            ("girls_triple", "INTEGER"),
+        ]
+        for col_name, col_type in room_columns:
+            if col_name not in existing_cols:
+                connection.execute(f"ALTER TABLE trips ADD COLUMN {col_name} {col_type}")
+
+    @staticmethod
+    def _table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
+        try:
+            rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        except Exception:
+            return set()
+        return {row[1] for row in rows}
+
+    def _trip_select_columns(self, connection: sqlite3.Connection) -> str:
+        base_columns = [
+            "trip_id",
+            "trip_name",
+            "type",
+            "year",
+            "trip_leader",
+            "start_date",
+            "end_date",
+            "sales_status",
+            "data_audit",
+            "trip_window_status",
+            "trip_availability_note",
+            "next_reengage_date",
+            "single_total",
+            "double_total",
+            "triple_total",
+            "single_remaining",
+            "double_remaining",
+            "triple_remaining",
+            "draft_holds_single",
+            "draft_holds_double",
+            "draft_holds_triple",
+            "public_price",
+            "public_description",
+            "sales_notes",
+        ]
+        optional_columns = ["boys_double", "girls_double", "boys_triple", "girls_triple"]
+        existing = self._table_columns(connection, "trips")
+        return ", ".join([*base_columns, *[column for column in optional_columns if column in existing]])
 
     @staticmethod
     def _ensure_sync_queue_table(connection: sqlite3.Connection) -> None:
@@ -1740,13 +1799,10 @@ class UnifiedCRMService:
             raise ValueError(f"Unsupported trip type {trip_type!r}")
         today = today or date.today()
         with self.connect() as connection:
+            select_columns = self._trip_select_columns(connection)
             rows = connection.execute(
-                """
-                SELECT trip_id, trip_name, type, year, trip_leader, start_date, end_date, sales_status,
-                       data_audit, trip_window_status, trip_availability_note, next_reengage_date,
-                       single_total, double_total, triple_total, single_remaining, double_remaining,
-                       triple_remaining, draft_holds_single, draft_holds_double, draft_holds_triple,
-                       public_price, public_description, sales_notes
+                f"""
+                SELECT {select_columns}
                 FROM trips
                 ORDER BY start_date ASC, trip_name ASC
                 """
@@ -1820,13 +1876,10 @@ class UnifiedCRMService:
 
     def _fetch_trip_record(self, trip_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
+            select_columns = self._trip_select_columns(connection)
             row = connection.execute(
-                """
-                SELECT trip_id, trip_name, type, year, trip_leader, start_date, end_date, sales_status,
-                       data_audit, trip_window_status, trip_availability_note, next_reengage_date,
-                       single_total, double_total, triple_total, single_remaining, double_remaining,
-                       triple_remaining, draft_holds_single, draft_holds_double, draft_holds_triple,
-                       public_price, public_description, sales_notes
+                f"""
+                SELECT {select_columns}
                 FROM trips
                 WHERE trip_id = ?
                 """,
@@ -1835,16 +1888,26 @@ class UnifiedCRMService:
         return self._trip_row_to_dict(row) if row else None
 
     def _trip_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
-        single_remaining = self._as_int(row["single_remaining"])
-        double_remaining = self._as_int(row["double_remaining"])
-        triple_remaining = self._as_int(row["triple_remaining"])
-        draft_holds_single = self._as_int(row["draft_holds_single"], default=0)
-        draft_holds_double = self._as_int(row["draft_holds_double"], default=0)
-        draft_holds_triple = self._as_int(row["draft_holds_triple"], default=0)
+        def value(name: str, default: Any = None) -> Any:
+            try:
+                return row[name]
+            except (KeyError, IndexError, TypeError):
+                return default
+
+        single_remaining = self._as_int(value("single_remaining"))
+        double_remaining = self._as_int(value("double_remaining"))
+        triple_remaining = self._as_int(value("triple_remaining"))
+        boys_double = self._as_int(value("boys_double"), default=0)
+        girls_double = self._as_int(value("girls_double"), default=0)
+        boys_triple = self._as_int(value("boys_triple"), default=0)
+        girls_triple = self._as_int(value("girls_triple"), default=0)
+        draft_holds_single = self._as_int(value("draft_holds_single"), default=0)
+        draft_holds_double = self._as_int(value("draft_holds_double"), default=0)
+        draft_holds_triple = self._as_int(value("draft_holds_triple"), default=0)
         available_single = max(single_remaining - draft_holds_single, 0) if single_remaining is not None else None
         available_double = max(double_remaining - draft_holds_double, 0) if double_remaining is not None else None
         available_triple = max(triple_remaining - draft_holds_triple, 0) if triple_remaining is not None else None
-        availability_note = str(row["trip_availability_note"] or "").strip()
+        availability_note = str(value("trip_availability_note") or "").strip()
         values = [value for value in (available_single, available_double, available_triple) if value is not None]
         remaining_places = sum(values) if values else 0
         if remaining_places > 0:
@@ -1855,35 +1918,39 @@ class UnifiedCRMService:
             availability_status = "full"
         return {
             "row": 0,
-            "trip_id": str(row["trip_id"] or "").strip(),
-            "trip_name": str(row["trip_name"] or "").strip(),
-            "trip_type": str(row["type"] or "").strip(),
-            "year": self._as_int(row["year"]),
-            "start_date": self._iso_date(row["start_date"]),
-            "end_date": self._iso_date(row["end_date"]),
-            "sales_status": str(row["sales_status"] or "").strip() or "Open",
-            "data_audit": str(row["data_audit"] or "").strip(),
-            "trip_window_status": str(row["trip_window_status"] or "").strip(),
+            "trip_id": str(value("trip_id") or "").strip(),
+            "trip_name": str(value("trip_name") or "").strip(),
+            "trip_type": str(value("type") or "").strip(),
+            "year": self._as_int(value("year")),
+            "start_date": self._iso_date(value("start_date")),
+            "end_date": self._iso_date(value("end_date")),
+            "sales_status": str(value("sales_status") or "").strip() or "Open",
+            "data_audit": str(value("data_audit") or "").strip(),
+            "trip_window_status": str(value("trip_window_status") or "").strip(),
             "trip_availability_note": availability_note,
-            "next_reengage_date": self._iso_date(row["next_reengage_date"]),
-            "trip_leader": str(row["trip_leader"] or "").strip(),
-            "single_total": self._as_int(row["single_total"], default=0),
-            "double_total": self._as_int(row["double_total"], default=0),
-            "triple_total": self._as_int(row["triple_total"], default=0),
+            "next_reengage_date": self._iso_date(value("next_reengage_date")),
+            "trip_leader": str(value("trip_leader") or "").strip(),
+            "single_total": self._as_int(value("single_total"), default=0),
+            "double_total": self._as_int(value("double_total"), default=0),
+            "triple_total": self._as_int(value("triple_total"), default=0),
             "single_remaining": single_remaining,
             "double_remaining": double_remaining,
             "triple_remaining": triple_remaining,
             "draft_holds_single": draft_holds_single,
             "draft_holds_double": draft_holds_double,
             "draft_holds_triple": draft_holds_triple,
+            "boys_double": boys_double,
+            "girls_double": girls_double,
+            "boys_triple": boys_triple,
+            "girls_triple": girls_triple,
             "available_single": available_single,
             "available_double": available_double,
             "available_triple": available_triple,
             "remaining_places": remaining_places,
             "availability_status": availability_status,
-            "public_price": str(row["public_price"] or "").strip(),
-            "public_description": str(row["public_description"] or "").strip(),
-            "sales_notes": str(row["sales_notes"] or "").strip(),
+            "public_price": str(value("public_price") or "").strip(),
+            "public_description": str(value("public_description") or "").strip(),
+            "sales_notes": str(value("sales_notes") or "").strip(),
         }
 
     def _trip_is_candidate(self, trip: dict[str, Any], *, today: date) -> bool:

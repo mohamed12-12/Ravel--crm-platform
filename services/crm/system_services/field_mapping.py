@@ -21,6 +21,10 @@ TRIPS_SHEET_COLUMNS = {
     "single_remaining": 11,
     "double_remaining": 12,
     "triple_remaining": 13,
+    "boys_double": 14,
+    "girls_double": 15,
+    "boys_triple": 16,
+    "girls_triple": 17,
     "sales_status": 26,
     "data_audit": 27,
 }

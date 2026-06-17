@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+import os
+import shutil
+import sqlite3
+import tempfile
+import unittest
+from contextlib import closing
+from pathlib import Path
+import sys
+
+CURRENT_DIR = Path(__file__).resolve().parent
+SYSTEM_ROOT = Path(__file__).resolve().parents[1] / "apps" / "api"
+if str(SYSTEM_ROOT) not in sys.path:
+    sys.path.insert(0, str(SYSTEM_ROOT))
+
+from app import create_app
+from app.extensions import db
+from app.models.trip import Trip
+from services.crm.system_services import UnifiedCRMService
+from services.crm.system_services.config import SystemServiceSettings
+from test_phase3_booking_write_through import create_operational_tables
+
+
+class Phase2TripRedesignTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="phase2-trip-"))
+        self.db_path = self.tmpdir / "app.db"
+        os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path}"
+        os.environ["RAHMA_SYSTEM_DB_PATH"] = str(self.db_path)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            create_operational_tables(conn)
+        self.app = create_app("development")
+        self.app.config["TESTING"] = True
+        self.client = self.app.test_client()
+
+    def tearDown(self) -> None:
+        os.environ.pop("DATABASE_URL", None)
+        os.environ.pop("RAHMA_SYSTEM_DB_PATH", None)
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _seed_trip_table(self) -> None:
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.execute(
+                """
+                INSERT INTO trips (
+                    trip_id, trip_name, type, year, start_date, end_date, sales_status,
+                    single_total, double_total, triple_total, single_remaining, double_remaining,
+                    triple_remaining, draft_holds_single, draft_holds_double, draft_holds_triple
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "RT-LOC-26-001",
+                    "Existing Trip",
+                    "Local",
+                    2026,
+                    "2026-10-01",
+                    "2026-10-05",
+                    "Open",
+                    2,
+                    4,
+                    3,
+                    2,
+                    4,
+                    3,
+                    0,
+                    0,
+                    0,
+                ),
+            )
+            conn.commit()
+
+    def test_create_auto_generates_trip_id_when_blank(self) -> None:
+        response = self.client.post(
+            "/trips/",
+            data={
+                "trip_name": "Auto ID Trip",
+                "type": "Local",
+                "year": "2026",
+                "sales_status": "Open",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            trip = Trip.query.filter_by(trip_name="Auto ID Trip").first()
+            self.assertIsNotNone(trip)
+            self.assertTrue((trip.trip_id or "").startswith("RT-LOC-26-"))
+
+    def test_trip_room_splits_survive_create_and_sync(self) -> None:
+        self._seed_trip_table()
+        response = self.client.post(
+            "/trips/",
+            data={
+                "trip_name": "Split Rooms",
+                "trip_id": "",
+                "type": "International",
+                "year": "2026",
+                "sales_status": "Open",
+                "double_total": "4",
+                "double_remaining": "3",
+                "boys_double": "2",
+                "girls_double": "1",
+                "triple_total": "6",
+                "triple_remaining": "5",
+                "boys_triple": "3",
+                "girls_triple": "2",
+                "public_price": "$1200",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            trip = Trip.query.filter_by(trip_name="Split Rooms").first()
+            self.assertEqual(trip.boys_double, 2)
+            self.assertEqual(trip.girls_double, 1)
+            self.assertEqual(trip.boys_triple, 3)
+            self.assertEqual(trip.girls_triple, 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

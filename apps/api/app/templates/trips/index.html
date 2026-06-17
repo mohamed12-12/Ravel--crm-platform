@@ -51,7 +51,7 @@
             <th>Type</th>
             <th>Dates</th>
             <th>Status</th>
-            <th>Capacity (S / D / T)</th>
+            <th>Capacity</th>
             <th>Price</th>
         </tr></thead>
         <tbody>
@@ -86,28 +86,30 @@
                 {% else %}<span class="badge badge-yellow">{{ trip.sales_status or '—' }}</span>{% endif %}
             </td>
             <td>
-                <div style="display:flex;gap:0.75rem;font-size:0.78rem">
-                    {% set s_pct = (trip.single_remaining / trip.single_total * 100) if trip.single_total else 0 %}
-                    {% set d_pct = (trip.double_remaining / trip.double_total * 100) if trip.double_total else 0 %}
-                    {% set t_pct = (trip.triple_remaining / trip.triple_total * 100) if trip.triple_total else 0 %}
-                    <div style="min-width:40px">
-                        <div style="color:var(--text-muted);font-size:0.65rem">S</div>
-                        <div style="color:{% if s_pct > 30 %}var(--green){% elif s_pct > 0 %}var(--yellow){% else %}var(--red){% endif %}">
-                            {{ trip.single_remaining }}/{{ trip.single_total }}
+                {% set double_total = trip.double_total or 0 %}
+                {% set triple_total = trip.triple_total or 0 %}
+                <div style="display:flex;flex-direction:column;gap:0.45rem;font-size:0.76rem">
+                    {% set d_pct = (trip.double_remaining / double_total * 100) if double_total else 0 %}
+                    {% set t_pct = (trip.triple_remaining / triple_total * 100) if triple_total else 0 %}
+                    <div>
+                        <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                            <span style="color:var(--text-muted)">Double</span>
+                            <span>{{ trip.double_remaining }}/{{ double_total }}</span>
                         </div>
-                        <div class="cap-bar"><div class="cap-fill {% if s_pct > 30 %}good{% elif s_pct > 0 %}warn{% else %}empty{% endif %}" style="width:{{ s_pct }}%"></div></div>
-                    </div>
-                    <div style="min-width:40px">
-                        <div style="color:var(--text-muted);font-size:0.65rem">D</div>
-                        <div style="color:{% if d_pct > 30 %}var(--green){% elif d_pct > 0 %}var(--yellow){% else %}var(--red){% endif %}">
-                            {{ trip.double_remaining }}/{{ trip.double_total }}
+                        <div style="display:flex;justify-content:space-between;gap:0.75rem;color:var(--text-muted)">
+                            <span>Boys {{ trip.boys_double or 0 }}</span>
+                            <span>Girls {{ trip.girls_double or 0 }}</span>
                         </div>
                         <div class="cap-bar"><div class="cap-fill {% if d_pct > 30 %}good{% elif d_pct > 0 %}warn{% else %}empty{% endif %}" style="width:{{ d_pct }}%"></div></div>
                     </div>
-                    <div style="min-width:40px">
-                        <div style="color:var(--text-muted);font-size:0.65rem">T</div>
-                        <div style="color:{% if t_pct > 30 %}var(--green){% elif t_pct > 0 %}var(--yellow){% else %}var(--red){% endif %}">
-                            {{ trip.triple_remaining }}/{{ trip.triple_total }}
+                    <div>
+                        <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                            <span style="color:var(--text-muted)">Triple</span>
+                            <span>{{ trip.triple_remaining }}/{{ triple_total }}</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;gap:0.75rem;color:var(--text-muted)">
+                            <span>Boys {{ trip.boys_triple or 0 }}</span>
+                            <span>Girls {{ trip.girls_triple or 0 }}</span>
                         </div>
                         <div class="cap-bar"><div class="cap-fill {% if t_pct > 30 %}good{% elif t_pct > 0 %}warn{% else %}empty{% endif %}" style="width:{{ t_pct }}%"></div></div>
                     </div>
@@ -143,7 +145,7 @@
                 </div>
                 <div class="form-group">
                     <label class="form-label">Trip ID (auto if blank)</label>
-                    <input class="form-input" type="text" name="trip_id" placeholder="e.g. CAP-2026-S">
+                    <input class="form-input" type="text" name="trip_id" placeholder="Leave blank to auto-generate">
                 </div>
                 <div class="form-group">
                     <label class="form-label">Type</label>
@@ -185,12 +187,20 @@
                         <input class="form-input" type="number" name="double_total" placeholder="Total" min="0">
                         <input class="form-input" type="number" name="double_remaining" placeholder="Remaining" min="0">
                     </div>
+                    <div style="display:flex;gap:0.5rem;margin-top:0.45rem">
+                        <input class="form-input" type="number" name="boys_double" placeholder="Boys" min="0">
+                        <input class="form-input" type="number" name="girls_double" placeholder="Girls" min="0">
+                    </div>
                 </div>
                 <div class="form-group">
                     <label class="form-label">Triple Total / Remaining</label>
                     <div style="display:flex;gap:0.5rem">
                         <input class="form-input" type="number" name="triple_total" placeholder="Total" min="0">
                         <input class="form-input" type="number" name="triple_remaining" placeholder="Remaining" min="0">
+                    </div>
+                    <div style="display:flex;gap:0.5rem;margin-top:0.45rem">
+                        <input class="form-input" type="number" name="boys_triple" placeholder="Boys" min="0">
+                        <input class="form-input" type="number" name="girls_triple" placeholder="Girls" min="0">
                     </div>
                 </div>
                 <div class="form-group col-span-2">

@@ -11,6 +11,13 @@ from services.crm.system_services import UnifiedCRMService
 trips_bp = Blueprint('trips', __name__, url_prefix='/trips')
 
 
+def _generate_trip_id(trip_type: str, year: int | None, trip_name: str) -> str:
+    prefix = "RT-INT" if (trip_type or "").strip() == "International" else "RT-LOC"
+    year_part = str(year % 100).zfill(2) if year else datetime.utcnow().strftime("%y")
+    slug = "".join(ch for ch in (trip_name or "").upper() if ch.isalnum())[:3] or "TRP"
+    return f"{prefix}-{year_part}-{slug}"
+
+
 def _sync_trip_after_commit(trip_id: str) -> None:
     try:
         UnifiedCRMService().sync_trip_to_sheet(trip_id)
@@ -63,9 +70,17 @@ def create():
     data = request.form.to_dict()
 
     # Auto-generate trip ID if blank
+    trip_name = data.get('trip_name', '').strip()
     trip_id = data.get('trip_id', '').strip()
+    trip_type = data.get('type', '').strip()
+    trip_year = None
+    try:
+        trip_year = int(data.get('year')) if data.get('year') else None
+    except Exception:
+        trip_year = None
     if not trip_id:
-        trip_id = f"TR-{uuid.uuid4().hex[:6].upper()}"
+        trip_id = _generate_trip_id(trip_type, trip_year, trip_name)
+    trip_id = trip_id.upper()
 
     if Trip.query.get(trip_id):
         flash(f"Trip ID '{trip_id}' already exists.", 'error')
@@ -87,8 +102,8 @@ def create():
 
     trip = Trip(
         trip_id=trip_id,
-        trip_name=data.get('trip_name', ''),
-        type=data.get('type', ''),
+        trip_name=trip_name,
+        type=trip_type,
         year=to_int(data.get('year')),
         trip_leader=data.get('trip_leader', ''),
         start_date=to_date(data.get('start_date')),
@@ -100,6 +115,10 @@ def create():
         single_remaining=to_int(data.get('single_remaining')),
         double_remaining=to_int(data.get('double_remaining')),
         triple_remaining=to_int(data.get('triple_remaining')),
+        boys_double=to_int(data.get('boys_double')),
+        girls_double=to_int(data.get('girls_double')),
+        boys_triple=to_int(data.get('boys_triple')),
+        girls_triple=to_int(data.get('girls_triple')),
         public_price=data.get('public_price', ''),
         public_description=data.get('public_description', ''),
         sales_notes=data.get('sales_notes', ''),
@@ -147,6 +166,10 @@ def update(trip_id):
     trip.single_remaining = to_int(data.get('single_remaining'))
     trip.double_remaining = to_int(data.get('double_remaining'))
     trip.triple_remaining = to_int(data.get('triple_remaining'))
+    trip.boys_double = to_int(data.get('boys_double'))
+    trip.girls_double = to_int(data.get('girls_double'))
+    trip.boys_triple = to_int(data.get('boys_triple'))
+    trip.girls_triple = to_int(data.get('girls_triple'))
     trip.public_price = data.get('public_price', trip.public_price)
     trip.public_description = data.get('public_description', trip.public_description)
     trip.sales_notes = data.get('sales_notes', trip.sales_notes)

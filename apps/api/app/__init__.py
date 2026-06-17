@@ -45,6 +45,37 @@ def _ensure_travelers_passport_columns(app: Flask) -> None:
             for column_name, column_type in missing_columns:
                 connection.execute(text(f"ALTER TABLE travelers ADD COLUMN {column_name} {column_type}"))
 
+
+def _ensure_trip_room_columns(app: Flask) -> None:
+    uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
+    if not uri.startswith("sqlite"):
+        return
+
+    trip_columns = {
+        "boys_double": "INTEGER",
+        "girls_double": "INTEGER",
+        "boys_triple": "INTEGER",
+        "girls_triple": "INTEGER",
+    }
+
+    with app.app_context():
+        inspector = db.inspect(db.engine)
+        if "trips" not in inspector.get_table_names():
+            return
+
+        existing_columns = {column["name"] for column in inspector.get_columns("trips")}
+        missing_columns = [
+            (name, col_type)
+            for name, col_type in trip_columns.items()
+            if name not in existing_columns
+        ]
+        if not missing_columns:
+            return
+
+        with db.engine.begin() as connection:
+            for column_name, column_type in missing_columns:
+                connection.execute(text(f"ALTER TABLE trips ADD COLUMN {column_name} {column_type}"))
+
 def create_app(config_name=None):
     if config_name is None:
         config_name = os.getenv('FLASK_CONFIG', 'default')
@@ -65,6 +96,7 @@ def create_app(config_name=None):
     from .extensions import socketio
     socketio.init_app(app)
     _ensure_travelers_passport_columns(app)
+    _ensure_trip_room_columns(app)
 
     # Register Blueprints
     from .routes.travelers import travelers_bp

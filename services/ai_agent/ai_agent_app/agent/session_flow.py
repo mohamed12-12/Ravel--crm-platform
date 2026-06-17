@@ -989,7 +989,14 @@ class SessionFlowManager:
                     availability = "remaining places not configured"
                 else:
                     availability = f"{remaining} places remaining"
-                trip_lines.append(f"{i}. {item['trip_name']} ({item['start_date']} to {item['end_date']}, {availability})")
+                price = item.get("public_price") or "price not set"
+                room_bits = []
+                if item.get("boys_double") is not None or item.get("girls_double") is not None:
+                    room_bits.append(f"double: boys {item.get('boys_double') or 0}, girls {item.get('girls_double') or 0}")
+                if item.get("boys_triple") is not None or item.get("girls_triple") is not None:
+                    room_bits.append(f"triple: boys {item.get('boys_triple') or 0}, girls {item.get('girls_triple') or 0}")
+                room_note = f", {'; '.join(room_bits)}" if room_bits else ""
+                trip_lines.append(f"{i}. {item['trip_name']} ({item['start_date']} to {item['end_date']}, {availability}, {price}{room_note})")
             return self._copy_text(
                 gateway,
                 "session.preview_open_trips",
