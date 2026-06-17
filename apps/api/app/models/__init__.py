@@ -3,6 +3,7 @@ from .traveler import Traveler
 from .trip import Trip
 from .event import CommunityEvent
 from .booking import TripBooking, CEBooking
+from .booking_status_history import BookingStatusHistory
 from .lead import Lead
 from .interaction import Interaction
 from .booking_event import BookingEventTrail

@@ -2,17 +2,17 @@
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash
 from app.models.booking import TripBooking
 from app.models.booking_event import BookingEventTrail
+from app.models.booking_status_history import BookingStatusHistory
 from app.models.traveler import Traveler
 from app.models.trip import Trip
 from app.extensions import db
 from sqlalchemy import or_
 from datetime import datetime
-import uuid
 from services.crm.system_services import UnifiedCRMService
 
 bookings_bp = Blueprint('bookings', __name__, url_prefix='/bookings')
 
-BOOKING_STATUSES = ['Draft', 'Confirmed', 'Cancelled']
+BOOKING_STATUSES = ['Draft', 'Waiting Customer', 'Pending Confirmation', 'Confirmed', 'Payment Pending', 'Paid', 'Completed', 'Cancelled']
 PAYMENT_STATUSES = ['Pending', 'Deposit Paid', 'Fully Paid', 'Refunded']
 
 
@@ -71,11 +71,13 @@ def detail(booking_id):
             BookingEventTrail.traveler_id == booking.traveler_id,
         )
     ).order_by(BookingEventTrail.occurred_at.asc()).all()
+    status_history = BookingStatusHistory.query.filter_by(booking_id=booking.booking_id).order_by(BookingStatusHistory.changed_at.asc(), BookingStatusHistory.history_id.asc()).all()
     return render_template('bookings/detail.html',
                            booking=booking,
                            traveler=traveler,
                            trip=trip,
                            event_trail=event_trail,
+                           status_history=status_history,
                            booking_statuses=BOOKING_STATUSES,
                            payment_statuses=PAYMENT_STATUSES)
 
@@ -129,26 +131,31 @@ def update_status(booking_id):
     data = request.get_json(silent=True) or request.form.to_dict()
     new_status = data.get('booking_status')
     new_payment = data.get('payment_status')
-    event_notes = []
+    if new_status and new_status not in BOOKING_STATUSES:
+        flash('Invalid booking status.', 'error')
+        return redirect(url_for('bookings.detail', booking_id=booking_id))
+    if new_payment and new_payment not in PAYMENT_STATUSES:
+        flash('Invalid payment status.', 'error')
+        return redirect(url_for('bookings.detail', booking_id=booking_id))
 
-    if new_status and new_status in BOOKING_STATUSES:
-        booking.booking_status = new_status
-        event_notes.append(f"Booking status: {new_status}")
-    if new_payment and new_payment in PAYMENT_STATUSES:
-        booking.payment_status = new_payment
-        event_notes.append(f"Payment status: {new_payment}")
-    if data.get('booking_notes'):
-        booking.booking_notes = data['booking_notes']
-        event_notes.append(data['booking_notes'])
-
-    db.session.commit()
-    if event_notes:
-        _sync_booking_event(
-            booking,
-            event_type='payment_follow_up' if new_payment else 'booking_status_updated',
-            event_label='Payment / follow-up updated' if new_payment else 'Booking status updated',
-            notes=' | '.join(event_notes),
+    try:
+        service = UnifiedCRMService()
+        result = service.update_booking_status(
+            booking_id,
+            new_status=new_status,
+            new_payment_status=new_payment,
+            changed_by='system-ui',
+            change_source='crm-ui',
+            notes=data.get('booking_notes', ''),
         )
+        if result:
+            booking = TripBooking.query.get_or_404(booking_id)
+    except ValueError as e:
+        flash(str(e), 'error')
+        return redirect(url_for('bookings.detail', booking_id=booking_id))
+    except Exception as e:
+        flash(f'Booking update failed: {str(e)}', 'error')
+        return redirect(url_for('bookings.detail', booking_id=booking_id))
 
     if request.is_json:
         return jsonify({'status': 'ok', 'booking': booking.to_dict()})

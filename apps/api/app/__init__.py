@@ -76,6 +76,36 @@ def _ensure_trip_room_columns(app: Flask) -> None:
             for column_name, column_type in missing_columns:
                 connection.execute(text(f"ALTER TABLE trips ADD COLUMN {column_name} {column_type}"))
 
+
+def _ensure_booking_history_columns(app: Flask) -> None:
+    uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
+    if not uri.startswith("sqlite"):
+        return
+
+    with app.app_context():
+        inspector = db.inspect(db.engine)
+        if "booking_status_history" in inspector.get_table_names():
+            return
+
+        with db.engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS booking_status_history (
+                        history_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        booking_id VARCHAR(50) NOT NULL,
+                        old_status VARCHAR(50),
+                        new_status VARCHAR(50),
+                        changed_at DATETIME,
+                        changed_by VARCHAR(50),
+                        change_source VARCHAR(50),
+                        notes TEXT,
+                        FOREIGN KEY(booking_id) REFERENCES trip_bookings (booking_id)
+                    )
+                    """
+                )
+            )
+
 def create_app(config_name=None):
     if config_name is None:
         config_name = os.getenv('FLASK_CONFIG', 'default')
@@ -97,6 +127,7 @@ def create_app(config_name=None):
     socketio.init_app(app)
     _ensure_travelers_passport_columns(app)
     _ensure_trip_room_columns(app)
+    _ensure_booking_history_columns(app)
 
     # Register Blueprints
     from .routes.travelers import travelers_bp

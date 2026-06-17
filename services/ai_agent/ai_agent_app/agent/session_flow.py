@@ -739,13 +739,15 @@ class SessionFlowManager:
             session.stage = "booking_created"
 
             booking_id = (booking.get("write_result") or {}).get("booking_draft", {}).get("booking_id", "NEW")
+            booking_status = booking.get("booking_status") or "Draft"
+            payment_status = booking.get("payment_status") or "Pending"
             session.messages.append(
                 {
                     "role": "assistant",
                     "text": self._copy_text(
                         gateway,
                         "session.confirm_booking",
-                        f"Thank you. I have created a booking draft {booking_id}. Would you like to confirm it by paying the deposit?",
+                        f"Thank you. I have created booking draft {booking_id}. Current booking status is {booking_status} and payment status is {payment_status}. Would you like to confirm it by paying the deposit?",
                         language=session.language,
                         booking_id=booking_id,
                     ),

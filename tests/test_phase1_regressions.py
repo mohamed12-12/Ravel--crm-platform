@@ -44,7 +44,7 @@ class Phase1BookingRouteTests(unittest.TestCase):
                 room_type="Double",
                 flight_option="With Flight",
                 currency="EGP",
-                booking_status="Draft",
+                booking_status="Confirmed",
                 booking_source="Admin",
                 payment_status="Pending",
                 booking_notes="Initial note",
@@ -61,7 +61,7 @@ class Phase1BookingRouteTests(unittest.TestCase):
         response = self.client.post(
             "/bookings/B-001/status",
             data={
-                "booking_status": "Confirmed",
+                "booking_status": "Payment Pending",
                 "payment_status": "Fully Paid",
                 "booking_notes": "Paid in full",
             },
@@ -69,7 +69,7 @@ class Phase1BookingRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
             booking = TripBooking.query.get("B-001")
-            self.assertEqual(booking.booking_status, "Confirmed")
+            self.assertEqual(booking.booking_status, "Payment Pending")
             self.assertEqual(booking.payment_status, "Fully Paid")
 
 

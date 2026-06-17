@@ -111,6 +111,9 @@
                     <td>{{ b.room_type or '—' }}</td>
                     <td>
                         {% if b.booking_status == 'Confirmed' %}<span class="badge badge-green">Confirmed</span>
+                        {% elif b.booking_status == 'Payment Pending' %}<span class="badge badge-yellow">Payment Pending</span>
+                        {% elif b.booking_status == 'Paid' or b.booking_status == 'Completed' %}<span class="badge badge-green">{{ b.booking_status }}</span>
+                        {% elif b.booking_status == 'Waiting Customer' or b.booking_status == 'Pending Confirmation' %}<span class="badge badge-blue">{{ b.booking_status }}</span>
                         {% elif b.booking_status == 'Cancelled' %}<span class="badge badge-red">Cancelled</span>
                         {% else %}<span class="badge badge-yellow">Draft</span>{% endif %}
                     </td>

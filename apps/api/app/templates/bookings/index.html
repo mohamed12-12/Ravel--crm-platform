@@ -9,7 +9,7 @@
 {% block content %}
 <!-- Status summary -->
 <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:1.25rem">
-    {% for s, color in [('Draft','badge-yellow'),('Confirmed','badge-green'),('Cancelled','badge-red')] %}
+    {% for s, color in [('Draft','badge-yellow'),('Waiting Customer','badge-blue'),('Pending Confirmation','badge-blue'),('Confirmed','badge-green'),('Payment Pending','badge-yellow'),('Paid','badge-green'),('Completed','badge-green'),('Cancelled','badge-red')] %}
     <a href="{{ url_for('bookings.index', status=s) }}" style="text-decoration:none">
         <div class="kpi-card" style="border-left:3px solid {% if s == 'Draft' %}var(--yellow){% elif s == 'Confirmed' %}var(--green){% else %}var(--red){% endif %}">
             <div class="kpi-label">{{ s }}</div>
@@ -55,6 +55,9 @@
             <td>{{ b.room_type or '—' }}</td>
             <td>
                 {% if b.booking_status == 'Confirmed' %}<span class="badge badge-green">Confirmed</span>
+                {% elif b.booking_status == 'Payment Pending' %}<span class="badge badge-yellow">Payment Pending</span>
+                {% elif b.booking_status == 'Paid' or b.booking_status == 'Completed' %}<span class="badge badge-green">{{ b.booking_status }}</span>
+                {% elif b.booking_status == 'Waiting Customer' or b.booking_status == 'Pending Confirmation' %}<span class="badge badge-blue">{{ b.booking_status }}</span>
                 {% elif b.booking_status == 'Cancelled' %}<span class="badge badge-red">Cancelled</span>
                 {% else %}<span class="badge badge-yellow">Draft</span>{% endif %}
             </td>

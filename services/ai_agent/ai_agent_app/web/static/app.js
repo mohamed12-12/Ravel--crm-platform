@@ -333,6 +333,8 @@ function renderBookingResult(session) {
   els.bookingResult.innerHTML = `
     <div class="detail-card">
       <h3>${escapeHtml(booking.booking_id)}</h3>
+      <div class="meta-item"><span>Status</span><strong>${escapeHtml(booking.booking_status || "Draft")}</strong></div>
+      <div class="meta-item"><span>Payment</span><strong>${escapeHtml(booking.payment_status || "Pending")}</strong></div>
       <div class="meta-item"><span>Trip</span><strong>${escapeHtml(booking.trip_name)}</strong></div>
       <div class="meta-item"><span>Room</span><strong>${escapeHtml(booking.room_type)}</strong></div>
       <div class="meta-item"><span>After Draft</span><strong>${escapeHtml(booking.available_after_draft)} left</strong></div>

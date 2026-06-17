@@ -274,7 +274,7 @@ class Phase3BookingWriteThroughTests(unittest.TestCase):
 
         self.assertEqual(lead["lead_stage"], "Booking Draft Created")
         self.assertEqual(booking["booking_status"], "Draft")
-        self.assertEqual(booking["payment_status"], "Awaiting Deposit")
+        self.assertEqual(booking["payment_status"], "Pending")
         self.assertGreaterEqual(interactions, 2)
         self.assertIn("inquiry_received", events)
         self.assertIn("trip_suggested", events)
@@ -291,7 +291,7 @@ class Phase3BookingWriteThroughTests(unittest.TestCase):
             bookings = wb["Trip Bookings"]
             booking_headers = {bookings.cell(2, col).value: col for col in range(1, bookings.max_column + 1)}
             self.assertEqual(bookings.cell(3, booking_headers["Booking Status"]).value, "Draft")
-            self.assertEqual(bookings.cell(3, booking_headers["Payment Status"]).value, "Awaiting Deposit")
+            self.assertEqual(bookings.cell(3, booking_headers["Payment Status"]).value, "Pending")
 
             event_sheet = wb["Booking Event Trail"]
             event_headers = {event_sheet.cell(1, col).value: col for col in range(1, event_sheet.max_column + 1)}

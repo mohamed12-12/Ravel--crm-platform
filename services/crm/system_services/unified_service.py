@@ -39,6 +39,34 @@ ROOM_REMAINING_COLUMNS = {
     "Double": "double_remaining",
     "Triple": "triple_remaining",
 }
+BOOKING_LIFECYCLE_STATUSES = [
+    "Draft",
+    "Waiting Customer",
+    "Pending Confirmation",
+    "Confirmed",
+    "Payment Pending",
+    "Paid",
+    "Completed",
+    "Cancelled",
+]
+BOOKING_ACTIVE_STATUSES = {
+    "Draft",
+    "Waiting Customer",
+    "Pending Confirmation",
+    "Confirmed",
+    "Payment Pending",
+    "Paid",
+}
+BOOKING_TRANSITIONS = {
+    "Draft": {"Waiting Customer", "Pending Confirmation", "Cancelled"},
+    "Waiting Customer": {"Pending Confirmation", "Confirmed", "Cancelled"},
+    "Pending Confirmation": {"Confirmed", "Cancelled"},
+    "Confirmed": {"Payment Pending", "Cancelled"},
+    "Payment Pending": {"Paid", "Cancelled"},
+    "Paid": {"Completed", "Cancelled"},
+    "Completed": set(),
+    "Cancelled": set(),
+}
 _SHEET_WRITE_LOCK = threading.RLock()
 
 
@@ -1077,9 +1105,134 @@ class UnifiedCRMService:
             currency=currency,
             booking_status="Draft",
             booking_source=source,
-            payment_status="Awaiting Deposit",
+            payment_status="Pending",
             booking_notes=agent_notes,
         )
+
+    @staticmethod
+    def _validate_booking_transition(old_status: str | None, new_status: str | None) -> None:
+        current = str(old_status or "").strip() or "Draft"
+        target = str(new_status or "").strip()
+        if not target:
+            raise ValueError("Booking status is required.")
+        if current == target:
+            return
+        if target == "Cancelled" and current in BOOKING_ACTIVE_STATUSES:
+            return
+        allowed = BOOKING_TRANSITIONS.get(current, set())
+        if target not in allowed:
+            raise ValueError(f"Invalid booking status transition: {current} -> {target}")
+
+    @staticmethod
+    def _read_booking_history(connection: sqlite3.Connection, booking_id: str) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            """
+            SELECT old_status, new_status, changed_at, changed_by, change_source, notes
+            FROM booking_status_history
+            WHERE booking_id = ?
+            ORDER BY changed_at ASC, history_id ASC
+            """,
+            (booking_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def update_booking_status(
+        self,
+        booking_id: str,
+        *,
+        new_status: str | None = None,
+        new_payment_status: str | None = None,
+        changed_by: str = "system-ui",
+        change_source: str = "crm-ui",
+        notes: str = "",
+    ) -> dict[str, Any]:
+        self.ensure_operational_schema()
+        if not new_status and not new_payment_status and not notes:
+            raise ValueError("No booking update supplied.")
+        timestamp = datetime.utcnow().replace(microsecond=0)
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            booking = connection.execute(
+                """
+                SELECT booking_id, booking_status, payment_status, traveler_id, lead_id, trip_id, interaction_id, booking_source
+                FROM trip_bookings
+                WHERE booking_id = ?
+                """,
+                (booking_id,),
+            ).fetchone()
+            if not booking:
+                raise ValueError(f"Booking was not found: {booking_id}")
+
+            old_status = str(booking["booking_status"] or "Draft").strip() or "Draft"
+            if new_status:
+                self._validate_booking_transition(old_status, new_status)
+                connection.execute(
+                    "UPDATE trip_bookings SET booking_status = ? WHERE booking_id = ?",
+                    (new_status, booking_id),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO booking_status_history (
+                        booking_id, old_status, new_status, changed_at, changed_by, change_source, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        booking_id,
+                        old_status,
+                        new_status,
+                        timestamp.isoformat(timespec="seconds"),
+                        changed_by or None,
+                        change_source or None,
+                        notes or None,
+                    ),
+                )
+            if new_payment_status:
+                connection.execute(
+                    "UPDATE trip_bookings SET payment_status = ? WHERE booking_id = ?",
+                    (new_payment_status, booking_id),
+                )
+            connection.commit()
+
+        event_notes = []
+        if new_status:
+            event_notes.append(f"Booking status: {old_status} -> {new_status}")
+        if new_payment_status:
+            event_notes.append(f"Payment status: {new_payment_status}")
+        if notes:
+            event_notes.append(notes)
+        if event_notes:
+            self.create_booking_event(
+                event_type="booking_status_updated",
+                event_label="Booking lifecycle updated",
+                traveler_id=str(booking["traveler_id"] or ""),
+                lead_id=str(booking["lead_id"] or ""),
+                booking_id=booking_id,
+                trip_id=str(booking["trip_id"] or ""),
+                interaction_id=str(booking["interaction_id"] or ""),
+                channel=str(booking["booking_source"] or ""),
+                actor=changed_by or "system-ui",
+                notes=" | ".join(event_notes),
+                metadata={
+                    "old_status": old_status,
+                    "new_status": new_status,
+                    "payment_status": new_payment_status,
+                    "change_source": change_source,
+                },
+                occurred_at=timestamp,
+            )
+
+        with self.connect() as connection:
+            current = connection.execute(
+                "SELECT booking_id, booking_status, payment_status FROM trip_bookings WHERE booking_id = ?",
+                (booking_id,),
+            ).fetchone()
+            history = self._read_booking_history(connection, booking_id)
+        return {
+            "booking_id": booking_id,
+            "booking_status": current["booking_status"] if current else None,
+            "payment_status": current["payment_status"] if current else None,
+            "history": history,
+        }
 
     def create_booking(
         self,
@@ -1103,6 +1256,10 @@ class UnifiedCRMService:
         timestamp = datetime.utcnow().replace(microsecond=0)
         if room_type not in ROOM_HOLD_COLUMNS:
             raise ValueError(f"Unsupported room type {room_type!r}")
+        if booking_status not in BOOKING_LIFECYCLE_STATUSES:
+            raise ValueError(f"Unsupported booking status {booking_status!r}")
+        if booking_status not in {"Draft", "Waiting Customer"}:
+            raise ValueError("New bookings must start in Draft or Waiting Customer.")
 
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -1255,6 +1412,8 @@ class UnifiedCRMService:
             "flight_option": flight_option,
             "date_option": date_option,
             "currency": currency,
+            "booking_status": booking_status,
+            "payment_status": payment_status or "Pending",
             "available_before_draft": available,
             "available_after_draft": available - 1,
             "interaction": {"interaction_id": interaction_id},
@@ -1546,6 +1705,7 @@ class UnifiedCRMService:
     def ensure_operational_schema(self) -> None:
         with self.connect() as connection:
             self._ensure_booking_event_trail_table(connection)
+            self._ensure_booking_status_history_table(connection)
             self._ensure_sync_queue_table(connection)
             self._migrate_travelers_passport_columns(connection)
             self._migrate_trips_room_columns(connection)
@@ -1657,6 +1817,23 @@ class UnifiedCRMService:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (mapping_name, record_id)
+            )
+            """
+        )
+
+    @staticmethod
+    def _ensure_booking_status_history_table(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS booking_status_history (
+                history_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                booking_id TEXT NOT NULL,
+                old_status TEXT,
+                new_status TEXT,
+                changed_at TEXT NOT NULL,
+                changed_by TEXT,
+                change_source TEXT,
+                notes TEXT
             )
             """
         )
