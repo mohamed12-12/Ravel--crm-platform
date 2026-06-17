@@ -8,7 +8,7 @@ PROJECT_ROOT = CURRENT_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.config import load_settings
+from services.ai_agent.ai_agent_app.config import load_settings
 
 def convert_excel_to_sheets():
     settings = load_settings()

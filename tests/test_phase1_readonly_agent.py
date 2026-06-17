@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import unittest
 import uuid
+from datetime import date, timedelta
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -63,8 +64,9 @@ class Phase1ReadonlyAgentTests(unittest.TestCase):
             trips["B3"] = "Siwa Summer"
             trips["C3"] = "Local"
             trips["D3"] = 2026
-            trips["F3"] = "2026-06-01"
-            trips["G3"] = "2026-06-03"
+            future_start = date.today() + timedelta(days=30)
+            trips["F3"] = future_start.isoformat()
+            trips["G3"] = (future_start + timedelta(days=2)).isoformat()
             trips["Z3"] = "Open"
 
             trips["A4"] = "RT-INT-26-011"

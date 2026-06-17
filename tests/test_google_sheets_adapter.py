@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.sheets.sheets_adapter import FakeWorkbook, SheetRowAdapter
+from services.ai_agent.ai_agent_app.sheets.sheets_adapter import FakeWorkbook, SheetRowAdapter
 from scripts.phase0_cleanup import INTERACTIONS_SHEET, ensure_headers
 from scripts.phase1_readonly_agent import TRAVELERS_EXPECTED_HEADERS, TRIPS_EXPECTED_HEADERS
 from scripts.phase2_controlled_agent import run_phase2_from_wb

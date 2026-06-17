@@ -1,0 +1,7 @@
+# Deprecated duplicate template retained for review.
+# Use ../../.env.example from the repository root instead.
+
+FLASK_ENV=development
+SECRET_KEY=
+DATABASE_URL=sqlite:///rahma_traveler_dev.db
+EXCEL_FILE_PATH=data/travelers_database.xlsx

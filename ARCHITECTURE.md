@@ -1,31 +1,15 @@
 # Architecture
 
-Rahma Travel OS is structured as a modular travel-operations platform.
+The active architecture documentation lives in [docs/architecture.md](./docs/architecture.md).
 
-## Core Layers
+Quick map:
 
-- Presentation: `v2-admin/` for the operator interface
-- Business logic: `rahma-traveler/app/` for Flask routes, services, and models
-- Middleware: `v2-middleware/` for deterministic orchestration and integration adapters
-- Data and migrations: `rahma-traveler/migrations/` and `v2-middleware/prisma/`
+- `apps/admin-web/` is the React admin UI prototype.
+- `apps/api/` is the database-backed Flask CRM.
+- `apps/middleware/` is the TypeScript middleware/API layer.
+- `services/ai_agent/` is the spreadsheet-backed demo Flask app and agent flow.
+- `services/instagram/` is the future Instagram/Meta integration boundary.
+- `services/crm/` is the DB-first business workflow boundary.
+- `database/` owns migrations, schema, and future seeds.
 
-## Design Principles
-
-- Preserve deterministic business rules for critical workflow steps
-- Keep sensitive external calls behind explicit service boundaries
-- Prefer readable, auditable flows over deeply implicit abstractions
-- Separate traveler lifecycle state from channel-specific behavior
-
-## Workflow Shape
-
-1. Data enters through web routes, imports, or middleware services.
-2. The system normalizes the record and applies safety checks.
-3. The workflow either automates the next step or queues it for human review.
-4. Operational outputs are reflected in the CRM and admin surface.
-
-## Release Considerations
-
-- Keep environment variables out of version control
-- Keep generated assets out of commits
-- Run tests before publishing
-- Ensure database migrations are reviewed before deploys
+See also [docs/folder-structure.md](./docs/folder-structure.md) and [docs/production-checklist.md](./docs/production-checklist.md).

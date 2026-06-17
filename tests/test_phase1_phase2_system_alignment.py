@@ -14,12 +14,12 @@ from openpyxl import Workbook, load_workbook
 from demo_web.app import create_app
 
 
-SYSTEM_ROOT = Path(__file__).resolve().parent.parent / "rahma-traveler"
+SYSTEM_ROOT = Path(__file__).resolve().parent.parent / "apps" / "api"
 if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
-from system_services.config import SystemServiceSettings  # noqa: E402
-from system_services.unified_service import UnifiedCRMService  # noqa: E402
+from services.crm.system_services.config import SystemServiceSettings  # noqa: E402
+from services.crm.system_services.unified_service import UnifiedCRMService  # noqa: E402
 
 
 def create_trip_table(connection: sqlite3.Connection) -> None:

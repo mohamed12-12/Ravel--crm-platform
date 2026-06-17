@@ -7,7 +7,7 @@ from pathlib import Path
 
 from openpyxl import Workbook
 
-from app.sheets.sheets_adapter import FakeWorkbook, SheetRowAdapter
+from services.ai_agent.ai_agent_app.sheets.sheets_adapter import FakeWorkbook, SheetRowAdapter
 from scripts.phase4_sales_intelligence import compute_sales_dashboard, ensure_leads_sheet, upsert_lead
 
 

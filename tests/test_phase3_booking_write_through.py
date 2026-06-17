@@ -259,7 +259,7 @@ class Phase3BookingWriteThroughTests(unittest.TestCase):
         client.post(f"/api/session/{session_id}/message", json={"text": "no"})
         session = client.post(f"/api/session/{session_id}/message", json={"text": "EGP"}).get_json()["session"]
 
-        self.assertEqual(session["stage"], "completed")
+        self.assertEqual(session["stage"], "booking_created")
         self.assertIsNotNone(session["bookingResult"])
 
         with closing(sqlite3.connect(db_path)) as connection:

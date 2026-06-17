@@ -24,8 +24,8 @@ from scripts.phase0_cleanup import ensure_headers, normalize_text  # noqa: E402
 from scripts.phase4_sales_intelligence import ensure_leads_sheet  # noqa: E402
 
 
-SOURCE_WORKBOOK = PROJECT_ROOT / "RT - Travelers Database.phase5.ready.xlsx"
-RUNTIME_WORKBOOK = PROJECT_ROOT / "RT - Travelers Database.phase5.demo.xlsx"
+SOURCE_WORKBOOK = PROJECT_ROOT / "archive" / "source-artifacts" / "RT - Travelers Database.phase5.ready.xlsx"
+RUNTIME_WORKBOOK = PROJECT_ROOT / "archive" / "source-artifacts" / "RT - Travelers Database.phase5.demo.xlsx"
 
 TRAVELERS_SHEET = "Travelers"
 TRIPS_SHEET = "Trips"

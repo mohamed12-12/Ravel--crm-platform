@@ -4,12 +4,12 @@
   "version": "1.0.0",
   "description": "AI-powered travel CRM, booking automation, sales intelligence, and traveler lifecycle platform.",
   "workspaces": [
-    "v2-admin",
-    "v2-middleware"
+    "apps/admin-web",
+    "apps/middleware"
   ],
   "scripts": {
     "test": "npm run test --workspaces --if-present && python -m pytest tests",
-    "build": "npm run build --workspaces --if-present && python -m compileall rahma-traveler",
+    "build": "npm run build --workspaces --if-present && python -m compileall .",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "prepare": "echo \"Rahma Travel OS workspace ready\""
   }

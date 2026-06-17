@@ -41,6 +41,17 @@ env/
 prisma/dev.db
 prisma/*.db
 
+# Local databases and runtime app instances
+*.db
+*.sqlite
+*.sqlite3
+instance/
+**/instance/
+
+# Manual-review legacy MVP DB fixture moved with the Flask CRM.
+!apps/api/instance/
+!apps/api/instance/rahma_traveler_dev.db
+
 # Logs and temporary files
 logs/
 .tmp-test-workdirs/

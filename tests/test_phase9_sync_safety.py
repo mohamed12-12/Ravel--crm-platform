@@ -11,13 +11,13 @@ from contextlib import closing
 
 from openpyxl import Workbook
 
-SYSTEM_ROOT = Path(__file__).resolve().parent.parent / "rahma-traveler"
+SYSTEM_ROOT = Path(__file__).resolve().parent.parent / "apps" / "api"
 if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
-from system_services.unified_service import UnifiedCRMService
-from system_services.config import SystemServiceSettings
-from system_services.field_mapping import SHEET_TABLE_MAPPINGS
+from services.crm.system_services.unified_service import UnifiedCRMService
+from services.crm.system_services.config import SystemServiceSettings
+from services.crm.system_services.field_mapping import SHEET_TABLE_MAPPINGS
 
 def seed_workbook(path: Path) -> None:
     wb = Workbook()

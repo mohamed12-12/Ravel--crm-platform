@@ -12,7 +12,7 @@ from pathlib import Path
 from openpyxl import Workbook
 
 from demo_web.app import create_app
-from system_services.field_mapping import SHEET_TABLE_MAPPINGS
+from services.crm.system_services.field_mapping import SHEET_TABLE_MAPPINGS
 
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
@@ -31,8 +31,22 @@ def seed_workbook(path: Path) -> None:
     
     # Trips
     ws_trips = wb.create_sheet("Trips")
-    ws_trips.append(list(SHEET_TABLE_MAPPINGS["Trips"]["columns"].values()))
-    
+    ws_trips["A2"] = "Trip ID"
+    ws_trips["B2"] = "Trip Name"
+    ws_trips["C2"] = "Type"
+    ws_trips["D2"] = "Year"
+    ws_trips["F2"] = "Start Date"
+    ws_trips["G2"] = "End Date"
+    ws_trips["Z2"] = "Sales Status"
+    ws_trips["AA2"] = "Data Audit"
+    ws_trips["A3"] = "RT-LOC-26-900"
+    ws_trips["B3"] = "Siwa Discovery Demo"
+    ws_trips["C3"] = "Local"
+    ws_trips["D3"] = 2026
+    ws_trips["F3"] = "2026-08-14"
+    ws_trips["G3"] = "2026-08-17"
+    ws_trips["Z3"] = "Open"
+
     # Leads
     ws_leads = wb.create_sheet("Leads")
     ws_leads.append(list(SHEET_TABLE_MAPPINGS["Leads"]["columns"].values()))
@@ -127,9 +141,14 @@ class Phase8DemoAlignmentTests(unittest.TestCase):
         # 2. Create intake session
         resp = client.post("/api/session", json={})
         session = resp.get_json()["session"]
+        self.assertEqual(session["stage"], "awaiting_phone")
+
+        # 3. Share WhatsApp number so the demo moves into intake capture
+        resp = client.post(f"/api/session/{session['id']}/message", json={"text": "01023456789"})
+        session = resp.get_json()["session"]
         self.assertEqual(session["stage"], "awaiting_intake")
         
-        # 3. Submit intake form
+        # 4. Submit intake form
         resp = client.post(
             f"/api/session/{session['id']}/intake",
             json={
@@ -145,12 +164,12 @@ class Phase8DemoAlignmentTests(unittest.TestCase):
         session = resp.get_json()["session"]
         self.assertEqual(session["stage"], "awaiting_trip_type")
 
-        # 4. Message trip type
+        # 5. Message trip type
         resp = client.post(f"/api/session/{session['id']}/message", json={"text": "local"})
         session = resp.get_json()["session"]
         self.assertEqual(session["stage"], "awaiting_confirmation")
 
-        # 5. Confirm lead creation
+        # 6. Confirm lead creation
         resp = client.post(f"/api/session/{session['id']}/message", json={"text": "yes"})
         session = resp.get_json()["session"]
         self.assertEqual(session["stage"], "awaiting_room_type")

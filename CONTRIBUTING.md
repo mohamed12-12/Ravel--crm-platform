@@ -13,7 +13,7 @@ Thanks for helping improve Rahma Travel OS.
 ## Local Development
 
 1. Install dependencies with `npm install`.
-2. Install Python requirements with `python -m pip install -r rahma-traveler/requirements.txt`.
+2. Install Python requirements with `python -m pip install -r apps/api/requirements.txt`.
 3. Run tests with `npm test`.
 4. Build with `npm run build`.
 

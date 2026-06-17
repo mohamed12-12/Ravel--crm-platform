@@ -1,124 +1,51 @@
 # Rahma Travel OS
 
-Rahma Travel OS is an AI-powered travel CRM, booking automation, sales intelligence, and traveler lifecycle platform for managing leads, itineraries, handoffs, and operational workflows across the customer journey.
+Rahma Travel OS is the MVP foundation for Rahma Traveler's CRM, booking automation, AI-agent workflow, and future Instagram/Meta customer conversation platform.
 
-## Features
+The repo is now organized as a product foundation while preserving the current MVP behavior. Public routes, workflows, database behavior, and agent logic are intentionally unchanged in this cleanup phase.
 
-- Traveler and lead management
-- Sales intelligence and follow-up prioritization
-- Booking automation and operational handoffs
-- CRM workflows for lifecycle tracking
-- Human-in-the-loop review for sensitive actions
-- Multi-service architecture with web, middleware, and data-processing components
+## Main Areas
 
-## Tech Stack
+- `apps/admin-web/` - React/Vite operator admin UI prototype.
+- `apps/api/` - database-backed Flask CRM with models, routes, services, and admin templates.
+- `apps/middleware/` - TypeScript middleware/API layer for admin and future channel orchestration.
+- `services/ai_agent/` - spreadsheet-backed Flask demo app, agent flow, and sheet gateways.
+- `services/instagram/` - Instagram/Meta webhook placeholder boundary.
+- `services/crm/` - shared CRM/business workflow services.
+- `database/` - migrations, Prisma schema, and seed placeholders.
+- `packages/` - shared package placeholders for future extracted code.
+- `scripts/` - workbook cleanup, audit, and alignment scripts.
+- `tests/` - Python regression tests for the MVP business behavior.
+- `docs/` - active architecture and production-readiness documentation.
+- `archive/` - deprecated demos, old phase artifacts, and source/demo workbooks.
 
-- Python 3 and Flask
-- SQLAlchemy and Flask-Migrate
-- Node.js and TypeScript
-- React + Vite for the admin experience
-- Prisma for database tooling in middleware services
-- PostgreSQL-ready data modeling
-- OpenAI / Gemini / Meta integration points
-- Docker-ready release structure
+## Documentation
 
-## Architecture
+- [Architecture overview](./docs/architecture.md)
+- [Folder structure](./docs/folder-structure.md)
+- [Setup instructions](./docs/SETUP.md)
+- [Instagram / Meta integration notes](./docs/instagram-integration-plan.md)
+- [Production readiness checklist](./docs/production-checklist.md)
+- [Cleanup report](./CLEANUP_REPORT.md)
 
-The repository is organized as a lightweight monorepo:
-
-- `rahma-traveler/` contains the Flask application, templates, routes, services, and data workflows.
-- `v2-admin/` contains the Vite-based admin interface.
-- `v2-middleware/` contains the TypeScript middleware layer and Prisma tooling.
-
-The platform separates presentation, orchestration, and data-handling concerns so travel operations can scale without coupling business rules to a single surface.
-
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for a deeper breakdown.
-
-## Business Workflow
-
-1. Capture leads from inbound channels and sales channels.
-2. Normalize traveler data and resolve duplicates.
-3. Prioritize opportunities using operational and sales signals.
-4. Automate booking and follow-up workflows where safe.
-5. Escalate sensitive cases to a human operator.
-6. Track the traveler lifecycle through conversion, booking, and service completion.
-
-## Installation
-
-### Prerequisites
-
-- Node.js 18+
-- Python 3.11+
-- npm
-- PostgreSQL if you want to run against a persistent database
-
-### Setup
+## Quick Start
 
 ```bash
 npm install
-python -m pip install -r rahma-traveler/requirements.txt
+python -m pip install -r apps/api/requirements.txt
+cp .env.example .env
 ```
 
-## Environment Variables
-
-Copy the example file and fill in real values locally:
-
-```bash
-cp rahma-traveler/.env.example rahma-traveler/.env
-```
-
-Common variables include:
-
-- `SECRET_KEY`
-- `DATABASE_URL`
-- `EXCEL_FILE_PATH`
-- `OPENAI_API_KEY`
-- `GEMINI_API_KEY`
-- `META_VERIFY_TOKEN`
-- `META_PAGE_ACCESS_TOKEN`
-- `META_APP_SECRET`
-
-Never commit real secrets.
-
-## Database Setup
-
-The Flask app uses SQLAlchemy migrations.
-
-```bash
-cd rahma-traveler
-flask db upgrade
-```
-
-If you are using the middleware Prisma layer:
-
-```bash
-cd v2-middleware
-npx prisma generate
-npx prisma migrate dev
-```
-
-## Testing
-
-Run all available checks from the repository root:
+Run checks from the repository root:
 
 ```bash
 npm test
+npm run build
+npm run typecheck
+python -m pytest tests
+python -m compileall .
 ```
 
-Python tests are discovered from the `tests/` directory.
+## Security
 
-## Docker Usage
-
-This repository is Docker-ready, but a production container image is not committed yet. The recommended pattern is:
-
-- build the Python app into a container
-- run the admin app as a separate build stage if needed
-- connect both to the same backing database
-
-## Roadmap
-
-See [ROADMAP.md](./ROADMAP.md).
-
-## Security Note
-
-Secrets must live in local `.env` files or a secret manager. Do not commit API keys, database credentials, certificates, service-account JSON files, build output, or local cache directories.
+Never commit real `.env` files, service-account JSON files, API keys, database credentials, certificates, local database files, build output, logs, or cache folders.

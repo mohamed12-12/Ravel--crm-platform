@@ -35,12 +35,12 @@ from openpyxl import Workbook, load_workbook
 
 # ── path plumbing ──────────────────────────────────────────────────────────────
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SYSTEM_ROOT = REPO_ROOT / "rahma-traveler"
+SYSTEM_ROOT = REPO_ROOT / "apps" / "api"
 if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
-from system_services.unified_service import UnifiedCRMService
-from system_services.config import SystemServiceSettings
+from services.crm.system_services.unified_service import UnifiedCRMService
+from services.crm.system_services.config import SystemServiceSettings
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_phase3_booking_write_through import create_operational_tables

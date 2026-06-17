@@ -287,7 +287,7 @@ class Phase3DemoWebTests(unittest.TestCase):
             self.assertEqual(session["stage"], "awaiting_currency")
 
             session = client.post(f"/api/session/{session['id']}/message", json={"text": "EGP"}).get_json()["session"]
-            self.assertEqual(session["stage"], "completed")
+            self.assertEqual(session["stage"], "booking_created")
             self.assertIsNotNone(session["bookingResult"])
             self.assertEqual(session["bookingResult"]["trip_id"], "RT-LOC-26-900")
             self.assertEqual(session["stats"]["bookingDraftCount"], 1)

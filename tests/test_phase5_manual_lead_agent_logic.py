@@ -9,12 +9,12 @@ from pathlib import Path
 
 from openpyxl import Workbook
 
-SYSTEM_ROOT = Path(__file__).resolve().parent.parent / "rahma-traveler"
+SYSTEM_ROOT = Path(__file__).resolve().parent.parent / "apps" / "api"
 if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
-from system_services.field_mapping import SHEET_TABLE_MAPPINGS
-from system_services.unified_service import UnifiedCRMService
+from services.crm.system_services.field_mapping import SHEET_TABLE_MAPPINGS
+from services.crm.system_services.unified_service import UnifiedCRMService
 
 def create_app_db_schema(app) -> None:
     from app.extensions import db
