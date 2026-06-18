@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -92,3 +93,45 @@ def load_system_settings() -> SystemServiceSettings:
         google_sheet_id=_extract_sheet_id(os.getenv("GOOGLE_SHEET_ID", "")),
         google_application_credentials=creds,
     )
+
+
+def resolve_system_db_path() -> Path:
+    """Return the operational SQLite path used by CRM and the AI agent."""
+    return load_system_settings().db_path
+
+
+def read_sqlite_table_counts(db_path: Path | str) -> dict[str, int | None]:
+    """Read core CRM table counts from a SQLite database without mutating it."""
+    path = Path(db_path)
+    counts: dict[str, int | None] = {
+        "travelers": None,
+        "trips": None,
+        "trip_bookings": None,
+        "booking_status_history": None,
+        "leads": None,
+    }
+    if not path.exists():
+        return counts
+
+    connection = sqlite3.connect(path)
+    try:
+        cursor = connection.cursor()
+        for table_name in counts:
+            try:
+                counts[table_name] = cursor.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+            except sqlite3.Error:
+                counts[table_name] = None
+    finally:
+        connection.close()
+    return counts
+
+
+def get_database_diagnostics(db_path: Path | str | None = None) -> dict[str, object]:
+    """Return the resolved database path and key CRM counts for diagnostics."""
+    resolved_path = Path(db_path) if db_path is not None else resolve_system_db_path()
+    if not resolved_path.is_absolute():
+        resolved_path = Path(__file__).resolve().parents[3] / resolved_path
+    return {
+        "db_path": str(resolved_path),
+        "counts": read_sqlite_table_counts(resolved_path),
+    }

@@ -14,6 +14,11 @@ from services.ai_agent.ai_agent_app.sheets import ExcelSheetGateway, build_sheet
 from services.instagram.webhooks import verify_webhook, validate_meta_signature
 from services.ai_agent.ai_agent_app.logger import app_logger, webhook_logger
 
+try:
+    from services.crm.system_services.config import get_database_diagnostics
+except Exception:  # pragma: no cover - diagnostics should never block startup
+    get_database_diagnostics = None  # type: ignore[assignment]
+
 ALLOWED_ATTACHMENT_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "pdf", "heic", "webp"}
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024  # 10 MB
 
@@ -161,11 +166,14 @@ def create_app(
 
     @app.get("/api/health")
     def health():
+        diagnostics = get_database_diagnostics() if get_database_diagnostics is not None else None
         return jsonify(
             {
                 "status": "ok",
                 "runtimeWorkbookExists": gateway.runtime_path.exists(),
                 "sourceWorkbookExists": gateway.source_path.exists(),
+                "activeDbPath": diagnostics["db_path"] if diagnostics else str(_system_db_path()),
+                "counts": diagnostics["counts"] if diagnostics else {},
             }
         )
 

@@ -9,6 +9,7 @@ from app.models.booking import TripBooking
 from app.models.handoff import HandoffQueue
 from app.services.importer import run_full_import, run_sheets_import
 from app.services.identity import find_duplicates, merge_travelers
+from services.crm.system_services.config import get_database_diagnostics
 from datetime import datetime, timedelta
 import os
 
@@ -144,6 +145,21 @@ def debug_trips_headers():
         return str(e), 500
 
 
+@admin_bp.route('/db-health')
+def db_health():
+    """Return the active CRM database path and core table counts."""
+    uri = current_app.config.get("SQLALCHEMY_DATABASE_URI", "")
+    diagnostics = get_database_diagnostics()
+    return jsonify(
+        {
+            "status": "ok",
+            "sqlalchemyDatabaseUri": uri,
+            "activeDbPath": diagnostics["db_path"],
+            "counts": diagnostics["counts"],
+        }
+    )
+
+
 @admin_bp.route('/sync-issues')
 def sync_issues():
     from sqlalchemy import text
@@ -176,5 +192,4 @@ def retry_sync():
             return jsonify({'error': res.get('reason', 'Unknown sync failure')}), 500
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
 
