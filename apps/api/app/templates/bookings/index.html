@@ -142,9 +142,25 @@
                 
                 <div class="form-group">
                     <label class="form-label">Room Type</label>
-                    <select class="form-select" name="room_type" id="roomTypeSelector" required disabled>
+                    <select class="form-select" name="room_type" id="roomTypeSelector" required disabled onchange="handleRoomSelection()">
                         <option value="">-- Select Trip First --</option>
                     </select>
+                </div>
+                <div class="form-group col-span-2" id="roomAvailabilityCard" style="display:none;background:var(--bg-card);border:1px solid var(--border-color);padding:0.75rem;border-radius:6px;font-size:0.8rem">
+                    <div style="display:flex;justify-content:space-between;margin-bottom:0.35rem">
+                        <span style="color:var(--text-muted)">Room Availability:</span>
+                        <strong id="raTitle"></strong>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+                        <div>
+                            <div style="color:var(--text-muted);font-size:0.72rem;margin-bottom:0.15rem">Boys</div>
+                            <div id="raBoys" style="font-weight:700;color:var(--text-main)"></div>
+                        </div>
+                        <div>
+                            <div style="color:var(--text-muted);font-size:0.72rem;margin-bottom:0.15rem">Girls</div>
+                            <div id="raGirls" style="font-weight:700;color:var(--text-main)"></div>
+                        </div>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label class="form-label">Currency</label>
@@ -181,9 +197,11 @@ function handleTripSelection() {
     const card = document.getElementById('tripDetailsCard');
     const roomSelector = document.getElementById('roomTypeSelector');
     const submitBtn = document.getElementById('submitBookingBtn');
+    const roomCard = document.getElementById('roomAvailabilityCard');
     
     if (!tripId) {
         card.style.display = 'none';
+        roomCard.style.display = 'none';
         roomSelector.innerHTML = '<option value="">-- Select Trip First --</option>';
         roomSelector.disabled = true;
         submitBtn.disabled = true;
@@ -223,6 +241,41 @@ function handleTripSelection() {
         roomSelector.disabled = false;
         submitBtn.disabled = false;
     }
+
+    handleRoomSelection();
+}
+
+function handleRoomSelection() {
+    const tripId = document.getElementById('tripSelector').value;
+    const roomType = document.getElementById('roomTypeSelector').value;
+    const roomCard = document.getElementById('roomAvailabilityCard');
+    const title = document.getElementById('raTitle');
+    const boys = document.getElementById('raBoys');
+    const girls = document.getElementById('raGirls');
+    const trip = TRIPS_DATA.find(t => t.trip_id === tripId);
+
+    if (!trip || !roomType) {
+        roomCard.style.display = 'none';
+        return;
+    }
+
+    if (roomType === 'Double') {
+        title.innerText = `Double Rooms (${trip.double_remaining || 0} remaining)`;
+        boys.innerText = `Boys: ${trip.boys_double || 0}`;
+        girls.innerText = `Girls: ${trip.girls_double || 0}`;
+        roomCard.style.display = 'block';
+        return;
+    }
+
+    if (roomType === 'Triple') {
+        title.innerText = `Triple Rooms (${trip.triple_remaining || 0} remaining)`;
+        boys.innerText = `Boys: ${trip.boys_triple || 0}`;
+        girls.innerText = `Girls: ${trip.girls_triple || 0}`;
+        roomCard.style.display = 'block';
+        return;
+    }
+
+    roomCard.style.display = 'none';
 }
 
 function openModal(id) { document.getElementById(id).classList.add('open'); }

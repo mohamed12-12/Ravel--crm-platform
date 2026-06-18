@@ -53,6 +53,7 @@ class SessionState:
     selected_trip_id: str = ""
     selected_trip_name: str = ""
     room_type: str = ""
+    room_group: str = ""
     flight_option: str = ""
     currency: str = ""
     lead_status: str = ""
@@ -658,8 +659,8 @@ class SessionFlowManager:
         # -----------------------------------------------------------------------
 
         if session.stage == "awaiting_room_type":
-            room = self._resolve_room_type(clean_text)
-            if room is None:
+            choice = self._resolve_room_choice(clean_text, session)
+            if choice is None:
                 self._set_stage(session, "awaiting_clarification")
                 session.messages.append(
                     {
@@ -667,12 +668,15 @@ class SessionFlowManager:
                         "text": self._copy_text(
                             gateway,
                             "session.ask_room_type_retry",
-                            "Please choose a room type:\n1. Single\n2. Double\n3. Triple",
+                            self._room_type_prompt(gateway, session),
                             language=session.language,
                         ),
                     }
                 )
                 return session
+
+            room = str(choice["room_type"])
+            room_group = str(choice.get("room_group") or "")
 
             if not self._room_has_capacity(session, room):
                 available = self._available_room_types(session)
@@ -682,10 +686,12 @@ class SessionFlowManager:
                 else:
                     text = "There is no remaining draftable room capacity for this trip. I will keep this as a follow-up for the sales team."
                 session.room_type = ""
+                session.room_group = ""
                 session.messages.append({"role": "assistant", "text": text})
                 return session
 
             session.room_type = room
+            session.room_group = room_group
             self._set_stage(session, "awaiting_flight")
             session.messages.append(
                 {
@@ -752,7 +758,8 @@ class SessionFlowManager:
                 session.handoff_state = "cancelled"
                 return session
 
-            agent_logger.info(f"Finalizing booking: traveler={session.customer_name}, trip={trip_id}, room={session.room_type}, flight={session.flight_option}, currency={session.currency}")
+            room_choice_label = self._room_choice_label(session.room_type, session.room_group)
+            agent_logger.info(f"Finalizing booking: traveler={session.customer_name}, trip={trip_id}, room={room_choice_label}, flight={session.flight_option}, currency={session.currency}")
 
             booking = gateway.create_booking(
                 traveler_id=(session.final_result.get("traveler") or {}).get("traveler_id", "TBD"),
@@ -764,8 +771,10 @@ class SessionFlowManager:
                 channel="web-demo",
                 lead_id=(session.final_result.get("write_result") or {}).get("lead_update", {}).get("lead_id", "TBD"),
                 source="Web Shared Booking Module",
-                agent_notes=f"Room: {session.room_type}, Flight: {session.flight_option}, Currency: {session.currency}",
+                agent_notes=f"Room: {room_choice_label}, Flight: {session.flight_option}, Currency: {session.currency}",
             )
+            booking["room_group"] = session.room_group
+            booking["room_choice_label"] = room_choice_label
             session.booking_result = booking
             session.booking_status = str(booking.get("booking_status") or "Draft")
             self._set_stage(session, "booking_created")
@@ -965,21 +974,92 @@ class SessionFlowManager:
         lowered = text.lower()
         return any(kw in lowered for kw in ("website", "site", "link", "url", "موقع", "رابط"))
 
+    def _room_choice_label(self, room_type: str, room_group: str = "") -> str:
+        if room_type == "Single":
+            return "Single room"
+        if room_group == "boys":
+            return f"{room_type} boys room"
+        if room_group == "girls":
+            return f"{room_type} girls room"
+        return f"{room_type} room"
+
+    def _available_room_choices(self, session: SessionState) -> list[dict[str, str]]:
+        trip = self._selected_trip(session)
+        if not trip:
+            return [
+                {"room_type": "Single", "room_group": "", "reply": "single room", "label": "Single room"},
+                {"room_type": "Double", "room_group": "boys", "reply": "double boys room", "label": "Double boys room"},
+                {"room_type": "Double", "room_group": "girls", "reply": "double girls room", "label": "Double girls room"},
+                {"room_type": "Triple", "room_group": "boys", "reply": "triple boys room", "label": "Triple boys room"},
+                {"room_type": "Triple", "room_group": "girls", "reply": "triple girls room", "label": "Triple girls room"},
+            ]
+
+        choices: list[dict[str, str]] = []
+
+        def as_count(value: Any) -> int:
+            try:
+                return max(int(value or 0), 0)
+            except (TypeError, ValueError):
+                return 0
+
+        if as_count(trip.get("available_single")) > 0:
+            choices.append(
+                {"room_type": "Single", "room_group": "", "reply": "single room", "label": "Single room"}
+            )
+
+        for room_type, available_field, boys_field, girls_field in (
+            ("Double", "available_double", "boys_double", "girls_double"),
+            ("Triple", "available_triple", "boys_triple", "girls_triple"),
+        ):
+            if as_count(trip.get(available_field)) <= 0:
+                continue
+            boys = as_count(trip.get(boys_field))
+            girls = as_count(trip.get(girls_field))
+            if boys > 0 or girls > 0:
+                if boys > 0:
+                    choices.append(
+                        {
+                            "room_type": room_type,
+                            "room_group": "boys",
+                            "reply": f"{room_type.lower()} boys room",
+                            "label": f"{room_type} boys room ({boys} available)",
+                        }
+                    )
+                if girls > 0:
+                    choices.append(
+                        {
+                            "room_type": room_type,
+                            "room_group": "girls",
+                            "reply": f"{room_type.lower()} girls room",
+                            "label": f"{room_type} girls room ({girls} available)",
+                        }
+                    )
+            else:
+                choices.append(
+                    {
+                        "room_type": room_type,
+                        "room_group": "",
+                        "reply": f"{room_type.lower()} room",
+                        "label": f"{room_type} room",
+                    }
+                )
+        return choices
+
     def _room_type_prompt(self, gateway, session: SessionState) -> str:
-        available = self._available_room_types(session)
-        if available:
-            opts = "\n".join(f"{i+1}. {r}" for i, r in enumerate(available))
+        choices = self._available_room_choices(session)
+        if choices:
+            opts = "\n".join(f"{i+1}. {choice['label']}" for i, choice in enumerate(choices))
             fallback = f"What type of room do you prefer?\n{opts}"
         else:
-            fallback = "What type of room do you prefer?\n1. Single\n2. Double\n3. Triple"
+            fallback = "What type of room do you prefer?\n1. Single room"
         text = self._copy_text(
             gateway,
             "session.ask_room_type",
             fallback,
             language=session.language,
         )
-        if available and "available" not in text.lower():
-            opts_inline = " / ".join(f"{i+1}. {r}" for i, r in enumerate(available))
+        if choices and "available" not in text.lower():
+            opts_inline = " / ".join(f"{i+1}. {choice['label']}" for i, choice in enumerate(choices))
             text = f"{text}\nAvailable: {opts_inline}"
         return text
 
@@ -995,24 +1075,11 @@ class SessionFlowManager:
         return None
 
     def _available_room_types(self, session: SessionState) -> list[str]:
-        trip = self._selected_trip(session)
-        if not trip:
-            return ["Single", "Double", "Triple"]
-        room_fields = {
-            "Single": "available_single",
-            "Double": "available_double",
-            "Triple": "available_triple",
-        }
-        available = []
-        for room, field_name in room_fields.items():
-            value = trip.get(field_name)
-            if value is None:
-                continue
-            try:
-                if int(value) > 0:
-                    available.append(room)
-            except (TypeError, ValueError):
-                continue
+        available: list[str] = []
+        for choice in self._available_room_choices(session):
+            room_type = str(choice["room_type"])
+            if room_type not in available:
+                available.append(room_type)
         return available
 
     def _room_has_capacity(self, session: SessionState, room_type: str) -> bool:
@@ -1048,12 +1115,88 @@ class SessionFlowManager:
 
     def _resolve_room_type(self, text: str) -> str | None:
         clean = text.strip().lower()
+        compact = re.sub(r"[^a-z\u0600-\u06ff]+", " ", clean).strip()
+        words = compact.split()
+        joined = " ".join(words)
+        has_double_hint = any(token in clean for token in ("double", "duble", "bouble", "ثنائي"))
+        has_triple_hint = any(token in clean for token in ("triple", "tripl", "ثلاثي"))
         if clean == "1" or "single" in clean or "فردي" in clean:
             return "Single"
-        if clean == "2" or "double" in clean or "ثنائي" in clean:
+        if (
+            clean == "2"
+            or has_double_hint
+        ):
             return "Double"
-        if clean == "3" or "triple" in clean or "ثلاثي" in clean:
+        if (
+            clean == "3"
+            or has_triple_hint
+        ):
             return "Triple"
+        return None
+
+    def _resolve_room_choice(self, text: str, session: SessionState) -> dict[str, str] | None:
+        choices = self._available_room_choices(session)
+        clean = text.strip().lower()
+        if clean.isdigit():
+            index = int(clean) - 1
+            if 0 <= index < len(choices):
+                return choices[index]
+
+        compact = re.sub(r"[^a-z\u0600-\u06ff]+", " ", clean).strip()
+        has_single_hint = "single" in clean or "ÙØ±Ø¯ÙŠ" in clean
+        has_double_hint = any(token in clean for token in ("double", "duble", "bouble", "Ø«Ù†Ø§Ø¦ÙŠ"))
+        has_triple_hint = any(token in clean for token in ("triple", "tripl", "Ø«Ù„Ø§Ø«ÙŠ"))
+        has_boys_hint = any(token in compact for token in ("boys", "boy", "male", "Ø§ÙˆÙ„Ø§Ø¯", "ÙˆÙ„Ø§Ø¯", "Ø´Ø¨Ø§Ø¨", "Ø°ÙƒÙˆØ±"))
+        has_girls_hint = any(token in compact for token in ("girls", "girl", "female", "Ø¨Ù†Ø§Øª", "Ù†Ø³Ø§Ø¡", "Ø§Ù†Ø§Ø«"))
+        if has_single_hint:
+            return next((choice for choice in choices if choice["room_type"] == "Single"), None) or {
+                "room_type": "Single",
+                "room_group": "",
+                "reply": "single room",
+                "label": "Single room",
+            }
+        if has_double_hint:
+            if has_boys_hint:
+                return next((choice for choice in choices if choice["room_type"] == "Double" and choice["room_group"] == "boys"), None) or {
+                    "room_type": "Double",
+                    "room_group": "boys",
+                    "reply": "double boys room",
+                    "label": "Double boys room",
+                }
+            if has_girls_hint:
+                return next((choice for choice in choices if choice["room_type"] == "Double" and choice["room_group"] == "girls"), None) or {
+                    "room_type": "Double",
+                    "room_group": "girls",
+                    "reply": "double girls room",
+                    "label": "Double girls room",
+                }
+            return next((choice for choice in choices if choice["room_type"] == "Double"), None) or {
+                "room_type": "Double",
+                "room_group": "",
+                "reply": "double room",
+                "label": "Double room",
+            }
+        if has_triple_hint:
+            if has_boys_hint:
+                return next((choice for choice in choices if choice["room_type"] == "Triple" and choice["room_group"] == "boys"), None) or {
+                    "room_type": "Triple",
+                    "room_group": "boys",
+                    "reply": "triple boys room",
+                    "label": "Triple boys room",
+                }
+            if has_girls_hint:
+                return next((choice for choice in choices if choice["room_type"] == "Triple" and choice["room_group"] == "girls"), None) or {
+                    "room_type": "Triple",
+                    "room_group": "girls",
+                    "reply": "triple girls room",
+                    "label": "Triple girls room",
+                }
+            return next((choice for choice in choices if choice["room_type"] == "Triple"), None) or {
+                "room_type": "Triple",
+                "room_group": "",
+                "reply": "triple room",
+                "label": "Triple room",
+            }
         return None
 
     def _copy_text(self, gateway, message_key: str, fallback: str, language: str = "en", **values: Any) -> str:

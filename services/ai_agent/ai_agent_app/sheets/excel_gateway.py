@@ -5,7 +5,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
-from zipfile import BadZipFile
+from zipfile import BadZipFile, is_zipfile
 
 from openpyxl import load_workbook
 
@@ -24,9 +24,23 @@ class ExcelSheetGateway:
 
     def ensure_runtime_workbook(self, reset: bool = False) -> None:
         with self._lock:
-            if not self.runtime_path.exists() or reset:
-                sheet_logger.info(f"Ensuring runtime workbook: resetting={reset}")
+            runtime_invalid = self.runtime_path.exists() and not is_zipfile(self.runtime_path)
+            if not self.runtime_path.exists() or reset or runtime_invalid:
+                if runtime_invalid:
+                    sheet_logger.warning(
+                        "Runtime workbook was corrupted or not a valid .xlsx archive. Restoring from source."
+                    )
+                sheet_logger.info(f"Ensuring runtime workbook: resetting={reset or runtime_invalid}")
                 shutil.copy2(self.source_path, self.runtime_path)
+
+    def _load_runtime_workbook(self, **kwargs):
+        self.ensure_runtime_workbook()
+        try:
+            return _load_workbook_with_retry(self.runtime_path, **kwargs)
+        except BadZipFile:
+            sheet_logger.warning("Runtime workbook load failed with BadZipFile. Rebuilding runtime workbook from source.")
+            self.ensure_runtime_workbook(reset=True)
+            return _load_workbook_with_retry(self.runtime_path, **kwargs)
 
     def reset_runtime_workbook(self) -> None:
         sheet_logger.warning("Resetting runtime workbook from source.")
@@ -39,8 +53,7 @@ class ExcelSheetGateway:
         }
 
     def get_message_copy(self, message_key: str, language: str = "en", fallback: str = "") -> str:
-        self.ensure_runtime_workbook()
-        wb = _load_workbook_with_retry(self.runtime_path, data_only=True, read_only=True)
+        wb = self._load_runtime_workbook(data_only=True, read_only=True)
         try:
             if "DM Copy Library" not in wb.sheetnames:
                 return fallback
@@ -152,13 +165,13 @@ class ExcelSheetGateway:
             )
 
     def get_demo_stats(self) -> dict[str, Any]:
-        wb = _load_workbook_with_retry(self.runtime_path, data_only=True, read_only=True)
+        wb = self._load_runtime_workbook(data_only=True, read_only=True)
         stats = get_demo_stats_from_wb(wb)
         wb.close()
         return stats
 
     def crm_preview(self, limit: int = 15) -> list[dict[str, Any]]:
-        wb = _load_workbook_with_retry(self.runtime_path, data_only=True, read_only=True)
+        wb = self._load_runtime_workbook(data_only=True, read_only=True)
         rows = crm_preview_from_wb(wb, limit)
         wb.close()
         return rows
@@ -195,7 +208,7 @@ class ExcelSheetGateway:
 
         dest_clean = destination.strip().lower()
         try:
-            wb = _load_workbook_with_retry(self.runtime_path, data_only=True, read_only=True)
+            wb = self._load_runtime_workbook(data_only=True, read_only=True)
             try:
                 if "Visa Requirements" not in wb.sheetnames:
                     return {"required": None, "destination": destination, "notes": "", "disclaimer": DISCLAIMER, "source": "unknown"}
@@ -245,7 +258,7 @@ class ExcelSheetGateway:
         if not trip_id:
             return ""
         try:
-            wb = _load_workbook_with_retry(self.runtime_path, data_only=True, read_only=True)
+            wb = self._load_runtime_workbook(data_only=True, read_only=True)
             try:
                 if "Trips" not in wb.sheetnames:
                     return ""

@@ -22,6 +22,16 @@ def _allowed_attachment(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_ATTACHMENT_EXTENSIONS
 
 
+def _room_choice_label(room_type: str, room_group: str = "") -> str:
+    if room_type == "Single":
+        return "Single room"
+    if room_group == "boys":
+        return f"{room_type} boys room"
+    if room_group == "girls":
+        return f"{room_type} girls room"
+    return f"{room_type} room"
+
+
 def _serialize_session(gateway: ExcelSheetGateway, session) -> dict[str, Any]:
     return {
         "id": session.id,
@@ -39,6 +49,8 @@ def _serialize_session(gateway: ExcelSheetGateway, session) -> dict[str, Any]:
         "selectedTripId": session.selected_trip_id,
         "selectedTripName": session.selected_trip_name,
         "roomType": session.room_type,
+        "roomGroup": session.room_group,
+        "roomChoiceLabel": _room_choice_label(session.room_type, session.room_group) if session.room_type else "",
         "leadStatus": session.lead_status,
         "bookingStatus": session.booking_status,
         "handoffState": session.handoff_state,

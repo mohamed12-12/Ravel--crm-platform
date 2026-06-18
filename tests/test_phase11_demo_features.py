@@ -566,6 +566,39 @@ class TestDiscountFromTripNotes(unittest.TestCase):
             os.environ.pop("RAHMA_SYSTEM_DB_PATH", None)
 
 
+class TestWorkbookRecovery(unittest.TestCase):
+    def test_corrupt_runtime_workbook_is_restored_from_source(self):
+        from dataclasses import replace as dc_replace
+        import tempfile
+
+        from services.ai_agent.ai_agent_app.config import load_settings
+        from services.ai_agent.ai_agent_app.sheets.excel_gateway import ExcelSheetGateway
+
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            source = tmp / "source.xlsx"
+            runtime = tmp / "runtime.xlsx"
+            _make_base_workbook(source)
+            runtime.write_text("not-an-xlsx-file", encoding="utf-8")
+
+            settings = load_settings()
+            settings = dc_replace(
+                settings,
+                excel_source_workbook=source,
+                excel_runtime_workbook=runtime,
+                sheet_backend="excel",
+            )
+            gateway = ExcelSheetGateway(settings)
+
+            stats = gateway.get_demo_stats()
+
+            self.assertIn("travelerCount", stats)
+            self.assertTrue(runtime.exists())
+            self.assertGreater(runtime.stat().st_size, 0)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class TestPostTripHandoff(unittest.TestCase):
     """Post-trip handoff must default OFF and only trigger when explicitly enabled."""
 

@@ -174,6 +174,43 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
             self.assertEqual(history[0].old_status, "Confirmed")
             self.assertEqual(history[0].new_status, "Payment Pending")
 
+    def test_trip_detail_shows_remaining_after_active_bookings(self) -> None:
+        with self.app.app_context():
+            db.session.add_all(
+                [
+                    TripBooking(
+                        booking_id="B-200",
+                        trip_id="TRIP-100",
+                        trip_name="Lifecycle Trip",
+                        traveler_id="TR100",
+                        traveler_name="Returning Traveler",
+                        room_type="Double",
+                        booking_status="Confirmed",
+                        booking_source="Admin",
+                        payment_status="Pending",
+                    ),
+                    TripBooking(
+                        booking_id="B-201",
+                        trip_id="TRIP-100",
+                        trip_name="Lifecycle Trip",
+                        traveler_id="TR100",
+                        traveler_name="Returning Traveler",
+                        room_type="Triple",
+                        booking_status="Cancelled",
+                        booking_source="Admin",
+                        payment_status="Pending",
+                    ),
+                ]
+            )
+            db.session.commit()
+
+        response = self.client.get("/trips/TRIP-100")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Double", body)
+        self.assertIn("Booked: 1", body)
+        self.assertIn("of 2 remaining", body)
+
 
 if __name__ == "__main__":
     unittest.main()

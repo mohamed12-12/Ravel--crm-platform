@@ -62,7 +62,34 @@ def detail(trip_id):
     trip = Trip.query.get_or_404(trip_id)
     bookings = TripBooking.query.filter_by(trip_id=trip_id)\
         .order_by(TripBooking.draft_created_at.desc()).all()
-    return render_template('trips/detail.html', trip=trip, bookings=bookings)
+    active_room_bookings = {
+        room: count or 0
+        for room, count in db.session.query(
+            TripBooking.room_type,
+            db.func.count(TripBooking.booking_id),
+        )
+        .filter(TripBooking.trip_id == trip_id)
+        .filter(TripBooking.booking_status != "Cancelled")
+        .group_by(TripBooking.room_type)
+        .all()
+    }
+    room_counts = {
+        "single_booked": active_room_bookings.get("Single", 0),
+        "double_booked": active_room_bookings.get("Double", 0),
+        "triple_booked": active_room_bookings.get("Triple", 0),
+    }
+    display_remaining = {
+        "single": max((trip.single_remaining or 0) - room_counts["single_booked"], 0),
+        "double": max((trip.double_remaining or 0) - room_counts["double_booked"], 0),
+        "triple": max((trip.triple_remaining or 0) - room_counts["triple_booked"], 0),
+    }
+    return render_template(
+        'trips/detail.html',
+        trip=trip,
+        bookings=bookings,
+        room_counts=room_counts,
+        display_remaining=display_remaining,
+    )
 
 
 @trips_bp.route('/', methods=['POST'])

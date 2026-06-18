@@ -56,19 +56,26 @@
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem">
                 {% for label, total, remaining, boys, girls in [
-                    ('Single', trip.single_total, trip.single_remaining, None, None),
-                    ('Double', trip.double_total, trip.double_remaining, trip.boys_double, trip.girls_double),
-                    ('Triple', trip.triple_total, trip.triple_remaining, trip.boys_triple, trip.girls_triple)
+                    ('Single', trip.single_total, display_remaining.single, None, None),
+                    ('Double', trip.double_total, display_remaining.double, trip.boys_double, trip.girls_double),
+                    ('Triple', trip.triple_total, display_remaining.triple, trip.boys_triple, trip.girls_triple)
                 ] %}
                 {% set pct = (remaining / total * 100) if total else 0 %}
                 <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:1rem">
                     <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em">{{ label }}</div>
                     <div style="font-size:1.5rem;font-weight:800;margin:0.35rem 0;color:{% if pct > 30 %}var(--green){% elif pct > 0 %}var(--yellow){% else %}var(--red){% endif %}">{{ remaining }}</div>
                     <div style="font-size:0.72rem;color:var(--text-muted)">of {{ total }} remaining</div>
+                    <div style="font-size:0.68rem;color:var(--text-muted);margin-top:0.15rem">Booked: {{ room_counts[label.lower() ~ '_booked'] or 0 }}</div>
                     {% if boys is not none or girls is not none %}
-                    <div style="display:flex;justify-content:space-between;gap:0.75rem;font-size:0.7rem;color:var(--text-muted);margin-top:0.35rem">
-                        <span>Boys {{ boys or 0 }}</span>
-                        <span>Girls {{ girls or 0 }}</span>
+                    <div style="display:flex;flex-direction:column;gap:0.2rem;font-size:0.7rem;color:var(--text-muted);margin-top:0.45rem">
+                        <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                            <span style="font-weight:700;color:var(--text-main)">Boys</span>
+                            <span>{{ boys or 0 }}</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                            <span style="font-weight:700;color:var(--text-main)">Girls</span>
+                            <span>{{ girls or 0 }}</span>
+                        </div>
                     </div>
                     {% endif %}
                     <div class="cap-bar" style="margin-top:0.5rem">
@@ -227,11 +234,23 @@
                         <input class="form-input" type="number" name="double_remaining" value="{{ trip.double_remaining }}" placeholder="Double" min="0">
                         <input class="form-input" type="number" name="triple_remaining" value="{{ trip.triple_remaining }}" placeholder="Triple" min="0">
                     </div>
-                    <div style="display:flex;gap:0.5rem;margin-top:0.45rem">
-                        <input class="form-input" type="number" name="boys_double" value="{{ trip.boys_double or 0 }}" placeholder="Double boys" min="0">
-                        <input class="form-input" type="number" name="girls_double" value="{{ trip.girls_double or 0 }}" placeholder="Double girls" min="0">
-                        <input class="form-input" type="number" name="boys_triple" value="{{ trip.boys_triple or 0 }}" placeholder="Triple boys" min="0">
-                        <input class="form-input" type="number" name="girls_triple" value="{{ trip.girls_triple or 0 }}" placeholder="Triple girls" min="0">
+                    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.5rem;margin-top:0.45rem">
+                        <div style="display:flex;flex-direction:column;gap:0.25rem">
+                            <label class="form-label" style="margin:0;font-size:0.68rem">Double Boys</label>
+                            <input class="form-input" type="number" name="boys_double" value="{{ trip.boys_double or 0 }}" placeholder="Boys in double rooms" min="0">
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:0.25rem">
+                            <label class="form-label" style="margin:0;font-size:0.68rem">Double Girls</label>
+                            <input class="form-input" type="number" name="girls_double" value="{{ trip.girls_double or 0 }}" placeholder="Girls in double rooms" min="0">
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:0.25rem">
+                            <label class="form-label" style="margin:0;font-size:0.68rem">Triple Boys</label>
+                            <input class="form-input" type="number" name="boys_triple" value="{{ trip.boys_triple or 0 }}" placeholder="Boys in triple rooms" min="0">
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:0.25rem">
+                            <label class="form-label" style="margin:0;font-size:0.68rem">Triple Girls</label>
+                            <input class="form-input" type="number" name="girls_triple" value="{{ trip.girls_triple or 0 }}" placeholder="Girls in triple rooms" min="0">
+                        </div>
                     </div>
                 </div>
                 <div class="form-group col-span-2">

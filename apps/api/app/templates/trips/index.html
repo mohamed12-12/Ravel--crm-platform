@@ -96,9 +96,15 @@
                             <span style="color:var(--text-muted)">Double</span>
                             <span>{{ trip.double_remaining }}/{{ double_total }}</span>
                         </div>
-                        <div style="display:flex;justify-content:space-between;gap:0.75rem;color:var(--text-muted)">
-                            <span>Boys {{ trip.boys_double or 0 }}</span>
-                            <span>Girls {{ trip.girls_double or 0 }}</span>
+                        <div style="display:flex;flex-direction:column;gap:0.2rem;color:var(--text-muted)">
+                            <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                                <span style="font-weight:700;color:var(--text-main)">Boys</span>
+                                <span>{{ trip.boys_double or 0 }}</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                                <span style="font-weight:700;color:var(--text-main)">Girls</span>
+                                <span>{{ trip.girls_double or 0 }}</span>
+                            </div>
                         </div>
                         <div class="cap-bar"><div class="cap-fill {% if d_pct > 30 %}good{% elif d_pct > 0 %}warn{% else %}empty{% endif %}" style="width:{{ d_pct }}%"></div></div>
                     </div>
@@ -107,9 +113,15 @@
                             <span style="color:var(--text-muted)">Triple</span>
                             <span>{{ trip.triple_remaining }}/{{ triple_total }}</span>
                         </div>
-                        <div style="display:flex;justify-content:space-between;gap:0.75rem;color:var(--text-muted)">
-                            <span>Boys {{ trip.boys_triple or 0 }}</span>
-                            <span>Girls {{ trip.girls_triple or 0 }}</span>
+                        <div style="display:flex;flex-direction:column;gap:0.2rem;color:var(--text-muted)">
+                            <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                                <span style="font-weight:700;color:var(--text-main)">Boys</span>
+                                <span>{{ trip.boys_triple or 0 }}</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                                <span style="font-weight:700;color:var(--text-main)">Girls</span>
+                                <span>{{ trip.girls_triple or 0 }}</span>
+                            </div>
                         </div>
                         <div class="cap-bar"><div class="cap-fill {% if t_pct > 30 %}good{% elif t_pct > 0 %}warn{% else %}empty{% endif %}" style="width:{{ t_pct }}%"></div></div>
                     </div>
@@ -187,9 +199,15 @@
                         <input class="form-input" type="number" name="double_total" placeholder="Total" min="0">
                         <input class="form-input" type="number" name="double_remaining" placeholder="Remaining" min="0">
                     </div>
-                    <div style="display:flex;gap:0.5rem;margin-top:0.45rem">
-                        <input class="form-input" type="number" name="boys_double" placeholder="Boys" min="0">
-                        <input class="form-input" type="number" name="girls_double" placeholder="Girls" min="0">
+                    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.5rem;margin-top:0.45rem">
+                        <div style="display:flex;flex-direction:column;gap:0.25rem">
+                            <label class="form-label" style="margin:0;font-size:0.68rem">Double Boys</label>
+                            <input class="form-input" type="number" name="boys_double" placeholder="Boys in double rooms" min="0">
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:0.25rem">
+                            <label class="form-label" style="margin:0;font-size:0.68rem">Double Girls</label>
+                            <input class="form-input" type="number" name="girls_double" placeholder="Girls in double rooms" min="0">
+                        </div>
                     </div>
                 </div>
                 <div class="form-group">
@@ -198,9 +216,15 @@
                         <input class="form-input" type="number" name="triple_total" placeholder="Total" min="0">
                         <input class="form-input" type="number" name="triple_remaining" placeholder="Remaining" min="0">
                     </div>
-                    <div style="display:flex;gap:0.5rem;margin-top:0.45rem">
-                        <input class="form-input" type="number" name="boys_triple" placeholder="Boys" min="0">
-                        <input class="form-input" type="number" name="girls_triple" placeholder="Girls" min="0">
+                    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.5rem;margin-top:0.45rem">
+                        <div style="display:flex;flex-direction:column;gap:0.25rem">
+                            <label class="form-label" style="margin:0;font-size:0.68rem">Triple Boys</label>
+                            <input class="form-input" type="number" name="boys_triple" placeholder="Boys in triple rooms" min="0">
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:0.25rem">
+                            <label class="form-label" style="margin:0;font-size:0.68rem">Triple Girls</label>
+                            <input class="form-input" type="number" name="girls_triple" placeholder="Girls in triple rooms" min="0">
+                        </div>
                     </div>
                 </div>
                 <div class="form-group col-span-2">

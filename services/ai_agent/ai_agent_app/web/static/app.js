@@ -160,7 +160,7 @@ function messagePlaceholder(stage) {
   if (stage === "awaiting_phone") return "Enter WhatsApp number first...";
   if (stage === "awaiting_trip_type") return "Type local or international...";
   if (stage === "awaiting_confirmation") return "Type the trip number/name, or no...";
-  if (stage === "awaiting_room_type") return "Type single, double, or triple...";
+  if (stage === "awaiting_room_type") return "Type single room, double boys room, double girls room, or triple room...";
   if (stage === "awaiting_flight") return "Type with flights or no flights...";
   if (stage === "awaiting_currency") return "Type EGP or USD...";
   if (stage === "booking_created") return "Booking draft created.";
@@ -171,9 +171,12 @@ function messagePlaceholder(stage) {
 
 function renderQuickActions(session) {
   const stage = session.stage;
-  const availableRooms = getAvailableRoomReplies(session);
+  const availableRoomReplies = getAvailableRoomReplies(session);
+  const roomChoices = getAvailableRoomChoices(session);
   const visible = ["awaiting_trip_type", "awaiting_confirmation", "awaiting_room_type", "awaiting_flight", "awaiting_currency", "booking_created", "awaiting_clarification"].includes(stage);
   els.quickActions.hidden = !visible;
+  const trip = getSelectedTrip(session);
+  els.quickActions.querySelectorAll(".dynamic-room-choice").forEach((button) => button.remove());
   els.quickActions.querySelectorAll("button").forEach((button) => {
     const reply = button.dataset.reply;
     const tripTypeBtn = ["local", "international"].includes(reply);
@@ -185,13 +188,45 @@ function renderQuickActions(session) {
 
     if (stage === "awaiting_trip_type") button.hidden = !tripTypeBtn;
     else if (stage === "awaiting_confirmation") button.hidden = !confirmBtn;
-    else if (stage === "awaiting_room_type") button.hidden = !roomBtn || (availableRooms && !availableRooms.includes(reply));
+    else if (stage === "awaiting_room_type") button.hidden = roomBtn;
     else if (stage === "awaiting_flight") button.hidden = !flightBtn;
     else if (stage === "awaiting_currency") button.hidden = !currencyBtn;
     else if (stage === "booking_created") button.hidden = !confirmBookingBtn;
     else if (stage === "awaiting_clarification") button.hidden = true;
     else button.hidden = true;
+
+      if (roomBtn) {
+      if (reply === "single") button.innerHTML = "🛏 Single room";
+      if (reply === "double") {
+        const boys = Number(trip?.boys_double || 0);
+        const girls = Number(trip?.girls_double || 0);
+        button.innerHTML = `🛏 Double room <span class="btn-sub">Boys room: ${boys} | Girls room: ${girls}</span>`;
+      }
+      if (reply === "triple") {
+        const boys = Number(trip?.boys_triple || 0);
+        const girls = Number(trip?.girls_triple || 0);
+        button.innerHTML = `🛏 Triple room <span class="btn-sub">Boys room: ${boys} | Girls room: ${girls}</span>`;
+      }
+    }
   });
+
+  if (stage === "awaiting_room_type") {
+    roomChoices.forEach((choice) => {
+      if (availableRoomReplies && !availableRoomReplies.includes(choice.reply)) {
+        return;
+      }
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn btn-quick dynamic-room-choice";
+      button.dataset.reply = choice.reply;
+      if (choice.roomGroup) {
+        button.innerHTML = `${escapeHtml(choice.title)} <span class="btn-sub">${escapeHtml(choice.subtitle)}</span>`;
+      } else {
+        button.textContent = choice.title;
+      }
+      els.quickActions.appendChild(button);
+    });
+  }
 }
 
 function getSelectedTrip(session) {
@@ -204,16 +239,83 @@ function getSelectedTrip(session) {
 }
 
 function getAvailableRoomReplies(session) {
+  return getAvailableRoomChoices(session).map((choice) => choice.reply);
+}
+
+function getAvailableRoomChoices(session) {
   const trip = getSelectedTrip(session);
-  if (!trip) return null;
-  const roomFields = {
-    single: "available_single",
-    double: "available_double",
-    triple: "available_triple",
-  };
-  return Object.entries(roomFields)
-    .filter(([, field]) => Number(trip[field] || 0) > 0)
-    .map(([reply]) => reply);
+  if (!trip) return [];
+
+  const choices = [];
+  const single = Number(trip.available_single || 0);
+  const double = Number(trip.available_double || 0);
+  const triple = Number(trip.available_triple || 0);
+  const doubleBoys = Number(trip.boys_double || 0);
+  const doubleGirls = Number(trip.girls_double || 0);
+  const tripleBoys = Number(trip.boys_triple || 0);
+  const tripleGirls = Number(trip.girls_triple || 0);
+
+  if (single > 0) {
+    choices.push({
+      reply: "single room",
+      title: "Single room",
+      subtitle: `${single} available`,
+      roomGroup: "",
+    });
+  }
+  if (double > 0) {
+    if (doubleBoys > 0) {
+      choices.push({
+        reply: "double boys room",
+        title: "Double boys room",
+        subtitle: `${doubleBoys} available`,
+        roomGroup: "boys",
+      });
+    }
+    if (doubleGirls > 0) {
+      choices.push({
+        reply: "double girls room",
+        title: "Double girls room",
+        subtitle: `${doubleGirls} available`,
+        roomGroup: "girls",
+      });
+    }
+    if (doubleBoys <= 0 && doubleGirls <= 0) {
+      choices.push({
+        reply: "double room",
+        title: "Double room",
+        subtitle: `${double} available`,
+        roomGroup: "",
+      });
+    }
+  }
+  if (triple > 0) {
+    if (tripleBoys > 0) {
+      choices.push({
+        reply: "triple boys room",
+        title: "Triple boys room",
+        subtitle: `${tripleBoys} available`,
+        roomGroup: "boys",
+      });
+    }
+    if (tripleGirls > 0) {
+      choices.push({
+        reply: "triple girls room",
+        title: "Triple girls room",
+        subtitle: `${tripleGirls} available`,
+        roomGroup: "girls",
+      });
+    }
+    if (tripleBoys <= 0 && tripleGirls <= 0) {
+      choices.push({
+        reply: "triple room",
+        title: "Triple room",
+        subtitle: `${triple} available`,
+        roomGroup: "",
+      });
+    }
+  }
+  return choices;
 }
 
 function renderCrmSnapshot(session) {
@@ -228,6 +330,7 @@ function renderCrmSnapshot(session) {
       <h3>${escapeHtml(t.full_name)}</h3>
       <div class="meta-item"><span>Status</span><strong>${escapeHtml(t.status || "Active")}</strong></div>
       <div class="meta-item"><span>ID</span><strong>${escapeHtml(t.traveler_id)}</strong></div>
+      ${session.roomChoiceLabel ? `<div class="meta-item"><span>Room Choice</span><strong>${escapeHtml(session.roomChoiceLabel)}</strong></div>` : ""}
     </div>
   `;
 }
@@ -333,6 +436,16 @@ function renderBookingPanel(session) {
 function renderBookingResult(session) {
   const booking = session.bookingResult;
   if (!booking) {
+    if (session.roomChoiceLabel) {
+      els.bookingResult.innerHTML = `
+        <div class="detail-card">
+          <h3>Selected Room</h3>
+          <div class="meta-item"><span>Choice</span><strong>${escapeHtml(session.roomChoiceLabel)}</strong></div>
+          <div class="meta-item"><span>Session</span><strong>${escapeHtml(session.stage)}</strong></div>
+        </div>
+      `;
+      return;
+    }
     els.bookingResult.innerHTML = `<p class="muted">Booking draft details and internal alert output will appear here after reservation.</p>`;
     return;
   }
@@ -343,7 +456,7 @@ function renderBookingResult(session) {
       <div class="meta-item"><span>Status</span><strong>${escapeHtml(booking.booking_status || "Draft")}</strong></div>
       <div class="meta-item"><span>Payment</span><strong>${escapeHtml(booking.payment_status || "Pending")}</strong></div>
       <div class="meta-item"><span>Trip</span><strong>${escapeHtml(booking.trip_name)}</strong></div>
-      <div class="meta-item"><span>Room</span><strong>${escapeHtml(booking.room_type)}</strong></div>
+      <div class="meta-item"><span>Room</span><strong>${escapeHtml(booking.room_choice_label || session.roomChoiceLabel || booking.room_type)}</strong></div>
       <div class="meta-item"><span>After Draft</span><strong>${escapeHtml(booking.available_after_draft)} left</strong></div>
     </div>
   `;

@@ -34,6 +34,10 @@ class MockGateway:
                         "available_single": 2,
                         "available_double": 2,
                         "available_triple": 1,
+                        "boys_double": 1,
+                        "girls_double": 1,
+                        "boys_triple": 1,
+                        "girls_triple": 1,
                     }
                 ],
                 "date_tbd_trips": [],
@@ -83,7 +87,7 @@ class Phase5AgentFlowTests(unittest.TestCase):
         self._drive_phone(session, gateway)
         self.manager.handle_message(session, "local", gateway)
         self.manager.handle_message(session, "1", gateway)
-        self.manager.handle_message(session, "Double", gateway)
+        self.manager.handle_message(session, "double boys room", gateway)
         self.manager.handle_message(session, "With flights", gateway)
         self.manager.handle_message(session, "EGP", gateway)
 
@@ -130,6 +134,31 @@ class Phase5AgentFlowTests(unittest.TestCase):
         self._drive_to_booking_confirmation(self.session, self.gateway)
         self.assertEqual(self.session.stage, "booking_created")
         self.assertNotEqual(self.session.stage, "completed")
+
+    def test_free_text_room_input_recognizes_double_and_triple(self):
+        self._drive_phone(self.session, self.gateway)
+        self.manager.handle_message(self.session, "local", self.gateway)
+        self.manager.handle_message(self.session, "1", self.gateway)
+        self.manager.handle_message(self.session, "bouble boys", self.gateway)
+        self.assertEqual(self.session.room_type, "Double")
+        self.assertEqual(self.session.room_group, "boys")
+
+        other = self.manager.create_session(self.gateway)
+        self._drive_phone(other, self.gateway)
+        self.manager.handle_message(other, "local", self.gateway)
+        self.manager.handle_message(other, "1", self.gateway)
+        self.manager.handle_message(other, "triple girls", self.gateway)
+        self.assertEqual(other.room_type, "Triple")
+        self.assertEqual(other.room_group, "girls")
+
+    def test_room_prompt_lists_boys_and_girls_room_choices(self):
+        self._drive_phone(self.session, self.gateway)
+        self.manager.handle_message(self.session, "local", self.gateway)
+        self.manager.handle_message(self.session, "1", self.gateway)
+        prompt = self.session.messages[-1]["text"]
+        self.assertIn("Double boys room", prompt)
+        self.assertIn("Double girls room", prompt)
+        self.assertIn("Triple boys room", prompt)
 
 
 if __name__ == "__main__":
