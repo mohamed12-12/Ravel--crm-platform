@@ -92,7 +92,7 @@ class Phase8DemoAlignmentTests(unittest.TestCase):
         
         seed_workbook(source_workbook)
 
-        with closing(sqlite3.connect(db_path)) as connection:
+        with closing(sqlite3.connect(str(db_path))) as connection:
             create_operational_tables(connection)
             connection.execute(
                 """
@@ -179,7 +179,7 @@ class Phase8DemoAlignmentTests(unittest.TestCase):
         self.assertIsNotNone(session["finalResult"]["write_result"]["created_traveler"])
         
         # Verify db has traveler, lead and interaction records
-        with closing(sqlite3.connect(db_path)) as conn:
+        with closing(sqlite3.connect(str(db_path))) as conn:
             conn.row_factory = sqlite3.Row
             traveler = conn.execute("SELECT * FROM travelers").fetchone()
             self.assertIsNotNone(traveler)

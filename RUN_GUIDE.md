@@ -152,9 +152,9 @@ npm audit --audit-level=high
 
 - `npm run build`: passes.
 - `npm run typecheck`: passes.
-- `python -m compileall .`: passes.
-- `npm test`: fails because pytest fails.
-- `python -m pytest tests`: 19 failed, 29 passed.
+- `python -m compileall apps services scripts tests`: passes.
+- `npm test`: passes.
+- `python -m pytest tests`: 135 passed.
 - `npm run lint`: unavailable; no lint script exists.
 - `npm audit --audit-level=high`: fails with esbuild/vite high-severity findings.
 

@@ -33,7 +33,7 @@ class OperationalDbPromotionTests(unittest.TestCase):
         self._original_env = dict(os.environ)
         self.tmp_copy = Path(".tmp-test-workdirs") / "operational-db-promotion-copy.db"
         self.tmp_copy.parent.mkdir(exist_ok=True)
-        shutil.copy2(".tmp-booking-import-populated/crm.db", self.tmp_copy)
+        shutil.copy2(PROMOTED_DB, self.tmp_copy)
 
     def tearDown(self) -> None:
         os.environ.clear()
@@ -61,14 +61,8 @@ class OperationalDbPromotionTests(unittest.TestCase):
         os.environ["EXCEL_RUNTIME_WORKBOOK"] = str(WORKBOOK)
 
         reloaded_config = importlib.reload(importlib.import_module("apps.api.app.config"))
-        self.assertEqual(
-            Path(reloaded_config.DevelopmentConfig.SQLALCHEMY_DATABASE_URI.replace("sqlite:///", "", 1)).resolve(),
-            PROMOTED_DB.resolve(),
-        )
-        self.assertEqual(
-            Path(reloaded_config.ProductionConfig.SQLALCHEMY_DATABASE_URI.replace("sqlite:///", "", 1)).resolve(),
-            PROMOTED_DB.resolve(),
-        )
+        self.assertEqual(Path(reloaded_config.DevelopmentConfig.get_sqlalchemy_uri().replace("sqlite:///", "", 1)).resolve(), PROMOTED_DB.resolve())
+        self.assertEqual(Path(reloaded_config.ProductionConfig.get_sqlalchemy_uri().replace("sqlite:///", "", 1)).resolve(), PROMOTED_DB.resolve())
 
         settings = load_settings()
         self.assertEqual(resolve_system_db_path().resolve(), PROMOTED_DB.resolve())
@@ -82,6 +76,22 @@ class OperationalDbPromotionTests(unittest.TestCase):
         self.assertEqual(diagnostics["counts"]["trips"], 42)
         self.assertEqual(diagnostics["counts"]["trip_bookings"], 48)
         self.assertEqual(diagnostics["counts"]["booking_status_history"], 48)
+
+    def test_agent_bootstrap_prefers_crm_database_label(self) -> None:
+        os.environ["RAHMA_SYSTEM_DB_PATH"] = str(PROMOTED_DB)
+        os.environ["EXCEL_SOURCE_WORKBOOK"] = str(WORKBOOK)
+        os.environ["EXCEL_RUNTIME_WORKBOOK"] = str(WORKBOOK)
+
+        from services.ai_agent.ai_agent_app.server import create_app
+
+        app = create_app()
+        client = app.test_client()
+        resp = client.get("/api/bootstrap")
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.get_json()
+        self.assertEqual(payload["sheetBackend"], "crm-db")
+        self.assertEqual(payload["activeDbPath"], str(PROMOTED_DB.resolve()))
+        self.assertEqual(payload["dbDiagnostics"]["counts"]["travelers"], 571)
 
     def test_system_db_resolution_matches_agent_fallback(self) -> None:
         os.environ.pop("RAHMA_SYSTEM_DB_PATH", None)

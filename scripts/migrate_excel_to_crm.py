@@ -520,6 +520,18 @@ class ExcelToCRMMigrator:
                 self._quarantine(sheet, row_number, "missing_phone_and_name", row)
                 self._handled_traveler_rows.add(row_number)
                 continue
+            if (
+                blankish(full_name)
+                and blankish(clean(row.get("First Name")))
+                and blankish(clean(row.get("Last Name")))
+                and blankish(lookup_key)
+                and blankish(clean(row.get("Email")))
+                and blankish(clean(row.get("Emergency Contact")))
+                and blankish(clean(row.get("Emergency Phone")))
+            ):
+                self._quarantine(sheet, row_number, "blank_traveler_row", row, key=traveler_id)
+                self._handled_traveler_rows.add(row_number)
+                continue
             if traveler_id and self._traveler_id_counts[traveler_id] > 1:
                 self._quarantine(sheet, row_number, "duplicate_traveler_id_in_workbook", row, key=traveler_id)
                 self._handled_traveler_rows.add(row_number)
@@ -546,9 +558,25 @@ class ExcelToCRMMigrator:
             full_name = clean(row.get("Full Name"))
             phone = self._normalize_row_phone(row)
             lookup_key = phone["lookup_key"]
+            email = clean(row.get("Email"))
+            first = clean(row.get("First Name"))
+            last = clean(row.get("Last Name"))
+            emergency_contact = clean(row.get("Emergency Contact"))
+            emergency_phone = clean(row.get("Emergency Phone"))
 
             if not traveler_id and not full_name and not lookup_key:
                 self._quarantine(sheet, row_number, "missing_phone_and_name", row)
+                continue
+            if (
+                blankish(full_name)
+                and blankish(first)
+                and blankish(last)
+                and blankish(lookup_key)
+                and blankish(email)
+                and blankish(emergency_contact)
+                and blankish(emergency_phone)
+            ):
+                self._quarantine(sheet, row_number, "blank_traveler_row", row, key=traveler_id)
                 continue
             if traveler_id and self._traveler_id_counts[traveler_id] > 1:
                 self._quarantine(sheet, row_number, "duplicate_traveler_id_in_workbook", row, key=traveler_id)
@@ -1010,6 +1038,11 @@ def clean(value: Any) -> str:
         return str(int(value))
     text = str(value).strip()
     return "" if text.lower() in {"none", "nan", "nat"} else text
+
+
+def blankish(value: Any) -> bool:
+    text = clean(value)
+    return text == "" or text.upper() in {"#N/A", "#VALUE!", "#REF!", "#DIV/0!"}
 
 
 def clean_code(value: Any) -> str:

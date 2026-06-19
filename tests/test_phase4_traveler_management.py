@@ -274,6 +274,133 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         self.assertEqual(ws.cell(2, headers["Integrated WhatsApp"]).value, "+201099998888")
         wb.close()
 
+    def test_index_hides_blank_travelers_from_active_list(self) -> None:
+        app, db, workbook_path = self._build_app()
+        client = app.test_client()
+
+        with app.app_context():
+            from app.models import Traveler
+
+            self.db.session.add(
+                Traveler(
+                    traveler_id="TR00999",
+                    full_name="",
+                    first_name="#N/A",
+                    last_name="#VALUE!",
+                    whatsapp_raw="",
+                    phone_code="",
+                    integrated_whatsapp="",
+                    normalized_whatsapp="",
+                    phone_lookup_key="",
+                    email="",
+                    nationality="",
+                    residence="",
+                    status="Active",
+                )
+            )
+            self.db.session.commit()
+
+        response = client.get("/travelers/")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("TR00999", response.get_data(as_text=True))
+
+
+    def test_index_hides_archived_and_inactive_travelers_by_default_and_shows_filter(self) -> None:
+        app, db, workbook_path = self._build_app()
+        client = app.test_client()
+
+        with app.app_context():
+            from app.models import Traveler
+
+            self.db.session.add_all([
+                Traveler(
+                    traveler_id="TR00880",
+                    full_name="Archived Traveler",
+                    whatsapp_raw="1000000880",
+                    integrated_whatsapp="+201000000880",
+                    normalized_whatsapp="+201000000880",
+                    phone_lookup_key="20:1000000880",
+                    status="Archived",
+                ),
+                Traveler(
+                    traveler_id="TR00881",
+                    full_name="Inactive Traveler",
+                    whatsapp_raw="1000000881",
+                    integrated_whatsapp="+201000000881",
+                    normalized_whatsapp="+201000000881",
+                    phone_lookup_key="20:1000000881",
+                    status="Inactive",
+                ),
+            ])
+            self.db.session.commit()
+
+        default_response = client.get("/travelers/")
+        default_body = default_response.get_data(as_text=True)
+        self.assertNotIn("TR00880", default_body)
+        self.assertNotIn("TR00881", default_body)
+
+        archived_response = client.get("/travelers/?status=Archived")
+        archived_body = archived_response.get_data(as_text=True)
+        self.assertIn("TR00880", archived_body)
+        self.assertIn("TR00881", archived_body)
+
+        inactive_response = client.get("/travelers/?status=Inactive")
+        inactive_body = inactive_response.get_data(as_text=True)
+        self.assertIn("TR00881", inactive_body)
+        self.assertNotIn("TR00880", inactive_body)
+
+    def test_edit_traveler_preserves_id_and_blocks_phone_conflict(self) -> None:
+        app, db, workbook_path = self._build_app()
+        client = app.test_client()
+
+        with app.app_context():
+            self.db.session.add_all([
+                self.Traveler(
+                    traveler_id="TR01000",
+                    full_name="Primary Traveler",
+                    status="Active",
+                    whatsapp_raw="1000001000",
+                    integrated_whatsapp="+201000001000",
+                    normalized_whatsapp="+201000001000",
+                    phone_lookup_key="20:1000001000",
+                    email="primary@example.com",
+                ),
+                self.Traveler(
+                    traveler_id="TR01001",
+                    full_name="Conflicting Traveler",
+                    status="Active",
+                    whatsapp_raw="1000001001",
+                    integrated_whatsapp="+201000001001",
+                    normalized_whatsapp="+201000001001",
+                    phone_lookup_key="20:1000001001",
+                    email="conflict@example.com",
+                ),
+            ])
+            self.db.session.commit()
+
+        response = client.put(
+            "/travelers/TR01000",
+            json={
+                "full_name": "Primary Traveler Updated",
+                "status": "VIP",
+                "whatsapp_raw": "01000001001",
+                "email": "primary.updated@example.com",
+                "nationality": "Egyptian",
+                "residence": "Cairo",
+                "notes": "Updated safely",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertIn("already belongs to traveler TR01001", payload["error"])
+
+        with app.app_context():
+            traveler = self.Traveler.query.get("TR01000")
+            self.assertIsNotNone(traveler)
+            self.assertEqual(traveler.traveler_id, "TR01000")
+            self.assertEqual(traveler.full_name, "Primary Traveler")
+            self.assertEqual(traveler.status, "Active")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -505,9 +505,12 @@ async function fetchCrmPreview() {
 async function bootstrap() {
   try {
     const data = await api("/api/bootstrap");
-    els.sheetBackend.textContent = data.sheetBackend === 'google' ? 'Google Sheets' : 'Local XLSX';
-    els.runtimeWorkbook.textContent = data.runtimeWorkbook;
-    els.sourceWorkbook.textContent = data.sourceWorkbook;
+    const dbDiagnostics = data.dbDiagnostics || null;
+    els.sheetBackend.textContent = data.sheetBackend === "crm-db" ? "CRM Database" : (data.sheetBackend === "google" ? "Google Sheets" : "Local XLSX");
+    els.runtimeWorkbook.textContent = data.activeDbPath || data.runtimeWorkbook;
+    els.sourceWorkbook.textContent = dbDiagnostics
+      ? `${dbDiagnostics.counts?.travelers ?? 0} travelers | ${dbDiagnostics.counts?.trips ?? 0} trips | ${dbDiagnostics.counts?.trip_bookings ?? 0} bookings`
+      : data.sourceWorkbook;
     renderStats(data.stats);
     await fetchCrmPreview();
   } catch (err) {

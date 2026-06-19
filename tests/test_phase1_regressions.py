@@ -3,15 +3,25 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
-from app import create_app
+SYSTEM_ROOT = Path(__file__).resolve().parent.parent / "apps" / "api"
+if str(SYSTEM_ROOT) not in sys.path:
+    sys.path.insert(0, str(SYSTEM_ROOT))
+
 from app.extensions import db
 from app.models.booking import TripBooking
 from services.crm.system_services.phone_normalization import normalize_phone_input
 from test_phase11_demo_features import _make_app_with_db
+
+
+def _create_temp_app(db_path):
+    from app import create_app
+    return create_app("development")
 
 
 class Phase1PhoneContractTests(unittest.TestCase):
@@ -26,10 +36,12 @@ class Phase1PhoneContractTests(unittest.TestCase):
 
 class Phase1BookingRouteTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmpdir = Path(tempfile.mkdtemp(prefix="phase1-booking-"))
+        self.tmpdir = Path(".tmp-test-workdirs") / f"phase1-booking-{uuid.uuid4().hex}"
+        self.tmpdir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.tmpdir / "app.db"
-        os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path}"
-        self.app = create_app("development")
+        os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path.resolve().as_posix()}"
+        os.environ["RAHMA_SYSTEM_DB_PATH"] = str(self.db_path)
+        self.app = _create_temp_app(self.db_path)
         self.app.config["TESTING"] = True
 
         with self.app.app_context():
@@ -56,6 +68,7 @@ class Phase1BookingRouteTests(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.tmpdir, ignore_errors=True)
         os.environ.pop("DATABASE_URL", None)
+        os.environ.pop("RAHMA_SYSTEM_DB_PATH", None)
 
     def test_booking_status_update_accepts_form_payload(self) -> None:
         response = self.client.post(
@@ -75,7 +88,8 @@ class Phase1BookingRouteTests(unittest.TestCase):
 
 class Phase1AgentSessionTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = Path(tempfile.mkdtemp(prefix="phase1-agent-"))
+        self.tmp = Path(".tmp-test-workdirs") / f"phase1-agent-{uuid.uuid4().hex}"
+        self.tmp.mkdir(parents=True, exist_ok=True)
         self.original_env = dict(os.environ)
 
     def tearDown(self) -> None:

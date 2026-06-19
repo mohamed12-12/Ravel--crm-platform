@@ -86,6 +86,45 @@ def get_system_trip_result(
         return None
 
 
+def get_system_preview_result(
+    full_name: str,
+    raw_phone: str,
+    trip_type: str | None,
+    country_code: str = "",
+    settings: Settings | None = None,
+) -> dict[str, Any] | None:
+    """Resolve traveler identity and trip suggestions directly from the CRM database."""
+    service = get_system_service(settings)
+    if service is None:
+        return None
+    try:
+        resolution = service.resolve_identity(full_name, raw_phone, country_code)
+        trip_result = service.build_trip_result(trip_type) if trip_type else {"open_trips": [], "date_tbd_trips": []}
+        traveler = resolution.traveler
+        result: dict[str, Any] = {
+            "customer_name": full_name,
+            "lookup_phone": resolution.lookup_phone,
+            "match_status": resolution.match_status,
+            "name_match_status": resolution.name_match_status,
+            "traveler": traveler,
+            "handoff_required": resolution.handoff_required,
+            "handoff_reason": resolution.handoff_reason,
+            "actions": list(resolution.actions),
+            "trip_result": None,
+        }
+        if trip_type and not resolution.handoff_required:
+            result["trip_result"] = trip_result
+            if trip_result["open_trips"]:
+                result["actions"].append("show_open_trips")
+            elif trip_result["date_tbd_trips"]:
+                result["actions"].append("offer_date_tbd_follow_up")
+            else:
+                result["actions"].append("no_trip_available")
+        return result
+    except Exception:
+        return None
+
+
 def run_system_sales_cycle(settings: Settings, **payload: Any) -> dict[str, Any]:
     service = get_system_service(settings)
     if service is None:

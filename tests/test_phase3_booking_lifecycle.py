@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import uuid
 import unittest
 import sys
 from pathlib import Path
@@ -11,7 +12,6 @@ SYSTEM_ROOT = Path(__file__).resolve().parent.parent / "apps" / "api"
 if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
-from app import create_app
 from app.extensions import db
 from app.models.booking import TripBooking
 from app.models.booking_status_history import BookingStatusHistory
@@ -20,12 +20,19 @@ from app.models.trip import Trip
 from services.crm.system_services import UnifiedCRMService
 
 
+
+
+def _create_temp_app():
+    from app import create_app
+    return create_app("development")
 class Phase3BookingLifecycleTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmpdir = Path(tempfile.mkdtemp(prefix="phase3-booking-life-"))
+        self.tmpdir = Path(".tmp-test-workdirs") / f"phase3-booking-life-{uuid.uuid4().hex}"
+        self.tmpdir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.tmpdir / "app.db"
-        os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path}"
-        self.app = create_app("development")
+        os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path.resolve().as_posix()}"
+        os.environ["RAHMA_SYSTEM_DB_PATH"] = str(self.db_path)
+        self.app = _create_temp_app()
         self.app.config["TESTING"] = True
         with self.app.app_context():
             db.drop_all()
@@ -63,6 +70,7 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.tmpdir, ignore_errors=True)
         os.environ.pop("DATABASE_URL", None)
+        os.environ.pop("RAHMA_SYSTEM_DB_PATH", None)
 
     def test_lifecycle_transitions_and_history_are_recorded(self) -> None:
         with self.app.app_context():

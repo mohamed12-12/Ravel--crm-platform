@@ -4,6 +4,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
+import uuid
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -14,7 +15,6 @@ SYSTEM_ROOT = Path(__file__).resolve().parents[1] / "apps" / "api"
 if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
-from app import create_app
 from app.extensions import db
 from app.models.trip import Trip
 from services.crm.system_services import UnifiedCRMService
@@ -22,15 +22,21 @@ from services.crm.system_services.config import SystemServiceSettings
 from test_phase3_booking_write_through import create_operational_tables
 
 
+def _create_temp_app(db_path: Path):
+    from app import create_app
+    return create_app("development")
+
+
 class Phase2TripRedesignTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmpdir = Path(tempfile.mkdtemp(prefix="phase2-trip-"))
+        self.tmpdir = Path(".tmp-test-workdirs") / f"phase2-trip-{uuid.uuid4().hex}"
+        self.tmpdir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.tmpdir / "app.db"
-        os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path}"
+        os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path.resolve().as_posix()}"
         os.environ["RAHMA_SYSTEM_DB_PATH"] = str(self.db_path)
-        with closing(sqlite3.connect(self.db_path)) as conn:
+        with closing(sqlite3.connect(str(self.db_path))) as conn:
             create_operational_tables(conn)
-        self.app = create_app("development")
+        self.app = _create_temp_app(self.db_path)
         self.app.config["TESTING"] = True
         self.client = self.app.test_client()
 
@@ -40,7 +46,7 @@ class Phase2TripRedesignTests(unittest.TestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def _seed_trip_table(self) -> None:
-        with closing(sqlite3.connect(self.db_path)) as conn:
+        with closing(sqlite3.connect(str(self.db_path))) as conn:
             conn.execute(
                 """
                 INSERT INTO trips (

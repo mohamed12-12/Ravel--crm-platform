@@ -95,14 +95,14 @@ class ExcelToCRMMigrationTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         if self._original_app_config and "app.config" in sys.modules:
-            from app.config import DevelopmentConfig, ProductionConfig, config
+            from app.config import config
 
             dev_uri, prod_uri = self._original_app_config
-            DevelopmentConfig.SQLALCHEMY_DATABASE_URI = dev_uri
-            ProductionConfig.SQLALCHEMY_DATABASE_URI = prod_uri
-            config["development"].SQLALCHEMY_DATABASE_URI = dev_uri
-            config["default"].SQLALCHEMY_DATABASE_URI = dev_uri
-            config["production"].SQLALCHEMY_DATABASE_URI = prod_uri
+            if dev_uri is not None:
+                config["development"].SQLALCHEMY_DATABASE_URI = dev_uri
+                config["default"].SQLALCHEMY_DATABASE_URI = dev_uri
+            if prod_uri is not None:
+                config["production"].SQLALCHEMY_DATABASE_URI = prod_uri
         os.environ.clear()
         os.environ.update(self._original_env)
         shutil.rmtree(self.tmp_path, ignore_errors=True)
@@ -113,8 +113,8 @@ class ExcelToCRMMigrationTests(unittest.TestCase):
 
         if self._original_app_config is None:
             self._original_app_config = (
-                DevelopmentConfig.SQLALCHEMY_DATABASE_URI,
-                ProductionConfig.SQLALCHEMY_DATABASE_URI,
+                getattr(DevelopmentConfig, "SQLALCHEMY_DATABASE_URI", None),
+                getattr(ProductionConfig, "SQLALCHEMY_DATABASE_URI", None),
             )
         apply_database_url_to_app_config()
         from app import create_app
@@ -330,6 +330,20 @@ class ExcelToCRMMigrationTests(unittest.TestCase):
             self.assertGreater(len(ids), 1)
         self.assertEqual(summary.sheets["Travelers"].created, 2)
         self.assertEqual(summary.travelers_merged, 0)
+
+    def test_blank_traveler_rows_are_quarantined(self) -> None:
+        self._build_schema()
+        self._write_sparse_workbook(
+            travelers_by_row={
+                586: ["", "TR00586", "", "", "", "", "", "", "", "", "", "", "", "", ""],
+                587: ["", "TR00587", "", "", "", "", "", "", "", "", "", "", "", "", ""],
+            }
+        )
+
+        migrator, summary = self._run(dry_run=True, travelers_only=True)
+
+        self.assertEqual(summary.sheets["Travelers"].quarantined, 2)
+        self.assertTrue(all(item["reason"] == "blank_traveler_row" for item in migrator.quarantine))
 
     def test_duplicate_phone_rows_are_quarantined(self) -> None:
         self._build_schema()

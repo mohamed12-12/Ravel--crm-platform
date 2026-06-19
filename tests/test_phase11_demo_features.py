@@ -122,11 +122,12 @@ def _make_base_workbook(path: Path) -> None:
 
 
 def _make_app_with_db(tmp_path: Path, *, post_trip_handoff_enabled: bool = False):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     source_wb = tmp_path / "source.xlsx"
     runtime_wb = tmp_path / "runtime.xlsx"
     db_path = tmp_path / "system.db"
 
-    with closing(sqlite3.connect(db_path)) as conn:
+    with closing(sqlite3.connect(str(db_path))) as conn:
         create_operational_tables(conn)
         conn.execute(
             """
@@ -157,7 +158,9 @@ def _make_app_with_db(tmp_path: Path, *, post_trip_handoff_enabled: bool = False
         conn.commit()
 
     _make_base_workbook(source_wb)
+    os.environ["DATABASE_URL"] = f"sqlite:///{db_path.resolve().as_posix()}"
     os.environ["RAHMA_SYSTEM_DB_PATH"] = str(db_path)
+    os.environ["AI_AGENT_UPLOAD_ROOT"] = str(tmp_path / "uploads")
     if post_trip_handoff_enabled:
         os.environ["POST_TRIP_HANDOFF_ENABLED"] = "true"
     else:
@@ -522,7 +525,8 @@ class TestDiscountFromTripNotes(unittest.TestCase):
         from dataclasses import replace
         import tempfile
 
-        tmp = Path(tempfile.mkdtemp())
+        tmp = Path(".tmp-test-workdirs") / f"phase11-{uuid.uuid4().hex}"
+        tmp.mkdir(parents=True, exist_ok=True)
         try:
             wb = Workbook()
             ws = wb.active
@@ -574,7 +578,8 @@ class TestWorkbookRecovery(unittest.TestCase):
         from services.ai_agent.ai_agent_app.config import load_settings
         from services.ai_agent.ai_agent_app.sheets.excel_gateway import ExcelSheetGateway
 
-        tmp = Path(tempfile.mkdtemp())
+        tmp = Path(".tmp-test-workdirs") / f"phase11-{uuid.uuid4().hex}"
+        tmp.mkdir(parents=True, exist_ok=True)
         try:
             source = tmp / "source.xlsx"
             runtime = tmp / "runtime.xlsx"
@@ -634,10 +639,11 @@ class TestSQLiteMigration(unittest.TestCase):
         import tempfile
         from services.crm.system_services.unified_service import UnifiedCRMService
 
-        tmp = Path(tempfile.mkdtemp())
+        tmp = Path(".tmp-test-workdirs") / f"phase11-{uuid.uuid4().hex}"
+        tmp.mkdir(parents=True, exist_ok=True)
         try:
             db_path = tmp / "test_migration.db"
-            with closing(sqlite3.connect(db_path)) as conn:
+            with closing(sqlite3.connect(str(db_path))) as conn:
                 conn.execute(
                     """
                     CREATE TABLE travelers (
@@ -658,7 +664,7 @@ class TestSQLiteMigration(unittest.TestCase):
             svc = UnifiedCRMService(settings=sys_settings)
             svc.ensure_operational_schema()
 
-            with closing(sqlite3.connect(db_path)) as conn:
+            with closing(sqlite3.connect(str(db_path))) as conn:
                 cols = {row[1] for row in conn.execute("PRAGMA table_info(travelers)").fetchall()}
                 for expected_col in [
                     "passport_name",
@@ -682,10 +688,11 @@ class TestSQLiteMigration(unittest.TestCase):
         import tempfile
         from services.crm.system_services.unified_service import UnifiedCRMService
 
-        tmp = Path(tempfile.mkdtemp())
+        tmp = Path(".tmp-test-workdirs") / f"phase11-{uuid.uuid4().hex}"
+        tmp.mkdir(parents=True, exist_ok=True)
         try:
             db_path = tmp / "test_idempotent.db"
-            with closing(sqlite3.connect(db_path)) as conn:
+            with closing(sqlite3.connect(str(db_path))) as conn:
                 create_operational_tables(conn)
                 conn.commit()
 

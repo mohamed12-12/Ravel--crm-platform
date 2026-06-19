@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import threading
 import time
+import sqlite3
 from pathlib import Path
 from typing import Any
 from zipfile import BadZipFile, is_zipfile
@@ -11,7 +12,8 @@ from openpyxl import load_workbook
 
 from services.ai_agent.ai_agent_app.config import Settings
 from services.ai_agent.ai_agent_app.logger import sheet_logger
-from services.ai_agent.ai_agent_app.system_bridge import check_traveler_completed_trips, create_system_booking, get_system_trip_result, qualify_system_lead, run_system_sales_cycle
+from services.ai_agent.ai_agent_app.system_bridge import check_traveler_completed_trips, create_system_booking, get_system_preview_result, get_system_trip_result, qualify_system_lead, run_system_sales_cycle
+from services.crm.system_services.config import resolve_system_db_path
 from scripts.phase1_readonly_agent import build_agent_response
 
 
@@ -91,6 +93,9 @@ class ExcelSheetGateway:
         trip_type: str | None = None,
         country_code: str = "",
     ) -> dict[str, Any]:
+        system_preview = get_system_preview_result(full_name, raw_phone, trip_type, country_code, self.settings)
+        if system_preview is not None:
+            return system_preview
         trip_result_override = get_system_trip_result(trip_type, self.settings)
         return build_agent_response(
             workbook_path=self.runtime_path,
@@ -165,12 +170,18 @@ class ExcelSheetGateway:
             )
 
     def get_demo_stats(self) -> dict[str, Any]:
+        db_stats = self._get_demo_stats_from_db()
+        if db_stats is not None:
+            return db_stats
         wb = self._load_runtime_workbook(data_only=True, read_only=True)
         stats = get_demo_stats_from_wb(wb)
         wb.close()
         return stats
 
     def crm_preview(self, limit: int = 15) -> list[dict[str, Any]]:
+        db_rows = self._crm_preview_from_db(limit)
+        if db_rows is not None:
+            return db_rows
         wb = self._load_runtime_workbook(data_only=True, read_only=True)
         rows = crm_preview_from_wb(wb, limit)
         wb.close()
@@ -282,6 +293,103 @@ class ExcelSheetGateway:
         except Exception as exc:
             sheet_logger.error(f"get_trip_discount_notes error for trip {trip_id!r}: {exc}")
             return ""
+
+    def _get_demo_stats_from_db(self) -> dict[str, Any] | None:
+        db_path = resolve_system_db_path()
+        if not db_path.exists():
+            return None
+        try:
+            connection = sqlite3.connect(db_path)
+            connection.row_factory = sqlite3.Row
+            cursor = connection.cursor()
+
+            traveler_count = cursor.execute("SELECT COUNT(*) FROM travelers").fetchone()[0]
+            interaction_count = cursor.execute("SELECT COUNT(*) FROM interactions").fetchone()[0] if self._table_exists(cursor, "interactions") else 0
+            lead_count = cursor.execute("SELECT COUNT(*) FROM leads").fetchone()[0] if self._table_exists(cursor, "leads") else 0
+            booking_draft_count = cursor.execute("SELECT COUNT(*) FROM trip_bookings").fetchone()[0] if self._table_exists(cursor, "trip_bookings") else 0
+            payment_pending_count = cursor.execute("SELECT COUNT(*) FROM trip_bookings WHERE booking_status = 'Payment Pending'").fetchone()[0] if self._table_exists(cursor, "trip_bookings") else 0
+            booking_alert_count = cursor.execute("SELECT COUNT(*) FROM handoff_queue").fetchone()[0] if self._table_exists(cursor, "handoff_queue") else 0
+            trip_status_counts = {}
+            if self._table_exists(cursor, "trips"):
+                for status, count in cursor.execute("SELECT COALESCE(sales_status, 'None') AS status, COUNT(*) FROM trips GROUP BY COALESCE(sales_status, 'None')"):
+                    trip_status_counts[str(status)] = int(count)
+            lead_stage_counts = {}
+            if self._table_exists(cursor, "leads"):
+                for stage, count in cursor.execute("SELECT COALESCE(lead_stage, 'Blank') AS stage, COUNT(*) FROM leads GROUP BY COALESCE(lead_stage, 'Blank')"):
+                    lead_stage_counts[str(stage)] = int(count)
+            recent_leads = []
+            if self._table_exists(cursor, "leads"):
+                for row in cursor.execute(
+                    "SELECT lead_id, customer_name, lead_stage FROM leads ORDER BY created_at DESC LIMIT 8"
+                ):
+                    recent_leads.append(
+                        {
+                            "leadId": row["lead_id"],
+                            "customerName": row["customer_name"],
+                            "leadStage": row["lead_stage"],
+                        }
+                    )
+            return {
+                "travelerCount": int(traveler_count),
+                "interactionCount": int(interaction_count),
+                "tripStatusCounts": trip_status_counts,
+                "leadCount": int(lead_count),
+                "leadStageCounts": lead_stage_counts,
+                "recentLeads": recent_leads,
+                "bookingDraftCount": int(booking_draft_count),
+                "paymentPendingCount": int(payment_pending_count),
+                "bookingAlertCount": int(booking_alert_count),
+                "qualificationRate": 0,
+                "followUpSummary": {"urgent": 0, "dueToday": 0},
+                "dbSource": str(db_path),
+            }
+        except Exception as exc:
+            sheet_logger.warning(f"CRM DB stats unavailable; falling back to workbook stats: {exc}")
+            return None
+        finally:
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+    def _crm_preview_from_db(self, limit: int) -> list[dict[str, Any]] | None:
+        db_path = resolve_system_db_path()
+        if not db_path.exists():
+            return None
+        try:
+            connection = sqlite3.connect(db_path)
+            connection.row_factory = sqlite3.Row
+            cursor = connection.cursor()
+            if not self._table_exists(cursor, "travelers"):
+                return None
+            rows = []
+            for row in cursor.execute(
+                "SELECT traveler_id, full_name, status, COALESCE(integrated_whatsapp, whatsapp_raw, '') AS phone "
+                "FROM travelers WHERE traveler_id IS NOT NULL ORDER BY traveler_id LIMIT ?",
+                (limit,),
+            ):
+                rows.append(
+                    {
+                        "id": str(row["traveler_id"]),
+                        "name": str(row["full_name"] or ""),
+                        "status": str(row["status"] or "Active"),
+                        "phone": str(row["phone"] or "N/A"),
+                    }
+                )
+            return rows
+        except Exception as exc:
+            sheet_logger.warning(f"CRM DB preview unavailable; falling back to workbook preview: {exc}")
+            return None
+        finally:
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _table_exists(cursor: sqlite3.Cursor, table_name: str) -> bool:
+        row = cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,)).fetchone()
+        return row is not None
 
 
 def get_demo_stats_from_wb(wb: Any) -> dict[str, Any]:

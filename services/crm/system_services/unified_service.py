@@ -25,6 +25,7 @@ from .phone_normalization import normalize_phone_input
 
 
 BLOCKED_STATUSES = {"blacklisted", "blacklist"}
+ARCHIVED_TRAVELER_STATUSES = {"inactive", "archived", "blocked"}
 REVIEW_STATUSES = {"payment risk", "high maintenance"}
 INACTIVE_TRIP_STATUSES = {"cancelled", "closed", "archived"}
 QUALIFIED_LEAD_STAGES = {"Qualified", "VIP Priority", "Repeat Priority"}
@@ -174,8 +175,12 @@ class UnifiedCRMService:
     def names_are_compatible(cls, submitted_name: str, existing_name: str) -> bool:
         submitted = cls.normalize_name(submitted_name)
         existing = cls.normalize_name(existing_name)
-        if not submitted or not existing:
+        if not existing:
             return False
+        if not submitted:
+            # Phone-first CRM flows must be allowed to identify an existing traveler
+            # before the agent asks for the traveler's name.
+            return True
         if submitted == existing:
             return True
         submitted_tokens = submitted.split()
@@ -256,6 +261,16 @@ class UnifiedCRMService:
                 lookup_phone=phone,
                 name_match_status="blocked_status",
                 actions=["block_sales_flow"],
+            )
+        if status in ARCHIVED_TRAVELER_STATUSES:
+            return IdentityResolution(
+                match_status="single_match",
+                handoff_required=True,
+                handoff_reason="archived_traveler",
+                traveler=traveler,
+                lookup_phone=phone,
+                name_match_status="archived_status",
+                actions=["human_review_archived_traveler"],
             )
         if not self.names_are_compatible(full_name, traveler.get("full_name") or ""):
             return IdentityResolution(

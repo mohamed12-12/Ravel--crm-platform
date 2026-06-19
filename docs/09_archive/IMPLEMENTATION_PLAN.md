@@ -16,7 +16,7 @@ Recommended work:
 - Add website-link response only after the official URL and copy are confirmed.
 - Standardize numbered prompt helpers for future use, initially preserving current prompt text unless the client approves updated copy.
 - Add documentation for Traveler ID immutability and Trip ID change risks.
-- Update `RUN_GUIDE.md`, `FINAL_SUMMARY.md`, and `QA_REPORT.md` later to reconcile their pre-fix status with `FIX_REPORT.md`.
+- Update `RUN_GUIDE.md`, `../00_status/FINAL_SUMMARY.md`, and `../06_testing/QA_REPORT.md` later to reconcile their pre-fix status with `../06_testing/FIX_REPORT.md`.
 
 Exit criteria:
 

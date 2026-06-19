@@ -18,6 +18,7 @@ from services.crm.system_services import UnifiedCRMService
 from services.crm.system_services.phone_normalization import normalize_phone_input
 
 travelers_bp = Blueprint('travelers', __name__, url_prefix='/travelers')
+ARCHIVE_LIKE_STATUSES = {"inactive", "archived", "blacklisted", "blocked"}
 
 
 def _phone_match_filter(service: UnifiedCRMService, phone_info: dict[str, str]):
@@ -50,11 +51,35 @@ TRAVELER_SEARCH_FIELDS = (
 
 
 def _apply_traveler_filters(query, q: str, status: str, nationality: str):
+    query = query.filter(
+        or_(
+            Traveler.full_name.isnot(None),
+            Traveler.whatsapp_raw.isnot(None),
+            Traveler.integrated_whatsapp.isnot(None),
+            Traveler.normalized_whatsapp.isnot(None),
+            Traveler.email.isnot(None),
+            Traveler.phone_lookup_key.isnot(None),
+        )
+    ).filter(
+        or_(
+            Traveler.full_name != "",
+            Traveler.whatsapp_raw != "",
+            Traveler.integrated_whatsapp != "",
+            Traveler.normalized_whatsapp != "",
+            Traveler.email != "",
+            Traveler.phone_lookup_key != "",
+        )
+    )
     if q:
         term = f"%{q}%"
         query = query.filter(or_(*[field.ilike(term) for field in TRAVELER_SEARCH_FIELDS]))
-    if status:
-        query = query.filter(Traveler.status == status)
+    normalized_status = (status or "").strip().lower()
+    if normalized_status == "archived":
+        query = query.filter(db.func.lower(Traveler.status).in_(ARCHIVE_LIKE_STATUSES))
+    elif normalized_status:
+        query = query.filter(db.func.lower(Traveler.status) == normalized_status)
+    else:
+        query = query.filter(~db.func.lower(Traveler.status).in_(ARCHIVE_LIKE_STATUSES))
     if nationality:
         query = query.filter(Traveler.nationality == nationality)
     return query
@@ -325,12 +350,32 @@ def update(traveler_id):
         local_number = normalized['local_number']
 
         if lookup_key and lookup_key != traveler.phone_lookup_key:
+            duplicate_traveler = Traveler.query.filter(
+                Traveler.traveler_id != traveler_id,
+                or_(
+                    Traveler.phone_lookup_key == lookup_key,
+                    Traveler.normalized_whatsapp == normalized_whatsapp,
+                    Traveler.integrated_whatsapp == normalized_whatsapp,
+                    Traveler.whatsapp_raw == local_number,
+                    Traveler.whatsapp_raw == new_raw,
+                )
+            ).first()
+            if duplicate_traveler:
+                message = (
+                    f"Phone number '{new_raw}' already belongs to traveler "
+                    f"{duplicate_traveler.traveler_id} ({duplicate_traveler.full_name})."
+                )
+                if request.is_json:
+                    return jsonify({"status": "error", "error": message, "duplicate_traveler_id": duplicate_traveler.traveler_id}), 400
+                flash(message, "danger")
+                return redirect(url_for('travelers.detail', traveler_id=traveler_id))
+
             blacklisted_traveler = Traveler.query.filter(
                 or_(
-                db.func.trim(Traveler.status).ilike("blacklisted"),
-                db.func.trim(Traveler.status).ilike("blacklist")
-            )
-        ).filter(_phone_match_filter(service, normalized)).first()
+                    db.func.trim(Traveler.status).ilike("blacklisted"),
+                    db.func.trim(Traveler.status).ilike("blacklist")
+                )
+            ).filter(_phone_match_filter(service, normalized)).first()
 
             if blacklisted_traveler:
                 if request.is_json:

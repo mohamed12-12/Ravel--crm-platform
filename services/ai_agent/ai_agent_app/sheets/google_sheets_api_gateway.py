@@ -13,7 +13,7 @@ from google.oauth2.service_account import Credentials
 from services.ai_agent.ai_agent_app.config import Settings
 from services.ai_agent.ai_agent_app.sheets.excel_gateway import ExcelSheetGateway, get_demo_stats_from_wb, crm_preview_from_wb
 from services.ai_agent.ai_agent_app.logger import sheet_logger
-from services.ai_agent.ai_agent_app.system_bridge import get_system_trip_result
+from services.ai_agent.ai_agent_app.system_bridge import get_system_preview_result, get_system_trip_result
 from services.ai_agent.ai_agent_app.sheets.sheets_adapter import FakeWorkbook, SheetRowAdapter
 from scripts.phase1_readonly_agent import build_agent_response_from_wb
 
@@ -193,6 +193,9 @@ class GoogleSheetsApiGateway(ExcelSheetGateway):
         country_code: str = "",
     ) -> dict[str, Any]:
         with self._lock:
+            system_preview = get_system_preview_result(full_name, raw_phone, trip_type, country_code, self.settings)
+            if system_preview is not None:
+                return system_preview
             wb = self._make_wb("Travelers", "Trips")
             trip_result_override = get_system_trip_result(trip_type, self.settings)
             return build_agent_response_from_wb(

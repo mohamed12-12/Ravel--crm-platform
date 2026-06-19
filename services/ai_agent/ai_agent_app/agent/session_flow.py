@@ -375,12 +375,13 @@ class SessionFlowManager:
             session.messages.append(
                 {
                     "role": "assistant",
-                    "text": self._copy_text(
-                        gateway,
-                        "session.ask_trip_type",
-                        "I found your traveler profile. Is this inquiry for a local trip or an international trip?\n1. Local\n2. International",
-                        language=session.language,
-                    ),
+                    "text": self._traveler_profile_message(preview, gateway, session.language),
+                }
+            )
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "text": self._trip_type_prompt(gateway, session.language, existing_traveler=True),
                 }
             )
             return session
@@ -424,12 +425,13 @@ class SessionFlowManager:
             session.messages.append(
                 {
                     "role": "assistant",
-                    "text": self._copy_text(
-                        gateway,
-                        "session.ask_trip_type",
-                        "I found your traveler profile. Is this inquiry for a local trip or an international trip?\n1. Local\n2. International",
-                        language=session.language,
-                    ),
+                    "text": self._traveler_profile_message(preview, gateway, session.language),
+                }
+            )
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "text": self._trip_type_prompt(gateway, session.language, existing_traveler=True),
                 }
             )
             return session
@@ -973,6 +975,56 @@ class SessionFlowManager:
     def _is_website_intent(self, text: str) -> bool:
         lowered = text.lower()
         return any(kw in lowered for kw in ("website", "site", "link", "url", "موقع", "رابط"))
+
+    def _trip_type_prompt(self, gateway, language: str, *, existing_traveler: bool = False) -> str:
+        if existing_traveler:
+            fallback = (
+                "I found your traveler profile in the CRM. "
+                "Is this inquiry for a local trip or an international trip?\n1. Local\n2. International"
+            )
+        else:
+            fallback = "Great. Is this inquiry for a local trip or an international trip?\n1. Local\n2. International"
+        return self._copy_text(
+            gateway,
+            "session.ask_trip_type",
+            fallback,
+            language=language,
+        )
+
+    def _traveler_profile_message(self, result: dict[str, Any], gateway, language: str = "en") -> str:
+        traveler = result.get("traveler") if isinstance(result.get("traveler"), dict) else {}
+        if not traveler:
+            return self._copy_text(
+                gateway,
+                "session.profile_found_generic",
+                "I found your traveler profile in the CRM.",
+                language=language,
+            )
+
+        traveler_id = str(traveler.get("traveler_id") or "").strip() or "unknown ID"
+        full_name = str(traveler.get("full_name") or "").strip() or "existing traveler"
+        status = str(traveler.get("status") or "").strip() or "Active"
+        local_trips = int(traveler.get("local_trips_count") or 0)
+        international_trips = int(traveler.get("international_trips_count") or 0)
+        total_trips = int(traveler.get("total_trips") or 0)
+        return self._copy_text(
+            gateway,
+            "session.profile_found_existing",
+            (
+                "I found your traveler profile in the CRM:\n"
+                "Name: {full_name}\n"
+                "Traveler ID: {traveler_id}\n"
+                "Status: {status}\n"
+                "History: {local_trips} local, {international_trips} international, {total_trips} total"
+            ),
+            language=language,
+            full_name=full_name,
+            traveler_id=traveler_id,
+            status=status,
+            local_trips=local_trips,
+            international_trips=international_trips,
+            total_trips=total_trips,
+        )
 
     def _room_choice_label(self, room_type: str, room_group: str = "") -> str:
         if room_type == "Single":

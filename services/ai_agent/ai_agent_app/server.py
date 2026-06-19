@@ -181,12 +181,15 @@ def create_app(
     def bootstrap():
         gateway.ensure_runtime_workbook()
         workbook_info = gateway.workbook_info()
+        diagnostics = get_database_diagnostics() if get_database_diagnostics is not None else None
         return jsonify(
             {
                 "runtimeWorkbook": workbook_info["runtimeWorkbook"],
                 "sourceWorkbook": workbook_info["sourceWorkbook"],
-                "sheetBackend": app.config["SETTINGS"].sheet_backend,
+                "sheetBackend": "crm-db" if diagnostics else app.config["SETTINGS"].sheet_backend,
                 "stats": gateway.get_demo_stats(),
+                "activeDbPath": diagnostics["db_path"] if diagnostics else str(_system_db_path()),
+                "dbDiagnostics": diagnostics,
             }
         )
 
@@ -352,7 +355,8 @@ def create_app(
             return jsonify({"error": "unsupported_file_type"}), 415
 
         safe_name = secure_filename(f.filename)
-        uploads_dir = Path(app.root_path).parents[3] / "uploads" / "passport" / session_id
+        uploads_root = Path(os.environ.get("AI_AGENT_UPLOAD_ROOT", str(Path(app.root_path).parents[3] / "uploads")))
+        uploads_dir = uploads_root / "passport" / session_id
         uploads_dir.mkdir(parents=True, exist_ok=True)
         dest = uploads_dir / safe_name
 
@@ -364,7 +368,7 @@ def create_app(
             return jsonify({"error": "file_too_large", "maxBytes": MAX_ATTACHMENT_BYTES}), 413
 
         f.save(dest)
-        ref = str(dest.relative_to(Path(app.root_path).parents[3]))
+        ref = str(dest.relative_to(uploads_root)) if uploads_root in dest.parents else str(dest)
         sessions.handle_passport_attachment(sess, ref)
         app_logger.info(f"Passport attachment saved: session={session_id} ref={ref}")
         return jsonify({"ok": True, "ref": ref, "session": _serialize_session(gateway, sess)})

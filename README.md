@@ -26,7 +26,7 @@ The repo is now organized as a product foundation while preserving the current M
 - [Setup instructions](./docs/SETUP.md)
 - [Instagram / Meta integration notes](./docs/instagram-integration-plan.md)
 - [Production readiness checklist](./docs/production-checklist.md)
-- [Cleanup report](./CLEANUP_REPORT.md)
+- [Cleanup report](./docs/08_reports/PROJECT_CLEANUP_REPORT.md)
 
 ## Quick Start
 

@@ -7,6 +7,38 @@ from .extensions import db, migrate, login_manager, socketio
 
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "database" / "migrations"
+OPERATIONAL_DB_PATH = (Path(__file__).resolve().parents[1] / "instance" / "rahma_traveler_dev.db").resolve()
+
+
+def _resolve_sqlite_path(uri: str) -> Path | None:
+    if not uri.startswith("sqlite"):
+        return None
+    raw = uri.split("sqlite://", 1)[1]
+    if raw.startswith("///"):
+        raw = raw[3:]
+    elif raw.startswith("//"):
+        raw = raw[2:]
+    candidate = Path(raw)
+    return candidate.resolve()
+
+
+def _fail_fast_on_operational_db_in_tests(app: Flask) -> None:
+    uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
+    resolved = _resolve_sqlite_path(uri)
+    if resolved is None or resolved != OPERATIONAL_DB_PATH:
+        return
+    if not (
+        app.testing
+        or os.getenv("PYTEST_CURRENT_TEST")
+        or os.getenv("PYTEST_ADDOPTS")
+        or os.getenv("FLASK_ENV", "").lower() == "testing"
+        or os.getenv("TESTING", "").lower() in {"1", "true", "yes"}
+    ):
+        return
+    raise RuntimeError(
+        "Refusing to initialize the operational CRM database during tests. "
+        f"Resolved path: {resolved}"
+    )
 
 
 def _ensure_travelers_passport_columns(app: Flask) -> None:
@@ -112,6 +144,15 @@ def create_app(config_name=None):
 
     app = Flask(__name__)
     app.config.from_object(config[config_name])
+
+    # Resolve DATABASE_URL at runtime so tests (and any code that sets
+    # os.environ['DATABASE_URL'] before calling create_app) always get the
+    # correct URI rather than the value frozen at module-import time.
+    cfg_class = config[config_name]
+    if hasattr(cfg_class, 'get_sqlalchemy_uri'):
+        app.config['SQLALCHEMY_DATABASE_URI'] = cfg_class.get_sqlalchemy_uri()
+
+    _fail_fast_on_operational_db_in_tests(app)
 
     # Initialize extensions
     db.init_app(app)

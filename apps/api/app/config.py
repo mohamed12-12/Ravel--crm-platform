@@ -31,12 +31,19 @@ class Config:
 class DevelopmentConfig(Config):
     DEBUG = True
     # TODO(production): migrate demo SQLite data to PostgreSQL and require DATABASE_URL in deploy environments.
-    SQLALCHEMY_DATABASE_URI = os.environ.get(
-        'DATABASE_URL', 'sqlite:///rahma_traveler_dev.db')
+    # NOTE: Evaluated as a class property so that tests can override DATABASE_URL
+    # via os.environ *before* calling create_app() and get the correct path.
+    @classmethod
+    def get_sqlalchemy_uri(cls) -> str:  # type: ignore[override]
+        return os.environ.get('DATABASE_URL', 'sqlite:///rahma_traveler_dev.db')
+
 
 class ProductionConfig(Config):
     DEBUG = False
-    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL')
+
+    @classmethod
+    def get_sqlalchemy_uri(cls) -> str:  # type: ignore[override]
+        return os.environ.get('DATABASE_URL', '')
 
 config = {
     'development': DevelopmentConfig,

@@ -5,13 +5,13 @@ import shutil
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 SYSTEM_ROOT = Path(__file__).resolve().parent.parent / "apps" / "api"
 if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
-from app import create_app
 from app.extensions import db
 from app.models.lead import Lead
 from app.models.trip import Trip
@@ -19,12 +19,19 @@ from app.models.traveler import Traveler
 from app.models.booking import TripBooking
 
 
+
+
+def _create_temp_app():
+    from app import create_app
+    return create_app("development")
 class Phase4LeadRedesignTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmpdir = Path(tempfile.mkdtemp(prefix="phase4-leads-"))
+        self.tmpdir = Path(".tmp-test-workdirs") / f"phase4-leads-{uuid.uuid4().hex}"
+        self.tmpdir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.tmpdir / "app.db"
-        os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path}"
-        self.app = create_app("development")
+        os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path.resolve().as_posix()}"
+        os.environ["RAHMA_SYSTEM_DB_PATH"] = str(self.db_path)
+        self.app = _create_temp_app()
         self.app.config["TESTING"] = True
         with self.app.app_context():
             db.drop_all()
@@ -67,6 +74,7 @@ class Phase4LeadRedesignTests(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.tmpdir, ignore_errors=True)
         os.environ.pop("DATABASE_URL", None)
+        os.environ.pop("RAHMA_SYSTEM_DB_PATH", None)
 
     def test_lead_status_transition_validation(self) -> None:
         response = self.client.post(

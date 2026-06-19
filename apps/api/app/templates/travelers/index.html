@@ -148,8 +148,8 @@
         <div style="flex: 1; min-width: 150px;">
             <select name="status" class="form-select" style="background: rgba(0,0,0,0.2); border-color: rgba(255,255,255,0.1);">
                 <option value="">All Statuses</option>
-                {% for s in ['Active', 'New', 'Repeat', 'VIP', 'Inactive'] %}
-                <option value="{{ s }}" {% if current_status == s %}selected{% endif %}>{{ s }}</option>
+                {% for value, label in [('Active', 'Active'), ('New', 'New'), ('Repeat', 'Repeat'), ('VIP', 'VIP'), ('Archived', 'Archived / Inactive'), ('Blocked', 'Blocked'), ('Blacklisted', 'Blacklisted')] %}
+                <option value="{{ value }}" {% if current_status == value %}selected{% endif %}>{{ label }}</option>
                 {% endfor %}
             </select>
         </div>
@@ -161,9 +161,9 @@
         <a href="{{ url_for('travelers.index', q=q) }}" class="status-pill {% if not current_status %}active{% endif %}">
             All Travelers
         </a>
-        {% for s in ['Active', 'New', 'Repeat', 'VIP', 'Inactive'] %}
-        <a href="{{ url_for('travelers.index', q=q, status=s) }}" class="status-pill {% if current_status == s %}active{% endif %}">
-            {{ s }}
+        {% for value, label in [('Active', 'Active'), ('New', 'New'), ('Repeat', 'Repeat'), ('VIP', 'VIP'), ('Archived', 'Archived / Inactive'), ('Blocked', 'Blocked'), ('Blacklisted', 'Blacklisted')] %}
+        <a href="{{ url_for('travelers.index', q=q, status=value) }}" class="status-pill {% if current_status == value %}active{% endif %}">
+            {{ label }}
         </a>
         {% endfor %}
     </div>
@@ -207,7 +207,7 @@
                         <span class="badge 
                             {% if traveler.status == 'VIP' %}badge-purple
                             {% elif traveler.status == 'Repeat' %}badge-green
-                            {% elif traveler.status == 'Inactive' %}badge-red
+                            {% elif traveler.status in ['Inactive', 'Archived', 'Blocked', 'Blacklisted'] %}badge-red
                             {% else %}badge-blue{% endif %}">
                             {{ traveler.status }}
                         </span>

@@ -381,6 +381,23 @@ class Phase10FullLogicLockTests(unittest.TestCase):
 
     # ── 12. Booking rejects cancelled trip ────────────────────────────────────
 
+    def test_archived_or_inactive_traveler_routes_to_review_without_sales_flow(self) -> None:
+        """Archived/inactive traveler should trigger review instead of normal sales."""
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            _insert_traveler(conn, "TR00041", "Archived Traveler", "20:4440000002", status="Archived")
+
+        resolution = self.svc.resolve_identity(
+            full_name="Archived Traveler",
+            raw_phone="4440000002",
+            country_code="20",
+        )
+        self.assertEqual(resolution.match_status, "single_match")
+        self.assertTrue(resolution.handoff_required)
+        self.assertEqual(resolution.handoff_reason, "archived_traveler")
+        self.assertEqual(resolution.actions, ["human_review_archived_traveler"])
+
+
     def test_create_booking_draft_rejects_cancelled_trip(self) -> None:
         """create_booking_draft must raise for a Cancelled trip."""
         with closing(sqlite3.connect(self.db_path)) as conn:

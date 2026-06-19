@@ -201,7 +201,7 @@ class Phase3BookingWriteThroughTests(unittest.TestCase):
 
     def test_agent_booking_writes_system_db_ui_tables_and_sheet(self) -> None:
         db_path = self.tmp_path / "system.db"
-        with closing(sqlite3.connect(db_path)) as connection:
+        with closing(sqlite3.connect(str(db_path))) as connection:
             create_operational_tables(connection)
             connection.execute(
                 """
@@ -262,7 +262,7 @@ class Phase3BookingWriteThroughTests(unittest.TestCase):
         self.assertEqual(session["stage"], "booking_created")
         self.assertIsNotNone(session["bookingResult"])
 
-        with closing(sqlite3.connect(db_path)) as connection:
+        with closing(sqlite3.connect(str(db_path))) as connection:
             connection.row_factory = sqlite3.Row
             lead = connection.execute("SELECT * FROM leads").fetchone()
             booking = connection.execute("SELECT * FROM trip_bookings").fetchone()

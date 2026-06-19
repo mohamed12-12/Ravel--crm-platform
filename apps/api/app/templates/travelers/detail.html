@@ -5,7 +5,7 @@
 {% block topbar_actions %}
 <div style="display:flex;gap:0.75rem">
     <button onclick="markInactive('{{ traveler.traveler_id }}')" class="btn btn-ghost btn-sm" style="color:var(--red);border-color:rgba(239,68,68,0.3)">
-        Mark Inactive
+        Archive / Inactivate
     </button>
     <button onclick="openModal('editModal')" class="btn btn-primary btn-sm">
         Edit Profile
@@ -23,7 +23,7 @@
             <div style="flex:1;min-width:240px">
                 <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:0.25rem">
                     <h1 style="font-size:1.6rem;font-weight:800;color:var(--text-main);margin:0">{{ traveler.full_name }}</h1>
-                    <span class="badge {% if traveler.status == 'VIP' %}badge-purple{% elif traveler.status == 'Repeat' %}badge-green{% else %}badge-blue{% endif %}">
+                    <span class="badge {% if traveler.status == 'VIP' %}badge-purple{% elif traveler.status == 'Repeat' %}badge-green{% elif traveler.status in ['Inactive', 'Archived', 'Blocked', 'Blacklisted'] %}badge-red{% else %}badge-blue{% endif %}">
                         {{ traveler.status or 'Active' }}
                     </span>
                     <span class="mono" style="color:var(--text-muted);font-size:0.85rem">ID: {{ traveler.traveler_id }}</span>
@@ -377,6 +377,7 @@
     <div class="modal-box" style="max-width:760px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem;padding-bottom:0.75rem;border-bottom:1px solid var(--border)">
             <h3 style="font-size:1.25rem;font-weight:800;color:var(--text-main);margin:0">Edit Traveler Profile</h3>
+            <div style="font-size:0.8rem;color:var(--text-muted);margin-left:auto;padding-right:1rem">Traveler ID stays fixed: <strong class="mono">{{ traveler.traveler_id }}</strong></div>
             <button onclick="closeModal('editModal')" style="background:transparent;border:none;color:var(--text-muted);font-size:1.25rem;cursor:pointer">✕</button>
         </div>
 
@@ -408,6 +409,7 @@
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
                 <div>
                     <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">WhatsApp / Phone</label>
+                    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.35rem">Phone updates are normalized and checked against other traveler identities before saving.</div>
                     <input type="text" id="edit_whatsapp_raw" value="{{ traveler.whatsapp_raw or '' }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
                 </div>
                 <div>
