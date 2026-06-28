@@ -3,10 +3,18 @@ from flask import Blueprint, render_template, request, jsonify
 from app.extensions import db, socketio
 from app.models.handoff import HandoffQueue
 from app.models.traveler import Traveler
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 handoffs_bp = Blueprint('handoffs', __name__, url_prefix='/admin/handoffs')
+
+
+def _display_handoff_notes(raw_notes: str | None) -> str:
+    text = str(raw_notes or "").strip()
+    if not text:
+        return ""
+    lines = [line for line in text.splitlines() if not line.startswith("handoff_context=")]
+    return "\n".join(line for line in lines).strip()
 
 @handoffs_bp.route('/')
 def index():
@@ -27,6 +35,7 @@ def index():
         data = h.to_dict()
         data['traveler_name'] = name or "Unknown Traveler"
         data['traveler_phone'] = phone or "N/A"
+        data['display_notes'] = _display_handoff_notes(data.get('notes'))
         
         # Standardize status for the board
         status = h.status
@@ -64,7 +73,7 @@ def create_handoff():
         priority=data.get('priority', 'Medium'),
         channel=data.get('channel', 'WhatsApp'),
         status='Pending',
-        created_at=datetime.utcnow()
+        created_at=datetime.now(timezone.utc)
     )
     
     db.session.add(handoff)
@@ -87,7 +96,7 @@ def create_handoff():
 
 @handoffs_bp.route('/<id>', methods=['PUT'])
 def update_handoff(id):
-    handoff = HandoffQueue.query.get_or_404(id)
+    handoff = db.get_or_404(HandoffQueue, id)
     data = request.json
     
     if not data:

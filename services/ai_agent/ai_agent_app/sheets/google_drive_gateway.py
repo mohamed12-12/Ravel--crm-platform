@@ -120,6 +120,9 @@ class GoogleDriveWorkbookGateway(ExcelSheetGateway):
         flight_option: str = "",
         date_option: str = "",
         currency: str = "",
+        passport_required: bool = False,
+        passport_status: str = "",
+        group_size: int | str = 1,
     ) -> dict[str, Any]:
         with self._lock:
             self._download_from_drive(destination=self.runtime_path)
@@ -135,6 +138,9 @@ class GoogleDriveWorkbookGateway(ExcelSheetGateway):
                 flight_option=flight_option,
                 date_option=date_option,
                 currency=currency,
+                passport_required=passport_required,
+                passport_status=passport_status,
+                group_size=group_size,
             )
             self._upload_to_drive(source=self.runtime_path)
         return result

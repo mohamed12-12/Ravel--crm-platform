@@ -135,6 +135,37 @@ class Phase4TravelerManagementTests(unittest.TestCase):
 
         self.assertTrue(db_path.exists())
 
+    def test_database_max_id_wins_over_higher_workbook_ids(self) -> None:
+        app, db_path, workbook_path = self._build_app()
+
+        wb = load_workbook(workbook_path)
+        try:
+            ws = wb["Travelers"]
+            ws.append(["TR00909", "Active", "Workbook Higher"] + [None] * 24)
+            wb.save(workbook_path)
+        finally:
+            wb.close()
+
+        with app.app_context():
+            self.db.session.add(
+                self.Traveler(traveler_id="TR00585", full_name="DB Max", status="Active")
+            )
+            self.db.session.commit()
+
+        self.assertEqual(self.service.next_traveler_id(), "TR00586")
+
+        created = self.service.create_traveler(
+            full_name="Database Priority",
+            raw_phone="01022223333",
+            country_code="20",
+        )
+        self.assertEqual(created["traveler_id"], "TR00586")
+
+        with app.app_context():
+            traveler = self.Traveler.query.filter_by(traveler_id="TR00586").first()
+            self.assertIsNotNone(traveler)
+            self.assertEqual(traveler.full_name, "Database Priority")
+
     def test_detail_shows_related_records_and_update_syncs_back(self) -> None:
         app, db_path, workbook_path = self._build_app()
         client = app.test_client()
@@ -179,7 +210,7 @@ class Phase4TravelerManagementTests(unittest.TestCase):
             )
             interaction = self.Interaction(
                 interaction_id="INT20001",
-                timestamp=__import__("datetime").datetime.utcnow(),
+                timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
                 channel="WhatsApp",
                 customer_name="Profile Traveler",
                 raw_phone="1000000000",
@@ -260,7 +291,7 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         explicit_service.sync_record_to_sheet("Travelers", "TR00200")
 
         with app.app_context():
-            traveler = self.Traveler.query.get("TR00200")
+            traveler = self.db.session.get(self.Traveler, "TR00200")
             self.assertIsNotNone(traveler)
             self.assertEqual(traveler.full_name, "Profile Traveler Updated")
             self.assertEqual(traveler.status, "VIP")
@@ -395,7 +426,7 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         self.assertIn("already belongs to traveler TR01001", payload["error"])
 
         with app.app_context():
-            traveler = self.Traveler.query.get("TR01000")
+            traveler = self.db.session.get(self.Traveler, "TR01000")
             self.assertIsNotNone(traveler)
             self.assertEqual(traveler.traveler_id, "TR01000")
             self.assertEqual(traveler.full_name, "Primary Traveler")

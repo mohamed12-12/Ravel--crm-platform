@@ -63,6 +63,10 @@ def create_operational_tables(connection: sqlite3.Connection) -> None:
             draft_holds_single INTEGER,
             draft_holds_double INTEGER,
             draft_holds_triple INTEGER,
+            boys_double INTEGER,
+            girls_double INTEGER,
+            boys_triple INTEGER,
+            girls_triple INTEGER,
             public_price TEXT,
             public_description TEXT,
             sales_notes TEXT
@@ -83,6 +87,7 @@ def create_operational_tables(connection: sqlite3.Connection) -> None:
             lead_source TEXT,
             channel TEXT,
             preferred_trip_type TEXT,
+            group_size INTEGER DEFAULT 1,
             interested_trip_ids TEXT,
             suggested_trip_ids TEXT,
             priority TEXT,
@@ -139,6 +144,7 @@ def create_operational_tables(connection: sqlite3.Connection) -> None:
             interaction_id TEXT,
             alert_id TEXT,
             payment_status TEXT,
+            group_size INTEGER DEFAULT 1,
             booking_notes TEXT
         );
         """
@@ -259,7 +265,7 @@ class Phase3BookingWriteThroughTests(unittest.TestCase):
         client.post(f"/api/session/{session_id}/message", json={"text": "no"})
         session = client.post(f"/api/session/{session_id}/message", json={"text": "EGP"}).get_json()["session"]
 
-        self.assertEqual(session["stage"], "booking_created")
+        self.assertEqual(session["stage"], "completed")
         self.assertIsNotNone(session["bookingResult"])
 
         with closing(sqlite3.connect(str(db_path))) as connection:

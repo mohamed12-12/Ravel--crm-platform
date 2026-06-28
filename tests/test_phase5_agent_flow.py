@@ -8,6 +8,8 @@ from services.ai_agent.ai_agent_app.agent.session_flow import SessionFlowManager
 class MockGateway:
     def __init__(self, *, handoff_required: bool = False, existing_traveler: dict | None = None):
         self.handoff_required = handoff_required
+        self.created_handoffs: list[dict] = []
+        self.last_booking_payload: dict | None = None
         self.existing_traveler = existing_traveler or {
             "traveler_id": "TR001",
             "full_name": "Amina Hassan",
@@ -59,6 +61,7 @@ class MockGateway:
         }
 
     def create_booking(self, **kwargs):
+        self.last_booking_payload = kwargs
         return {
             "booking_id": "B-100",
             "booking_status": "Draft",
@@ -74,6 +77,24 @@ class MockGateway:
 
     def traveler_has_completed_trips(self, *_args, **_kwargs):
         return False
+
+    def create_handoff_case(self, **kwargs):
+        self.created_handoffs.append(kwargs)
+        return {"handoff_id": "H-00000001", "priority": kwargs.get("priority", "High"), "reason_text": kwargs.get("reason_text", "")}
+
+    def get_visa_requirement(self, destination: str, nationality: str = ""):
+        if destination.lower() == "turkey":
+            return {
+                "required": False,
+                "summary": "Egyptian passport holders do not need a visa for short tourist visits to Turkey.",
+                "disclaimer": "Always verify with the official embassy or consulate before travel.",
+            }
+        return {
+            "required": None,
+            "summary": "I need the traveler's nationality or passport country to check visa rules accurately.",
+            "disclaimer": "Always verify with the official embassy or consulate before travel.",
+            "needs_nationality": True,
+        }
 
 
 class BlockingGateway(MockGateway):
@@ -124,7 +145,7 @@ class ConflictGateway(MockGateway):
 
 class Phase5AgentFlowTests(unittest.TestCase):
     def setUp(self):
-        self.manager = SessionFlowManager(default_country_code="20")
+        self.manager = SessionFlowManager(default_country_code="20", handoff_keywords="human,agent,support")
         self.gateway = MockGateway()
         self.session = self.manager.create_session(self.gateway)
 
@@ -133,7 +154,7 @@ class Phase5AgentFlowTests(unittest.TestCase):
         if session.stage == "awaiting_country_code":
             self.manager.handle_message(session, "20", gateway)
 
-    def _drive_to_booking_confirmation(self, session, gateway):
+    def _drive_to_booking_completion(self, session, gateway):
         self._drive_phone(session, gateway)
         self.manager.handle_message(session, "local", gateway)
         self.manager.handle_message(session, "1", gateway)
@@ -141,16 +162,14 @@ class Phase5AgentFlowTests(unittest.TestCase):
         self.manager.handle_message(session, "With flights", gateway)
         self.manager.handle_message(session, "EGP", gateway)
 
-    def test_happy_path_completes_after_booking_confirmation(self):
-        self._drive_to_booking_confirmation(self.session, self.gateway)
-        self.assertEqual(self.session.stage, "booking_created")
-        self.assertEqual(self.session.booking_status, "Draft")
-        self.manager.handle_message(self.session, "yes", self.gateway)
+    def test_happy_path_completes_after_booking_draft_creation(self):
+        self._drive_to_booking_completion(self.session, self.gateway)
         self.assertEqual(self.session.stage, "completed")
+        self.assertEqual(self.session.booking_status, "Draft")
         self.assertEqual(self.session.handoff_state, "completed")
 
     def test_returning_traveler_preserves_identity(self):
-        self._drive_to_booking_confirmation(self.session, self.gateway)
+        self._drive_to_booking_completion(self.session, self.gateway)
         self.assertEqual(self.session.final_result["traveler"]["traveler_id"], "TR001")
         self.assertIsNone(self.session.final_result["write_result"]["created_traveler"])
 
@@ -161,6 +180,19 @@ class Phase5AgentFlowTests(unittest.TestCase):
         self.assertEqual(self.session.customer_name, "Amina Hassan")
         self.assertIn("Traveler ID: TR001", self.session.messages[-2]["text"])
         self.assertIn("Status: VIP", self.session.messages[-2]["text"])
+        self.assertIn("VIP discount", self.session.messages[-2]["text"])
+
+    def test_awaiting_phone_clarification_does_not_switch_to_country_code(self):
+        self.manager.handle_message(self.session, "what?", self.gateway)
+        self.assertEqual(self.session.stage, "awaiting_phone")
+        self.assertIn("WhatsApp number", self.session.messages[-1]["text"])
+
+    def test_awaiting_country_code_clarification_stays_on_same_step(self):
+        self.manager.handle_message(self.session, "+999123456789", self.gateway)
+        self.assertEqual(self.session.stage, "awaiting_country_code")
+        self.manager.handle_message(self.session, "what?", self.gateway)
+        self.assertEqual(self.session.stage, "awaiting_country_code")
+        self.assertIn("country code", self.session.messages[-1]["text"].lower())
 
     def test_new_traveler_goes_to_intake_before_trip_questions(self):
         gateway = MockGateway()
@@ -217,13 +249,12 @@ class Phase5AgentFlowTests(unittest.TestCase):
         self.manager.handle_message(self.session, "+201012345678", self.gateway)
         self.assertNotEqual(self.session.stage, "completed")
 
-    def test_session_does_not_close_before_booking_confirmation(self):
-        self._drive_to_booking_confirmation(self.session, self.gateway)
-        self.assertEqual(self.session.stage, "booking_created")
-        self.assertNotEqual(self.session.stage, "completed")
+    def test_session_closes_after_booking_draft_creation(self):
+        self._drive_to_booking_completion(self.session, self.gateway)
+        self.assertEqual(self.session.stage, "completed")
 
     def test_lead_and_booking_stages_preserve_traveler_identity(self):
-        self._drive_to_booking_confirmation(self.session, self.gateway)
+        self._drive_to_booking_completion(self.session, self.gateway)
         self.assertEqual(self.session.final_result["traveler"]["traveler_id"], "TR001")
         self.assertEqual(self.session.final_result["write_result"]["lead_update"]["lead_id"], "LD001")
         self.assertEqual(self.session.selected_trip_id, "RT-LOC-26-001")
@@ -252,6 +283,48 @@ class Phase5AgentFlowTests(unittest.TestCase):
         self.assertIn("Double boys room", prompt)
         self.assertIn("Double girls room", prompt)
         self.assertIn("Triple boys room", prompt)
+        self.assertIn("group", prompt.lower())
+
+    def test_group_booking_message_captures_group_size_before_room_choice(self):
+        self._drive_phone(self.session, self.gateway)
+        self.manager.handle_message(self.session, "local", self.gateway)
+        self.manager.handle_message(self.session, "1", self.gateway)
+        self.manager.handle_message(self.session, "we are 5 travelers", self.gateway)
+        self.assertEqual(self.session.group_size, 5)
+        self.assertEqual(self.session.stage, "awaiting_room_type")
+        self.assertIn("group reservation for 5 travelers", self.session.messages[-1]["text"].lower())
+
+    def test_group_size_is_written_into_booking_payload(self):
+        self._drive_phone(self.session, self.gateway)
+        self.manager.handle_message(self.session, "local", self.gateway)
+        self.manager.handle_message(self.session, "1", self.gateway)
+        self.manager.handle_message(self.session, "group booking", self.gateway)
+        self.assertEqual(self.session.stage, "awaiting_group_size")
+        self.manager.handle_message(self.session, "5", self.gateway)
+        self.manager.handle_message(self.session, "double boys room", self.gateway)
+        self.manager.handle_message(self.session, "With flights", self.gateway)
+        self.manager.handle_message(self.session, "EGP", self.gateway)
+        self.assertEqual(self.gateway.last_booking_payload["group_size"], 5)
+
+    def test_flight_prompt_mentions_without_flights_default(self):
+        self._drive_phone(self.session, self.gateway)
+        self.manager.handle_message(self.session, "local", self.gateway)
+        self.manager.handle_message(self.session, "1", self.gateway)
+        self.manager.handle_message(self.session, "single room", self.gateway)
+        self.assertIn("without flights by default", self.session.messages[-1]["text"].lower())
+
+    def test_customer_can_request_human_handoff(self):
+        self._drive_phone(self.session, self.gateway)
+        self.manager.handle_message(self.session, "I need a human agent", self.gateway)
+        self.assertEqual(self.session.stage, "handed_off")
+        self.assertEqual(self.session.handoff_state, "handed_off")
+        self.assertEqual(len(self.gateway.created_handoffs), 1)
+
+    def test_visa_intent_uses_gateway_and_keeps_session_open(self):
+        self.session.nationality = "Egyptian"
+        self.manager.handle_message(self.session, "Do I need a visa for Turkey?", self.gateway)
+        self.assertEqual(self.session.stage, "awaiting_phone")
+        self.assertIn("turkey", self.session.messages[-1]["text"].lower())
 
 
 if __name__ == "__main__":

@@ -347,8 +347,8 @@ class TestWebsiteIntent(unittest.TestCase):
         )
 
 
-class TestPassportCollection(unittest.TestCase):
-    """International trips should trigger passport info collection."""
+class TestSessionCompletionGuards(unittest.TestCase):
+    """Booking paths should close the session after the reservation draft is created."""
 
     def setUp(self):
         self.tmp = Path(".tmp-test-phase11") / uuid.uuid4().hex
@@ -360,7 +360,66 @@ class TestPassportCollection(unittest.TestCase):
         os.environ.update(self.original_env)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_international_trip_triggers_passport_collection(self):
+    def test_manual_booking_endpoint_marks_session_completed_and_is_idempotent(self):
+        client, _ = _make_app_with_db(self.tmp)
+        sess = client.post("/api/session", json={}).get_json()["session"]
+        session_id = sess["id"]
+
+        sess = client.post(
+            f"/api/session/{session_id}/message",
+            json={"text": "01031313131"},
+        ).get_json()["session"]
+        if sess["stage"] == "awaiting_intake":
+            sess = client.post(
+                f"/api/session/{session_id}/intake",
+                json={
+                    "fullName": "Manual Booking Tester",
+                    "birthday": "1994-01-01",
+                    "gender": "Female",
+                    "nationality": "Egypt",
+                    "countryCode": "20",
+                    "rawPhone": "01031313131",
+                },
+            ).get_json()["session"]
+
+        sess = client.post(f"/api/session/{session_id}/message", json={"text": "local"}).get_json()["session"]
+        self.assertEqual(sess["stage"], "awaiting_confirmation")
+        sess = client.post(f"/api/session/{session_id}/message", json={"text": "1"}).get_json()["session"]
+        self.assertEqual(sess["stage"], "awaiting_room_type")
+
+        first = client.post(
+            f"/api/session/{session_id}/book",
+            json={"tripId": "RT-LOC-26-001", "roomType": "Double"},
+        ).get_json()["session"]
+        self.assertEqual(first["stage"], "completed")
+        self.assertEqual(first["handoffState"], "completed")
+        self.assertEqual(first["bookingStatus"], "Draft")
+        self.assertIsNotNone(first["bookingResult"])
+        self.assertEqual(first["stats"]["bookingDraftCount"], 1)
+
+        second = client.post(
+            f"/api/session/{session_id}/book",
+            json={"tripId": "RT-LOC-26-001", "roomType": "Double"},
+        ).get_json()["session"]
+        self.assertEqual(second["stage"], "completed")
+        self.assertEqual(second["bookingResult"]["booking_id"], first["bookingResult"]["booking_id"])
+        self.assertEqual(second["stats"]["bookingDraftCount"], 1)
+
+
+class TestPassportCollection(unittest.TestCase):
+    """International trips should require passport attachment upload."""
+
+    def setUp(self):
+        self.tmp = Path(".tmp-test-phase11") / uuid.uuid4().hex
+        self.tmp.mkdir(parents=True, exist_ok=True)
+        self.original_env = dict(os.environ)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.original_env)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_international_trip_triggers_passport_attachment_stage(self):
         client, _ = _make_app_with_db(self.tmp)
         # New customer intake
         sess = client.post("/api/session", json={}).get_json()["session"]
@@ -386,9 +445,9 @@ class TestPassportCollection(unittest.TestCase):
         sess = client.post(
             f"/api/session/{sess['id']}/message", json={"text": "1"}
         ).get_json()["session"]
-        self.assertEqual(sess["stage"], "awaiting_passport_name")
+        self.assertEqual(sess["stage"], "awaiting_passport_upload")
 
-    def test_passport_fields_collected_in_order(self):
+    def test_passport_upload_is_required_before_room_selection(self):
         client, _ = _make_app_with_db(self.tmp)
         sess = client.post("/api/session", json={}).get_json()["session"]
         sess = client.post(
@@ -412,36 +471,26 @@ class TestPassportCollection(unittest.TestCase):
         sess = client.post(
             f"/api/session/{sess['id']}/message", json={"text": "1"}
         ).get_json()["session"]
-        self.assertEqual(sess["stage"], "awaiting_passport_name")
-
-        sess = client.post(
-            f"/api/session/{sess['id']}/message", json={"text": "Hisham Mohamed Salah"}
-        ).get_json()["session"]
-        self.assertEqual(sess["stage"], "awaiting_passport_number")
-        self.assertEqual(sess["passportName"], "Hisham Mohamed Salah")
-
-        sess = client.post(
-            f"/api/session/{sess['id']}/message", json={"text": "A12345678"}
-        ).get_json()["session"]
-        self.assertEqual(sess["stage"], "awaiting_passport_expiry")
-        self.assertEqual(sess["passportNumber"], "A12345678")
-
-        sess = client.post(
-            f"/api/session/{sess['id']}/message", json={"text": "2028-06-30"}
-        ).get_json()["session"]
-        self.assertEqual(sess["stage"], "awaiting_passport_nationality")
-        self.assertEqual(sess["passportExpiry"], "2028-06-30")
-
-        sess = client.post(
-            f"/api/session/{sess['id']}/message", json={"text": "Egyptian"}
-        ).get_json()["session"]
         self.assertEqual(sess["stage"], "awaiting_passport_upload")
-        self.assertEqual(sess["passportNationality"], "Egyptian")
 
         sess = client.post(
             f"/api/session/{sess['id']}/message", json={"text": "skip"}
         ).get_json()["session"]
-        # After skipping upload, should move to room type
+        self.assertEqual(sess["stage"], "awaiting_passport_upload")
+        self.assertIn("passport", sess["messages"][-1]["text"].lower())
+
+        resp = client.post(
+            f"/api/session/{sess['id']}/passport_attachment",
+            data={"file": (io.BytesIO(b"passport-bytes"), "passport.pdf")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(resp.status_code, 200)
+        sess = resp.get_json()["session"]
+        self.assertEqual(sess["stage"], "awaiting_passport_upload")
+
+        sess = client.post(
+            f"/api/session/{sess['id']}/message", json={"text": "done"}
+        ).get_json()["session"]
         self.assertEqual(sess["stage"], "awaiting_room_type")
 
     def test_passport_upload_endpoint_saves_metadata(self):
@@ -462,6 +511,93 @@ class TestPassportCollection(unittest.TestCase):
             data = resp.get_json()
             self.assertIn("ref", data)
             self.assertTrue(data["ok"])
+
+    def test_passport_data_persists_to_traveler_profile_and_documents(self):
+        client, _ = _make_app_with_db(self.tmp)
+        sess = client.post("/api/session", json={}).get_json()["session"]
+        sess = client.post(
+            f"/api/session/{sess['id']}/message", json={"text": "01077771234"}
+        ).get_json()["session"]
+        if sess["stage"] == "awaiting_intake":
+            sess = client.post(
+                f"/api/session/{sess['id']}/intake",
+                json={
+                    "fullName": "Passport Persisted",
+                    "birthday": "1991-04-12",
+                    "gender": "Female",
+                    "nationality": "Egypt",
+                    "countryCode": "20",
+                    "rawPhone": "01077771234",
+                },
+            ).get_json()["session"]
+
+        sess = client.post(
+            f"/api/session/{sess['id']}/message", json={"text": "international"}
+        ).get_json()["session"]
+        sess = client.post(
+            f"/api/session/{sess['id']}/message", json={"text": "1"}
+        ).get_json()["session"]
+        traveler_id = sess["finalResult"]["traveler"]["traveler_id"]
+        self.assertEqual(sess["stage"], "awaiting_passport_upload")
+
+        with closing(sqlite3.connect(os.environ["RAHMA_SYSTEM_DB_PATH"])) as conn:
+            traveler_row = conn.execute(
+                """
+                SELECT passport_name, passport_number, passport_expiry,
+                       passport_nationality, COALESCE(passport_attachment_ref, '')
+                FROM travelers
+                WHERE traveler_id = ?
+                """,
+                (traveler_id,),
+            ).fetchone()
+            self.assertIn(traveler_row[0], {"", None})
+            self.assertIn(traveler_row[1], {"", None})
+            self.assertIn(traveler_row[2], {"", None})
+            self.assertIn(traveler_row[3], {"", None})
+            self.assertEqual(traveler_row[4], "")
+
+        fake_image = (io.BytesIO(b"REALJPEGDATA"), "passport.jpg")
+        resp = client.post(
+            f"/api/session/{sess['id']}/passport_attachment",
+            data={"file": fake_image},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["passportSave"]["traveler_id"], traveler_id)
+
+        with closing(sqlite3.connect(os.environ["RAHMA_SYSTEM_DB_PATH"])) as conn:
+            traveler_row = conn.execute(
+                """
+                SELECT passport_name, passport_number, passport_expiry,
+                       passport_nationality, passport_attachment_ref
+                FROM travelers
+                WHERE traveler_id = ?
+                """,
+                (traveler_id,),
+            ).fetchone()
+            self.assertIn(traveler_row[0], {"", None})
+            self.assertIn(traveler_row[1], {"", None})
+            self.assertIn(traveler_row[2], {"", None})
+            self.assertIn(traveler_row[3], {"", None})
+            self.assertTrue(traveler_row[4].endswith("passport.jpg"))
+
+            document_row = conn.execute(
+                """
+                SELECT category, file_name, passport_full_name, passport_number
+                FROM traveler_documents
+                WHERE traveler_id = ?
+                ORDER BY document_id DESC
+                LIMIT 1
+                """,
+                (traveler_id,),
+            ).fetchone()
+            self.assertIsNotNone(document_row)
+            self.assertEqual(document_row[0], "passport")
+            self.assertEqual(document_row[1], "passport.jpg")
+            self.assertIn(document_row[2], {"", None})
+            self.assertIn(document_row[3], {"", None})
 
 
 class TestVisaRequirement(unittest.TestCase):
@@ -505,6 +641,36 @@ class TestVisaRequirement(unittest.TestCase):
         self.assertIsNone(data["required"])
         self.assertIn("disclaimer", data)
         self.assertEqual(data["source"], "unknown")
+        self.assertTrue(data.get("handoff_recommended"))
+
+    def test_unknown_destination_with_nationality_can_use_web_fallback(self):
+        client, app = _make_app_with_db(self.tmp)
+        gateway = app.config["SHEET_GATEWAY"]
+        gateway._lookup_visa_requirement_on_web = lambda destination, nationality, disclaimer: {  # type: ignore[method-assign]
+            "required": True,
+            "destination": destination,
+            "nationality": nationality,
+            "notes": "Official source says a visa is required.",
+            "summary": "Official source says a visa is required.",
+            "disclaimer": disclaimer,
+            "source": "web",
+            "source_mode": "web",
+            "sources": [{"url": "https://example.gov/visa", "label": "example.gov"}],
+        }
+        resp = client.get("/api/visa/Schengen?nationality=Egyptian")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertEqual(data["source"], "web")
+        self.assertEqual(data["nationality"], "Egyptian")
+        self.assertEqual(data["required"], True)
+        self.assertFalse(data.get("handoff_recommended", True))
+
+    def test_unknown_destination_without_nationality_requests_nationality(self):
+        client, _ = _make_app_with_db(self.tmp)
+        resp = client.get("/api/visa/Schengen")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertTrue(data.get("needs_nationality"))
         self.assertTrue(data.get("handoff_recommended"))
 
     def test_visa_always_has_disclaimer(self):
@@ -565,6 +731,64 @@ class TestDiscountFromTripNotes(unittest.TestCase):
             # Unknown trip should return empty
             empty = gw.get_trip_discount_notes("RT-UNKNOWN-000")
             self.assertEqual(empty, "")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+            os.environ.pop("RAHMA_SYSTEM_DB_PATH", None)
+
+    def test_get_trip_discount_notes_prefers_system_db_sales_notes(self):
+        from services.ai_agent.ai_agent_app.sheets.excel_gateway import ExcelSheetGateway
+        from services.ai_agent.ai_agent_app.config import load_settings
+        from dataclasses import replace as dc_replace
+
+        tmp = Path(".tmp-test-workdirs") / f"phase11-db-discount-{uuid.uuid4().hex}"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            wb = Workbook()
+            wb.active.title = "Travelers"
+            wb.active.append(["Status", "Traveler ID", "Full Name"])
+            trips_ws = wb.create_sheet("Trips")
+            trips_ws.append([])
+            trips_ws["A2"] = "Trip ID"
+            trips_ws["B2"] = "Trip Name"
+            wb.create_sheet("Interactions").append(["Interaction ID"])
+            wb.create_sheet("Trip Bookings")["A2"] = "Booking ID"
+            wb.save(tmp / "source.xlsx")
+            shutil.copy(tmp / "source.xlsx", tmp / "runtime.xlsx")
+
+            system_db = tmp / "system.db"
+            con = sqlite3.connect(system_db)
+            try:
+                con.execute(
+                    """
+                    CREATE TABLE trips (
+                        trip_id TEXT PRIMARY KEY,
+                        sales_notes TEXT
+                    )
+                    """
+                )
+                con.execute(
+                    "INSERT INTO trips (trip_id, sales_notes) VALUES (?, ?)",
+                    (
+                        "RT-LOC-88-001",
+                        "VIP_DISCOUNT: 12% VIP loyalty discount\nGROUP_DISCOUNT: 10% off for group reservations\nGROUP_THRESHOLD: 5",
+                    ),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            os.environ["RAHMA_SYSTEM_DB_PATH"] = str(system_db)
+            settings = load_settings()
+            settings = dc_replace(
+                settings,
+                excel_source_workbook=tmp / "source.xlsx",
+                excel_runtime_workbook=tmp / "runtime.xlsx",
+                sheet_backend="excel",
+            )
+            gw = ExcelSheetGateway(settings)
+            notes = gw.get_trip_discount_notes("RT-LOC-88-001")
+            self.assertIn("VIP discount", notes)
+            self.assertIn("Group discount", notes)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
             os.environ.pop("RAHMA_SYSTEM_DB_PATH", None)

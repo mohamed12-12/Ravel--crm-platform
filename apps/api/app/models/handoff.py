@@ -1,7 +1,11 @@
 # app/models/handoff.py
 from app.extensions import db
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 class HandoffQueue(db.Model):
     __tablename__ = 'handoff_queue'
@@ -10,7 +14,7 @@ class HandoffQueue(db.Model):
     handoff_id = db.Column(db.String(50), primary_key=True)
     
     # Meta
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=_utc_now)
     
     # Keys
     lead_id = db.Column(db.String(50), db.ForeignKey('leads.lead_id'))
@@ -49,7 +53,7 @@ class HandoffQueue(db.Model):
 
         return cls(
             handoff_id=clean(row.get("Handoff ID")),
-            created_at=to_datetime(row.get("Created At")) or datetime.utcnow(),
+            created_at=to_datetime(row.get("Created At")) or _utc_now(),
             lead_id=clean(row.get("Lead ID")),
             traveler_id=clean(row.get("Traveler ID")),
             trip_id=clean(row.get("Trip ID")),

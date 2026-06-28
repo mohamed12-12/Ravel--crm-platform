@@ -1,7 +1,11 @@
 # app/models/lead.py
 from app.extensions import db
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 import pandas as pd
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 class Lead(db.Model):
     __tablename__ = 'leads'
@@ -10,8 +14,8 @@ class Lead(db.Model):
     lead_id = db.Column(db.String(50), primary_key=True)
     
     # Metadata
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=_utc_now)
+    updated_at = db.Column(db.DateTime, default=_utc_now, onupdate=_utc_now)
     
     # Customer Info
     customer_name = db.Column(db.String(200))
@@ -30,6 +34,7 @@ class Lead(db.Model):
     lead_source = db.Column(db.String(100))
     channel = db.Column(db.String(50))
     preferred_trip_type = db.Column(db.String(50))
+    group_size = db.Column(db.Integer, default=1)
     interested_trip_ids = db.Column(db.Text)
     suggested_trip_ids = db.Column(db.Text)
     priority = db.Column(db.String(50))
@@ -105,8 +110,8 @@ class Lead(db.Model):
 
         return cls(
             lead_id=clean(row.get("Lead ID")),
-            created_at=to_datetime(row.get("Created At")) or datetime.utcnow(),
-            updated_at=to_datetime(row.get("Updated At")) or datetime.utcnow(),
+            created_at=to_datetime(row.get("Created At")) or _utc_now(),
+            updated_at=to_datetime(row.get("Updated At")) or _utc_now(),
             customer_name=clean(row.get("Customer Name")),
             raw_phone=clean(row.get("Raw Phone")),
             integrated_whatsapp=clean(row.get("Integrated WhatsApp")),
@@ -119,6 +124,7 @@ class Lead(db.Model):
             lead_source=clean(row.get("Lead Source")),
             channel=clean(row.get("Channel")),
             preferred_trip_type=clean(row.get("Preferred Trip Type")),
+            group_size=to_int(row.get("Group Size")) or 1,
             interested_trip_ids=clean(row.get("Interested Trip IDs")),
             suggested_trip_ids=clean(row.get("Suggested Trip IDs")),
             priority=clean(row.get("Priority")),
@@ -158,6 +164,7 @@ class Lead(db.Model):
             "lead_source": self.lead_source,
             "channel": self.channel,
             "preferred_trip_type": self.preferred_trip_type,
+            "group_size": self.group_size or 1,
             "interested_trip_ids": self.interested_trip_ids,
             "suggested_trip_ids": self.suggested_trip_ids,
             "priority": self.priority,

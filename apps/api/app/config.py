@@ -21,8 +21,13 @@ REPO_ROOT = SYSTEM_ROOT.parent.parent
 _load_env_file(REPO_ROOT / ".env")
 _load_env_file(SYSTEM_ROOT / ".env")
 
+
+def _default_sqlite_uri() -> str:
+    db_path = (SYSTEM_ROOT / "instance" / "rahma_traveler_dev.db").resolve()
+    return f"sqlite:///{db_path.as_posix()}"
+
 class Config:
-    SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-key-rahma-traveler')
+    SECRET_KEY = os.environ.get('SECRET_KEY', '')
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     # Google Sheets integration
     GOOGLE_SHEET_ID   = os.environ.get('GOOGLE_SHEET_ID', '')
@@ -35,7 +40,7 @@ class DevelopmentConfig(Config):
     # via os.environ *before* calling create_app() and get the correct path.
     @classmethod
     def get_sqlalchemy_uri(cls) -> str:  # type: ignore[override]
-        return os.environ.get('DATABASE_URL', 'sqlite:///rahma_traveler_dev.db')
+        return os.environ.get('DATABASE_URL', _default_sqlite_uri())
 
 
 class ProductionConfig(Config):
@@ -50,3 +55,13 @@ config = {
     'production':  ProductionConfig,
     'default':     DevelopmentConfig
 }
+
+def validate_config(config_name: str) -> list[str]:
+    errors: list[str] = []
+    resolved_config = config.get(config_name, DevelopmentConfig)
+    if config_name == "production" or getattr(resolved_config, "DEBUG", False) is False:
+        if not os.environ.get("SECRET_KEY", "").strip():
+            errors.append("SECRET_KEY is required in production.")
+        if not os.environ.get("GOOGLE_SHEET_ID", "").strip():
+            errors.append("GOOGLE_SHEET_ID is required in production.")
+    return errors

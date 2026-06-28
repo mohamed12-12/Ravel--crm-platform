@@ -3,13 +3,14 @@ import re
 
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash
 from app.models.lead import Lead
+from app.models.trip import Trip
 from app.models.traveler import Traveler
 from app.models.interaction import Interaction
 from app.models.booking_event import BookingEventTrail
 from app.models.handoff import HandoffQueue
 from app.extensions import db, socketio
 from sqlalchemy import or_
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 import uuid
 from services.crm.system_services import UnifiedCRMService
 from services.crm.system_services.phone_normalization import normalize_phone_input
@@ -139,6 +140,12 @@ def index():
     overdue_follow_up_count = Lead.query.filter(Lead.follow_up_due_date < today).count()
     booked_count = Lead.query.filter(Lead.lead_stage.in_(PIPELINE_GROUPS['Booking Draft'])).count()
     blocked_count = Lead.query.filter(Lead.lead_stage.in_(PIPELINE_GROUPS['Handoff Needed'])).count()
+    available_trips = (
+        Trip.query
+        .filter(Trip.sales_status == 'Open')
+        .order_by(Trip.type.asc(), Trip.start_date.asc(), Trip.trip_name.asc())
+        .all()
+    )
     
     analytics = {
         "total": total_count,
@@ -157,6 +164,7 @@ def index():
                            q=q,
                            current_stage=stage,
                            current_priority=priority,
+                           available_trips=available_trips,
                            stages=PIPELINE_STAGES,
                            stage_aliases=PIPELINE_ALIASES,
                            today=today)
@@ -164,8 +172,14 @@ def index():
 
 @leads_bp.route('/<string:lead_id>')
 def detail(lead_id):
-    lead = Lead.query.get_or_404(lead_id)
-    traveler = Traveler.query.get(lead.traveler_id) if lead.traveler_id else None
+    lead = db.get_or_404(Lead, lead_id)
+    traveler = db.session.get(Traveler, lead.traveler_id) if lead.traveler_id else None
+    commercial_context = UnifiedCRMService.resolve_commercial_context(
+        traveler=traveler.to_dict() if traveler else None,
+        trip_type=lead.preferred_trip_type,
+        requested_group_size=lead.group_size or 1,
+        trip_id=(lead.suggested_trip_ids or lead.interested_trip_ids or "").split(",")[0].strip(),
+    )
     interactions = []
     if lead.traveler_id:
         interactions = Interaction.query.filter_by(traveler_id=lead.traveler_id)\
@@ -183,6 +197,7 @@ def detail(lead_id):
     return render_template('leads/detail.html',
                            lead=lead,
                            traveler=traveler,
+                           commercial_context=commercial_context,
                            interactions=interactions,
                            event_trail=event_trail,
                            stages=PIPELINE_STAGES)
@@ -233,6 +248,8 @@ def create():
         manual_lead_stage=lead_stage,
         manual_priority=priority,
         manual_follow_up_due_date=follow_up_due_date,
+        group_size=data.get('group_size', '1'),
+        force_create_new_lead=True,
     )
 
     lead_id = preview["write_result"]["lead_update"]["lead_id"]
@@ -244,55 +261,44 @@ def create():
     if preview.get("handoff_required"):
         traveler_dict = preview.get("traveler") or {}
         traveler_id = traveler_dict.get("traveler_id") if isinstance(traveler_dict, dict) else None
-        handoff_id = f"H-{uuid.uuid4().hex[:8].upper()}"
         reason = preview.get("handoff_reason", "Conflict or blacklist detected during manual lead creation.")
-
-        handoff = HandoffQueue(
-            handoff_id=handoff_id,
+        handoff = service.create_handoff_case(
             lead_id=lead_id,
-            traveler_id=traveler_id,
+            traveler_id=str(traveler_id or ""),
             flow_key="manual_lead",
-            reason=reason,
+            reason_code=reason,
+            reason_text="Conflict or blacklist detected during manual lead creation.",
             priority="Critical" if reason == "blacklisted_customer" else "High",
             channel=channel,
-            status='Pending',
-            created_at=datetime.utcnow(),
+            customer_name=customer_name,
+            customer_summary=notes or customer_name,
+            agent_summary="Manual lead flow requested review.",
+            notes=notes,
+            metadata={
+                "trip_type": preferred_trip_type,
+                "trip_id": interested_trip_ids,
+                "group_size": data.get('group_size', '1'),
+                "raw_phone": raw_phone,
+            },
         )
-
-        # Mark lead in DB session
-        lead = Lead.query.get(lead_id)
-        if lead:
-            lead.handoff_required = True
-            lead.handoff_id = handoff_id
-            if reason == "blacklisted_customer":
-                lead.lead_stage = "Blocked"
-                lead.priority = "Critical"
-            else:
-                lead.lead_stage = "Needs Review"
-                lead.priority = "High"
-
-        db.session.add(handoff)
-        db.session.commit()
-        try:
-            service.sync_record_to_sheet("Handoff Queue", handoff_id)
-        except Exception:
-            pass
+        handoff_id = handoff["handoff_id"]
+        db.session.expire_all()
 
         socketio.emit('new_handoff', {
             'handoff_id': handoff_id,
             'traveler_name': customer_name,
-            'reason': reason,
-            'priority': handoff.priority,
-            'created_at': handoff.created_at.isoformat(),
+            'reason': handoff["reason_text"],
+            'priority': handoff["priority"],
+            'created_at': datetime.now(timezone.utc).isoformat(),
         })
-        flash(f"Lead created with Handoff Required ({reason}). Marked for review.", 'warning')
+        flash(f"Lead created with Handoff Required. {handoff['reason_text']}", 'warning')
     else:
         # Retrieve traveler info to report status
         traveler_dict = preview.get("traveler") or preview.get("write_result", {}).get("created_traveler") or {}
         traveler_id = traveler_dict.get("traveler_id")
         t_status = "Active"
         if traveler_id:
-            db_traveler = Traveler.query.get(traveler_id)
+            db_traveler = db.session.get(Traveler, traveler_id)
             if db_traveler:
                 t_status = db_traveler.status
         
@@ -307,7 +313,7 @@ def update(lead_id):
     if method_override == 'DELETE':
         return delete(lead_id)
 
-    lead = Lead.query.get_or_404(lead_id)
+    lead = db.get_or_404(Lead, lead_id)
     data = request.form.to_dict()
 
     def to_date(v):
@@ -367,7 +373,7 @@ def update(lead_id):
         lead.current_step = data.get('current_step')
     lead.follow_up_status = data.get('follow_up_status', lead.follow_up_status)
     lead.follow_up_due_date = to_date(data.get('follow_up_due_date')) or lead.follow_up_due_date
-    lead.updated_at = datetime.utcnow()
+    lead.updated_at = datetime.now(timezone.utc)
     if data.get('booking_id'):
         lead.booking_id = data.get('booking_id')
 
@@ -377,9 +383,9 @@ def update(lead_id):
 
 
 def delete(lead_id):
-    lead = Lead.query.get_or_404(lead_id)
+    lead = db.get_or_404(Lead, lead_id)
     lead.lead_stage = 'Lost'
-    lead.updated_at = datetime.utcnow()
+    lead.updated_at = datetime.now(timezone.utc)
     db.session.commit()
     flash(f"Lead marked as Lost.", 'info')
     return redirect(url_for('leads.index'))
@@ -388,7 +394,7 @@ def delete(lead_id):
 @leads_bp.route('/<string:lead_id>/advance', methods=['POST'])
 def advance_stage(lead_id):
     """Advance lead to next stage logically based on pipeline groups."""
-    lead = Lead.query.get_or_404(lead_id)
+    lead = db.get_or_404(Lead, lead_id)
     current_stage = _canonical_stage(lead.lead_stage)
     if current_stage not in PIPELINE_TRANSITIONS:
         current_stage = 'New Lead'
@@ -399,7 +405,7 @@ def advance_stage(lead_id):
             break
     if next_stage:
         lead.lead_stage = next_stage
-        lead.updated_at = datetime.utcnow()
+        lead.updated_at = datetime.now(timezone.utc)
         db.session.commit()
     return jsonify({'status': 'ok', 'new_stage': lead.lead_stage})
 
@@ -407,52 +413,39 @@ def advance_stage(lead_id):
 @leads_bp.route('/<string:lead_id>/handoff', methods=['POST'])
 def create_handoff(lead_id):
     """Trigger handoff from a lead."""
-    lead = Lead.query.get_or_404(lead_id)
+    lead = db.get_or_404(Lead, lead_id)
     data = request.get_json() or {}
-    handoff_id = f"H-{uuid.uuid4().hex[:8].upper()}"
-
-    handoff = HandoffQueue(
-        handoff_id=handoff_id,
+    service = UnifiedCRMService()
+    handoff = service.create_handoff_case(
         lead_id=lead_id,
-        traveler_id=lead.traveler_id,
-        flow_key=lead.flow_key,
-        reason=data.get('reason', lead.notes or 'Manual handoff from admin.'),
+        traveler_id=lead.traveler_id or '',
+        trip_id=(lead.interested_trip_ids or lead.suggested_trip_ids or '').split(',')[0].strip(),
+        flow_key=lead.flow_key or 'manual_admin_handoff',
+        reason_code='manual_admin_handoff',
+        reason_text=data.get('reason', lead.notes or 'Manual handoff from admin.'),
         priority=data.get('priority', lead.priority or 'Medium'),
         channel=lead.channel or 'WhatsApp',
-        status='Pending',
-        created_at=datetime.utcnow(),
+        customer_name=lead.customer_name or '',
+        customer_summary=lead.notes or '',
+        agent_summary='Manual handoff from admin UI.',
+        notes=lead.notes or '',
+        metadata={
+            "trip_type": lead.preferred_trip_type or "",
+            "trip_id": (lead.interested_trip_ids or lead.suggested_trip_ids or '').split(',')[0].strip(),
+            "group_size": lead.group_size or 1,
+            "raw_phone": lead.raw_phone or "",
+        },
+        lead_stage_override='Handoff Needed',
     )
-    lead.handoff_required = True
-    lead.handoff_id = handoff_id
-    lead.lead_stage = 'Handoff Needed'
-    db.session.add(handoff)
-    db.session.commit()
-    try:
-        service = UnifiedCRMService()
-        event = service.create_booking_event(
-            event_type='handoff_required',
-            event_label='Handoff required',
-            traveler_id=lead.traveler_id or '',
-            lead_id=lead.lead_id,
-            channel=lead.channel or 'system-ui',
-            actor='system-ui',
-            notes=handoff.reason or '',
-            metadata={'handoff_id': handoff_id, 'priority': handoff.priority},
-        )
-        service.sync_agent_write_to_sheet(
-            traveler_id=lead.traveler_id or '',
-            lead_id=lead.lead_id,
-            event_ids=[event['event_id']],
-        )
-    except Exception:
-        pass
+    handoff_id = handoff["handoff_id"]
+    db.session.expire_all()
 
-    traveler = Traveler.query.get(lead.traveler_id) if lead.traveler_id else None
+    traveler = db.session.get(Traveler, lead.traveler_id) if lead.traveler_id else None
     socketio.emit('new_handoff', {
         'handoff_id': handoff_id,
         'traveler_name': traveler.full_name if traveler else lead.customer_name,
-        'reason': handoff.reason,
-        'priority': handoff.priority,
-        'created_at': handoff.created_at.isoformat(),
+        'reason': handoff["reason_text"],
+        'priority': handoff["priority"],
+        'created_at': datetime.now(timezone.utc).isoformat(),
     })
     return jsonify({'status': 'ok', 'handoff_id': handoff_id})

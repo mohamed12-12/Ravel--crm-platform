@@ -10,6 +10,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session
 
 from services.ai_agent.ai_agent_app.agent import SessionFlowManager
 from services.ai_agent.ai_agent_app.config import Settings, load_settings
+from services.ai_agent.ai_agent_app.conversation_ai import GeminiConversationAI
 from services.ai_agent.ai_agent_app.sheets import ExcelSheetGateway, build_sheet_gateway
 from services.instagram.webhooks import verify_webhook, validate_meta_signature
 from services.ai_agent.ai_agent_app.logger import app_logger, webhook_logger
@@ -55,6 +56,7 @@ def _serialize_session(gateway: ExcelSheetGateway, session) -> dict[str, Any]:
         "selectedTripName": session.selected_trip_name,
         "roomType": session.room_type,
         "roomGroup": session.room_group,
+        "groupSize": session.group_size,
         "roomChoiceLabel": _room_choice_label(session.room_type, session.room_group) if session.room_type else "",
         "leadStatus": session.lead_status,
         "bookingStatus": session.booking_status,
@@ -90,6 +92,7 @@ def create_app(
     settings: Settings | None = None,
 ) -> Flask:
     base_settings = settings or load_settings()
+    using_runtime_overrides = source_workbook is not None or runtime_workbook is not None
     if source_workbook is not None or runtime_workbook is not None:
         # Test and local override mode: operate purely on local Excel workbooks.
         base_settings = replace(base_settings, sheet_backend="excel")
@@ -105,13 +108,22 @@ def create_app(
     )
     app.config["SETTINGS"] = base_settings
     app.config["SHEET_GATEWAY"] = build_sheet_gateway(base_settings)
+    conversation_ai = None
+    if base_settings.ai_enabled and not using_runtime_overrides:
+        conversation_ai = GeminiConversationAI(
+            api_key=base_settings.gemini_api_key,
+            model=base_settings.gemini_model,
+            system_prompt=base_settings.agent_conversation_prompt,
+        )
     app.config["SESSIONS"] = SessionFlowManager(
         human_handoff_phone=base_settings.human_handoff_phone,
         agent_persona_name=base_settings.agent_persona_name,
         website_url=base_settings.website_url,
         post_trip_handoff_enabled=base_settings.post_trip_handoff_enabled,
+        handoff_keywords=base_settings.post_trip_handoff_keywords,
         post_trip_handoff_responsible_employee=base_settings.post_trip_handoff_responsible_employee,
         default_country_code=base_settings.default_country_code,
+        conversation_ai=conversation_ai,
     )
     app.secret_key = base_settings.app_secret_key
 
@@ -128,6 +140,12 @@ def create_app(
 
     app.register_blueprint(api_bp)
     app.register_blueprint(auth_bp)
+    app.config.setdefault("SESSION_COOKIE_HTTPONLY", True)
+    app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
+    app.config.setdefault("SESSION_COOKIE_SECURE", base_settings.app_env == "production")
+    app.config.setdefault("REMEMBER_COOKIE_HTTPONLY", True)
+    app.config.setdefault("REMEMBER_COOKIE_SAMESITE", "Lax")
+    app.config.setdefault("REMEMBER_COOKIE_SECURE", base_settings.app_env == "production")
 
     validation_errors = base_settings.validate()
     if validation_errors:
@@ -136,6 +154,19 @@ def create_app(
     gateway: ExcelSheetGateway = app.config["SHEET_GATEWAY"]
     gateway.ensure_runtime_workbook(reset=base_settings.demo_reset_on_start)
 
+    @app.after_request
+    def add_security_headers(response):
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        if base_settings.app_env == "production":
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                "default-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'",
+            )
+        return response
+
     @app.get("/")
     def index():
         return render_template("index.html")
@@ -143,26 +174,6 @@ def create_app(
     @app.get("/chat")
     def chat():
         return redirect("/")
-
-    @app.get("/crm")
-    @login_required
-    def crm_dashboard():
-        return render_template("crm_dashboard.html")
-
-    @app.get("/crm/travelers")
-    @login_required
-    def crm_travelers():
-        return render_template("crm_travelers.html")
-
-    @app.get("/crm/leads")
-    @login_required
-    def crm_leads():
-        return render_template("crm_leads.html")
-
-    @app.get("/crm/trips")
-    @login_required
-    def crm_trips():
-        return render_template("crm_trips.html")
 
     @app.get("/api/health")
     def health():
@@ -292,6 +303,13 @@ def create_app(
         session = sessions.get(session_id)
         if session is None:
             return jsonify({"error": "session_not_found"}), 404
+        if session.stage in {"completed", "handed_off", "cancelled"}:
+            return jsonify({"session": _serialize_session(gateway, session)})
+        if session.booking_result is not None:
+            session.booking_status = str(session.booking_result.get("booking_status") or session.booking_status or "Draft")
+            session.handoff_state = "completed"
+            session.stage = "completed"
+            return jsonify({"session": _serialize_session(gateway, session)})
         if session.final_result is None:
             return jsonify({"error": "session_not_ready_for_booking"}), 400
 
@@ -316,12 +334,15 @@ def create_app(
             agent_notes="Created from redesigned web demo.",
         )
         session.booking_result = booking_result
+        session.booking_status = str(booking_result.get("booking_status") or "Draft")
+        session.handoff_state = "completed"
+        session.stage = "completed"
         session.messages.append(
             {
                 "role": "assistant",
                 "text": (
                     f"Booking draft {booking_result['booking_id']} created for {traveler_name} "
-                    f"on {booking_result['trip_name']} ({booking_result['room_type']})."
+                    f"on {booking_result['trip_name']} ({booking_result['room_type']}). The session is now completed."
                 ),
             }
         )
@@ -370,13 +391,39 @@ def create_app(
         f.save(dest)
         ref = str(dest.relative_to(uploads_root)) if uploads_root in dest.parents else str(dest)
         sessions.handle_passport_attachment(sess, ref)
+        traveler = (sess.final_result or {}).get("traveler") or {}
+        traveler_id = str(traveler.get("traveler_id") or "").strip()
+        passport_save = {}
+        if traveler_id and hasattr(gateway, "save_traveler_passport"):
+            passport_save = gateway.save_traveler_passport(
+                traveler_id,
+                passport_name=sess.passport_name,
+                passport_number=sess.passport_number,
+                passport_expiry=sess.passport_expiry,
+                passport_nationality=sess.passport_nationality,
+                passport_attachment_ref=ref,
+                uploaded_by="ai-agent-web",
+                attachment_file_name=safe_name,
+                attachment_original_name=f.filename,
+                attachment_mime_type=f.mimetype or "",
+                attachment_size=size,
+                notes=f"Uploaded from AI agent session {session_id}",
+            )
         app_logger.info(f"Passport attachment saved: session={session_id} ref={ref}")
-        return jsonify({"ok": True, "ref": ref, "session": _serialize_session(gateway, sess)})
+        return jsonify(
+            {
+                "ok": True,
+                "ref": ref,
+                "passportSave": passport_save,
+                "session": _serialize_session(gateway, sess),
+            }
+        )
 
     @app.get("/api/visa/<destination>")
     def get_visa_requirement(destination: str):
         """Return visa requirement information for a destination (table-based, always includes disclaimer)."""
-        result = gateway.get_visa_requirement(destination)
+        nationality = str(request.args.get("nationality", "")).strip()
+        result = gateway.get_visa_requirement(destination, nationality=nationality)
         if result.get("source") == "unknown":
             # Unknown destination: instruct to contact human
             result["handoff_recommended"] = True
@@ -390,4 +437,11 @@ def create_app(
 if __name__ == "__main__":
     app = create_app()
     settings = app.config["SETTINGS"]
-    app.run(host=settings.app_host, port=settings.app_port, debug=(settings.app_env == "development"))
+    debug_enabled = os.getenv("APP_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+    use_reloader = os.getenv("APP_USE_RELOADER", "").strip().lower() in {"1", "true", "yes", "on"}
+    app.run(
+        host=settings.app_host,
+        port=settings.app_port,
+        debug=debug_enabled,
+        use_reloader=use_reloader,
+    )

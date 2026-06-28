@@ -104,7 +104,7 @@ def merge_travelers(master_id: str, alias_ids: list[str], db_session) -> dict:
     - Add note: 'Merged into {master_id} on {date}'
     - Return: { merged_count, master_id, moved_bookings, moved_leads }
     """
-    master = Traveler.query.get(master_id)
+    master = db_session.get(Traveler, master_id)
     if not master:
         raise ValueError(f"Master traveler {master_id} not found")
         
@@ -119,7 +119,7 @@ def merge_travelers(master_id: str, alias_ids: list[str], db_session) -> dict:
     unique_aliases = [aid for aid in set(alias_ids) if aid != master_id]
     
     for alias_id in unique_aliases:
-        alias = Traveler.query.get(alias_id)
+        alias = db_session.get(Traveler, alias_id)
         if not alias: continue
         
         # Move TripBookings

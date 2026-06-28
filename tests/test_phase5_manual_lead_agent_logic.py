@@ -14,6 +14,7 @@ if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
 from services.crm.system_services.field_mapping import SHEET_TABLE_MAPPINGS
+from services.crm.system_services.config import resolve_system_db_path
 from services.crm.system_services.unified_service import UnifiedCRMService
 
 def create_app_db_schema(app) -> None:
@@ -126,6 +127,52 @@ class Phase5ManualLeadAgentLogicTests(unittest.TestCase):
             handoffs = self.HandoffQueue.query.all()
             self.assertEqual(len(handoffs), 0)
 
+    def test_manual_lead_creates_distinct_row_for_existing_traveler(self):
+        app = self._build_app()
+        client = app.test_client()
+
+        with app.app_context():
+            traveler = self.Traveler(
+                traveler_id="TR00010",
+                full_name="Existing Traveler",
+                whatsapp_raw="1012345678",
+                integrated_whatsapp="+201012345678",
+                normalized_whatsapp="+201012345678",
+                phone_lookup_key="20:1012345678",
+            )
+            existing_lead = self.Lead(
+                lead_id="LD00001",
+                customer_name="Existing Traveler",
+                raw_phone="1012345678",
+                integrated_whatsapp="+201012345678",
+                phone_lookup_key="20:1012345678",
+                traveler_id="TR00010",
+                lead_stage="Contacted",
+                lead_source="Manual Web UI",
+                channel="System UI",
+            )
+            self.db.session.add_all([traveler, existing_lead])
+            self.db.session.commit()
+
+        response = client.post(
+            "/leads/",
+            data={
+                "customer_name": "Existing Traveler",
+                "raw_phone": "201012345678",
+                "lead_stage": "Qualified",
+                "priority": "High",
+                "lead_source": "WhatsApp",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with app.app_context():
+            leads = self.Lead.query.order_by(self.Lead.created_at.asc()).all()
+            self.assertEqual(len(leads), 2)
+            self.assertEqual(leads[0].lead_id, "LD00001")
+            self.assertEqual(leads[1].traveler_id, "TR00010")
+            self.assertEqual(leads[1].lead_stage, "Qualified")
+
     def test_manual_lead_conflict_creates_handoff(self):
         app = self._build_app()
         client = app.test_client()
@@ -161,11 +208,13 @@ class Phase5ManualLeadAgentLogicTests(unittest.TestCase):
             self.assertEqual(lead.lead_stage, "Needs Review")
             self.assertEqual(lead.priority, "High")
             self.assertIsNotNone(lead.handoff_id)
+            self.assertEqual(lead.handoff_reason, "phone_name_conflict")
             
             # Verify HandoffQueue entry exists
             handoff = self.HandoffQueue.query.filter_by(handoff_id=lead.handoff_id).first()
             self.assertIsNotNone(handoff)
-            self.assertEqual(handoff.reason, "phone_name_conflict")
+            self.assertIn("Name and phone conflict", handoff.reason)
+            self.assertIn("Recommended actions:", handoff.notes or "")
 
     def test_manual_lead_blacklist_creates_handoff_and_blocks(self):
         app = self._build_app()
@@ -195,10 +244,38 @@ class Phase5ManualLeadAgentLogicTests(unittest.TestCase):
             self.assertTrue(lead.handoff_required)
             self.assertEqual(lead.lead_stage, "Blocked")
             self.assertEqual(lead.priority, "Critical")
+            self.assertEqual(lead.handoff_reason, "blacklisted_customer")
             
             handoff = self.HandoffQueue.query.filter_by(handoff_id=lead.handoff_id).first()
             self.assertIsNotNone(handoff)
-            self.assertEqual(handoff.reason, "blacklisted_customer")
+            self.assertIn("Blocked traveler match", handoff.reason)
+            self.assertIn("Recommended actions:", handoff.notes or "")
+
+    def test_commercial_context_flags_group_quote_review(self):
+        context = UnifiedCRMService.resolve_commercial_context(
+            traveler={"status": "VIP"},
+            trip_type="International",
+            requested_group_size=5,
+            trip_id="RT-INT-26-001",
+        )
+        self.assertEqual(context["flight_policy"]["mode"], "without_flights_default")
+        self.assertTrue(context["vip"]["recognized"])
+        self.assertTrue(context["group"]["eligible"])
+        self.assertTrue(context["manual_handoff_recommended"])
+        self.assertEqual(context["handoff_reason"], "group_booking_quote")
+
+    def test_default_app_database_matches_system_service_database(self):
+        os.environ.pop("DATABASE_URL", None)
+        os.environ.pop("RAHMA_SYSTEM_DB_PATH", None)
+
+        for module_name in list(sys.modules):
+            if module_name == "app" or module_name.startswith("app."):
+                sys.modules.pop(module_name, None)
+
+        from app.config import DevelopmentConfig
+
+        expected_uri = f"sqlite:///{resolve_system_db_path().resolve().as_posix()}"
+        self.assertEqual(DevelopmentConfig.get_sqlalchemy_uri(), expected_uri)
 
 if __name__ == "__main__":
     unittest.main()

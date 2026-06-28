@@ -1,15 +1,15 @@
-"""Regression test: operational DB must be completely untouched by tests.
+"""Regression test: the frozen operational DB fixture must remain untouched by tests.
 
 Proof strategy
 --------------
-1. Capture the SHA256 hash of the live operational DB *before* any app
+1. Capture the SHA256 hash of the frozen fixture DB *before* any app
    creation.
 2. Point DATABASE_URL at a fresh temporary SQLite file.
 3. Call create_app() and run db.drop_all() / db.create_all() against the
    temp DB — the most destructive operations a test can perform.
 4. Assert the temp DB changed (schema exists).
-5. Assert the operational DB SHA256 is identical to step-1 hash.
-6. Assert operational DB counts remain travelers=571, trips=42,
+5. Assert the fixture DB SHA256 is identical to step-1 hash.
+6. Assert fixture DB counts remain travelers=571, trips=42,
    trip_bookings=48.
 """
 from __future__ import annotations
@@ -33,7 +33,7 @@ API_ROOT = REPO_ROOT / "apps" / "api"
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
-OPERATIONAL_DB = (REPO_ROOT / "apps" / "api" / "instance" / "rahma_traveler_dev.db").resolve()
+OPERATIONAL_DB = (REPO_ROOT / "tests" / "fixtures" / "operational_db_fixture.db").resolve()
 
 EXPECTED_COUNTS = {
     "travelers": 571,
@@ -65,7 +65,7 @@ def _read_counts(db_path: Path) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 class OperationalDbProtectionTest(unittest.TestCase):
-    """Proves that no test can mutate the operational database."""
+    """Proves that no test can mutate the frozen operational fixture."""
 
     # ------------------------------------------------------------------
     # Setup / teardown

@@ -12,18 +12,24 @@ SYSTEM_ROOT = Path(__file__).resolve().parent.parent / "apps" / "api"
 if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
-from app.extensions import db
-from app.models.lead import Lead
-from app.models.trip import Trip
-from app.models.traveler import Traveler
-from app.models.booking import TripBooking
-
-
-
-
 def _create_temp_app():
+    for module_name in list(sys.modules):
+        if module_name == "app" or module_name.startswith("app."):
+            sys.modules.pop(module_name, None)
     from app import create_app
     return create_app("development")
+
+
+def _load_app_objects():
+    from app.extensions import db
+    from app.models.booking import TripBooking
+    from app.models.lead import Lead
+    from app.models.trip import Trip
+    from app.models.traveler import Traveler
+
+    return db, Lead, Trip, Traveler, TripBooking
+
+
 class Phase4LeadRedesignTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = Path(".tmp-test-workdirs") / f"phase4-leads-{uuid.uuid4().hex}"
@@ -32,18 +38,19 @@ class Phase4LeadRedesignTests(unittest.TestCase):
         os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path.resolve().as_posix()}"
         os.environ["RAHMA_SYSTEM_DB_PATH"] = str(self.db_path)
         self.app = _create_temp_app()
+        self.db, self.Lead, self.Trip, self.Traveler, self.TripBooking = _load_app_objects()
         self.app.config["TESTING"] = True
         with self.app.app_context():
-            db.drop_all()
-            db.create_all()
-            db.session.add(Traveler(
+            self.db.drop_all()
+            self.db.create_all()
+            self.db.session.add(self.Traveler(
                 traveler_id="TR900",
                 full_name="Existing Traveler",
                 integrated_whatsapp="20:1000000000",
                 normalized_whatsapp="+201000000000",
                 phone_lookup_key="20:1000000000",
             ))
-            db.session.add(Trip(
+            self.db.session.add(self.Trip(
                 trip_id="TR-LEAD-1",
                 trip_name="Lead Trip",
                 type="Local",
@@ -58,7 +65,7 @@ class Phase4LeadRedesignTests(unittest.TestCase):
                 draft_holds_double=0,
                 draft_holds_triple=0,
             ))
-            db.session.add(Lead(
+            self.db.session.add(self.Lead(
                 lead_id="L-100",
                 customer_name="Sales Lead",
                 lead_stage="New Lead",
@@ -68,7 +75,7 @@ class Phase4LeadRedesignTests(unittest.TestCase):
                 follow_up_status="Open",
                 booking_id="",
             ))
-            db.session.commit()
+            self.db.session.commit()
         self.client = self.app.test_client()
 
     def tearDown(self) -> None:
@@ -83,7 +90,7 @@ class Phase4LeadRedesignTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            lead = Lead.query.get("L-100")
+            lead = self.db.session.get(self.Lead, "L-100")
             self.assertEqual(lead.lead_stage, "Contacted")
             self.assertEqual(lead.current_step, "Initial follow up")
 
@@ -91,7 +98,7 @@ class Phase4LeadRedesignTests(unittest.TestCase):
         response = self.client.post("/leads/L-100", data={"lead_stage": "Won"})
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            lead = Lead.query.get("L-100")
+            lead = self.db.session.get(self.Lead, "L-100")
             self.assertEqual(lead.lead_stage, "New Lead")
 
     def test_existing_traveler_new_interest_preserves_traveler_id(self) -> None:
@@ -108,18 +115,41 @@ class Phase4LeadRedesignTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            self.assertEqual(Traveler.query.count(), 1)
-            lead = Lead.query.order_by(Lead.created_at.desc()).first()
+            self.assertEqual(self.Traveler.query.count(), 1)
+            lead = self.Lead.query.order_by(self.Lead.created_at.desc()).first()
             self.assertEqual(lead.traveler_id, "TR900")
             self.assertEqual(lead.lead_stage, "Contacted")
 
+    def test_manual_lead_form_shows_trip_name_selector_for_open_trips(self) -> None:
+        with self.app.app_context():
+            self.db.session.add(
+                self.Trip(
+                    trip_id="TR-INT-1",
+                    trip_name="International Lead Trip",
+                    type="International",
+                    sales_status="Open",
+                )
+            )
+            self.db.session.commit()
+
+        response = self.client.get("/leads/")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Interested Trip Name", body)
+        self.assertNotIn("Interested Trip IDs</label>", body)
+        self.assertIn('name="interested_trip_ids"', body)
+        self.assertIn("Lead Trip", body)
+        self.assertIn("International Lead Trip", body)
+        self.assertIn('data-trip-type="Local"', body)
+        self.assertIn('data-trip-type="International"', body)
+
     def test_handoff_needed_lead_visible_and_actionable(self) -> None:
         with self.app.app_context():
-            lead = Lead.query.get("L-100")
+            lead = self.db.session.get(self.Lead, "L-100")
             lead.lead_stage = "Handoff Needed"
             lead.handoff_required = True
             lead.handoff_reason = "phone_name_conflict"
-            db.session.commit()
+            self.db.session.commit()
 
         response = self.client.get("/leads/?stage=Handoff Needed")
         self.assertEqual(response.status_code, 200)
@@ -127,10 +157,10 @@ class Phase4LeadRedesignTests(unittest.TestCase):
 
     def test_booking_draft_linkage_created_from_booking_flow(self) -> None:
         with self.app.app_context():
-            lead = Lead.query.get("L-100")
+            lead = self.db.session.get(self.Lead, "L-100")
             lead.lead_stage = "Qualified"
             lead.traveler_id = "TR900"
-            db.session.commit()
+            self.db.session.commit()
 
         from services.crm.system_services import UnifiedCRMService
         service = UnifiedCRMService()
@@ -144,10 +174,10 @@ class Phase4LeadRedesignTests(unittest.TestCase):
         )
         self.assertTrue(booking["booking_id"])
         with self.app.app_context():
-            lead = Lead.query.get("L-100")
+            lead = self.db.session.get(self.Lead, "L-100")
             self.assertEqual(lead.booking_id, booking["booking_id"])
             self.assertIn(lead.lead_stage, {"Booking Draft", "Booking Draft Created"})
-            booking_row = TripBooking.query.get(booking["booking_id"])
+            booking_row = self.db.session.get(self.TripBooking, booking["booking_id"])
             self.assertEqual(booking_row.traveler_id, "TR900")
 
 

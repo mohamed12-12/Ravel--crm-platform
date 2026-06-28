@@ -1,5 +1,6 @@
 # app/models/__init__.py
 from .traveler import Traveler
+from .traveler_document import TravelerDocument
 from .trip import Trip
 from .event import CommunityEvent
 from .booking import TripBooking, CEBooking

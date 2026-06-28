@@ -4,7 +4,7 @@ from app.models.interaction import Interaction
 from app.models.traveler import Traveler
 from app.extensions import db
 from sqlalchemy import or_
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 interactions_bp = Blueprint('interactions', __name__, url_prefix='/interactions')
@@ -55,7 +55,7 @@ def create():
         step_key=data.get('step_key', ''),
         language=data.get('language', 'ar'),
         outcome=data.get('outcome', ''),
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
     )
     db.session.add(interaction)
     db.session.commit()

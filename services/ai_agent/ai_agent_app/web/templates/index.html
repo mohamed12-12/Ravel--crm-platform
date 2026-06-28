@@ -6,7 +6,7 @@
     <title>Rahma Traveler AI Sales Agent Demo</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=room-capacity-1">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=passport-upload-1">
 </head>
 <body>
 <div class="app-shell">
@@ -29,7 +29,6 @@
             <div class="button-row">
                 <button id="new-session-btn" class="btn btn-primary">⚡ Start New Session</button>
                 <button id="reset-demo-btn" class="btn btn-danger">↺ Reset Demo DB</button>
-                <a href="/crm" class="btn btn-ghost" style="flex:1;text-align:center" target="_blank">CRM Admin ↗</a>
             </div>
             <p class="hint" style="margin-top:0.75rem">Resetting restores the runtime sheet back to the clean benchmark state.</p>
         </section>
@@ -44,7 +43,6 @@
                 <button type="button" class="btn btn-preset" onclick="setPreset('new')">🌱 New Customer</button>
                 <button type="button" class="btn btn-preset" onclick="setPreset('returning')">👑 Returning (TR001)</button>
                 <button type="button" class="btn btn-preset" onclick="setPreset('duplicate')">👯 Duplicate Phone</button>
-                <button type="button" class="btn btn-preset" onclick="setPreset('protected')">🔒 Protected CRM</button>
             </div>
         </section>
 
@@ -133,14 +131,14 @@
                 <div class="form-grid">
                     <label><span>Full Name *</span><input id="full-name-input" type="text" required placeholder="e.g. Omar Mansour"></label>
                     <label><span>WhatsApp Number *</span><input id="phone-input" type="tel" required placeholder="e.g. 201012345678"></label>
-                    <label><span>Birthday</span><input id="birthday-input" type="date" value="1992-05-15" required></label>
+                    <label><span>Birthday</span><input id="birthday-input" type="date" required></label>
                     <label><span>Gender</span>
                         <select id="gender-input" required>
                             <option value="Male" selected>Male</option>
                             <option value="Female">Female</option>
                         </select>
                     </label>
-                    <label><span>Nationality</span><input id="nationality-input" type="text" placeholder="Leave blank if unknown"></label>
+                    <label><span>Nationality</span><input id="nationality-input" type="text" placeholder="Type nationality if known"></label>
                     <label><span>Country Code</span><input id="country-code-input" type="text" placeholder="e.g. 20, 966"></label>
                 </div>
                 <div style="display:flex;justify-content:flex-end;margin-top:1rem">
@@ -166,6 +164,8 @@
             <!-- Message Composer -->
             <form id="message-form" class="composer">
                 <input id="message-input" type="text" placeholder="Type the traveler's reply here…" autocomplete="off" disabled>
+                <input id="passport-file-input" type="file" accept=".jpg,.jpeg,.png,.gif,.pdf,.heic,.webp" hidden>
+                <button type="button" class="btn btn-ghost" hidden id="passport-upload-btn">Attach Passport</button>
                 <button type="submit" class="btn btn-primary" disabled id="send-btn">Send ↗</button>
             </form>
         </section>
@@ -235,7 +235,7 @@
     </main>
 </div>
 
-<script src="{{ url_for('static', filename='app.js') }}?v=room-capacity-1"></script>
+<script src="{{ url_for('static', filename='app.js') }}?v=passport-upload-1"></script>
 <script>
 // Scenario preset filler
 function setPreset(type) {

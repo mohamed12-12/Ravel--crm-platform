@@ -16,7 +16,7 @@ class CopyGuard:
         4. If any variable is missing from the dict, raise CopyGuardError (do NOT guess)
         5. Return: { text: str, buttons: list[str], message_key: str, language: str }
         """
-        template = DMCopyLibrary.query.get(message_key)
+        template = db.session.get(DMCopyLibrary, message_key)
         if not template:
             raise CopyGuardError(f"Template key '{message_key}' not found.")
 
@@ -77,7 +77,7 @@ class CopyGuard:
     
     def validate_variables(self, message_key: str, variables: dict) -> list[str]:
         """Return list of missing required variables before rendering"""
-        template = DMCopyLibrary.query.get(message_key)
+        template = db.session.get(DMCopyLibrary, message_key)
         if not template:
             raise CopyGuardError(f"Template key '{message_key}' not found.")
             

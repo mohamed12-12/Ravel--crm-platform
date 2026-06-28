@@ -1,10 +1,12 @@
 # app/routes/travelers.py
 import re
-from datetime import datetime
+from pathlib import Path
+from datetime import datetime, timezone
 import csv
 import io
 
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, Response
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, Response, current_app, send_file, abort
+from werkzeug.utils import secure_filename
 from sqlalchemy import or_
 
 from app.extensions import db
@@ -14,11 +16,36 @@ from app.models.handoff import HandoffQueue
 from app.models.interaction import Interaction
 from app.models.lead import Lead
 from app.models.traveler import Traveler
+from app.models.traveler_document import TravelerDocument
 from services.crm.system_services import UnifiedCRMService
 from services.crm.system_services.phone_normalization import normalize_phone_input
 
 travelers_bp = Blueprint('travelers', __name__, url_prefix='/travelers')
 ARCHIVE_LIKE_STATUSES = {"inactive", "archived", "blacklisted", "blocked"}
+_ALLOWED_DOC_EXTENSIONS = {"jpg", "jpeg", "png", "pdf"}
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+def _allowed_document(filename: str) -> bool:
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in _ALLOWED_DOC_EXTENSIONS
+
+
+def _documents_root() -> Path:
+    root = current_app.config.get('TRAVELER_UPLOAD_ROOT')
+    if root:
+        return Path(root)
+    return Path(current_app.instance_path) / 'uploads' / 'travelers'
+
+
+def _safe_document_path(base_dir: Path, filename: str) -> Path:
+    safe_name = secure_filename(filename)
+    if not safe_name:
+        raise ValueError('Invalid filename')
+    dest = (base_dir / safe_name).resolve()
+    base_resolved = base_dir.resolve()
+    if base_resolved not in dest.parents and dest != base_resolved:
+        raise ValueError('Unsafe upload path')
+    return dest
 
 
 def _phone_match_filter(service: UnifiedCRMService, phone_info: dict[str, str]):
@@ -130,6 +157,11 @@ def _traveler_update_payload(data):
         "phone_code",
         "phone_lookup_key",
         "lifetime_revenue",
+        "passport_name",
+        "passport_number",
+        "passport_expiry",
+        "passport_nationality",
+        "passport_attachment_ref",
     ):
         if key in data and data.get(key) is not None:
             # Handle float casting for lifetime_revenue
@@ -144,6 +176,8 @@ def _traveler_update_payload(data):
         payload["birthday"] = _parse_date(data.get("birthday"))
     if "rating" in data:
         payload["rating"] = _parse_rating(data.get("rating"))
+    if "passport_expiry" in data:
+        payload["passport_expiry"] = _parse_date(data.get("passport_expiry"))
     return payload
 
 
@@ -204,7 +238,7 @@ def detail(traveler_id):
         UnifiedCRMService().refresh_traveler_sheet_stats(traveler_id)
     except Exception:
         pass
-    traveler = Traveler.query.get_or_404(traveler_id)
+    traveler = db.get_or_404(Traveler, traveler_id)
     try:
         UnifiedCRMService().ensure_operational_schema()
     except Exception:
@@ -212,6 +246,26 @@ def detail(traveler_id):
     leads = Lead.query.filter_by(traveler_id=traveler_id).order_by(Lead.created_at.desc()).all()
     bookings = TripBooking.query.filter_by(traveler_id=traveler_id).order_by(TripBooking.draft_created_at.desc()).all()
     ce_bookings = CEBooking.query.filter_by(traveler_id=traveler_id).order_by(CEBooking.created_at.desc()).all()
+    documents = TravelerDocument.query.filter_by(traveler_id=traveler_id).order_by(TravelerDocument.uploaded_at.desc()).all()
+    docs_root = _documents_root().resolve()
+    passport_documents = []
+    for doc in documents:
+        is_passport = (doc.category or "").strip().lower() == "passport"
+        doc_path = Path(doc.storage_path)
+        if not doc_path.is_absolute():
+            doc_path = (_documents_root() / doc_path).resolve()
+        else:
+            doc_path = doc_path.resolve()
+        doc_exists = (docs_root in doc_path.parents or doc_path == docs_root) and doc_path.exists()
+        if is_passport:
+            passport_documents.append(
+                {
+                    "document": doc,
+                    "exists": doc_exists,
+                }
+            )
+    passport_document = passport_documents[0]["document"] if passport_documents else None
+    passport_document_exists = passport_documents[0]["exists"] if passport_documents else False
     interactions = Interaction.query.filter_by(traveler_id=traveler_id).order_by(Interaction.timestamp.desc()).all()
     handoffs = HandoffQueue.query.filter_by(traveler_id=traveler_id).order_by(HandoffQueue.created_at.desc()).all()
     event_filters = [BookingEventTrail.traveler_id == traveler_id]
@@ -237,6 +291,10 @@ def detail(traveler_id):
         leads=leads,
         bookings=bookings,
         ce_bookings=ce_bookings,
+        documents=documents,
+        passport_document=passport_document,
+        passport_documents=passport_documents,
+        passport_document_exists=passport_document_exists,
         trip_type_map=trip_type_map,
         interactions=interactions,
         handoffs=handoffs,
@@ -317,7 +375,7 @@ def create():
         introduce_yourself=data.get('introduce_yourself') or None,
         agent_notes=data.get('agent_notes') or None,
         community_whatsapp=data.get('community_whatsapp') or None,
-        last_contacted_at=datetime.utcnow(),
+        last_contacted_at=datetime.now(timezone.utc),
     )
     db.session.add(new_traveler)
     db.session.commit()
@@ -327,7 +385,7 @@ def create():
 
 @travelers_bp.route('/<traveler_id>', methods=['PUT', 'POST'])
 def update(traveler_id):
-    traveler = Traveler.query.get_or_404(traveler_id)
+    traveler = db.get_or_404(Traveler, traveler_id)
     data = request.get_json(silent=True) or request.form.to_dict()
     updates = _traveler_update_payload(data)
     for key, value in updates.items():
@@ -388,7 +446,7 @@ def update(traveler_id):
         traveler.integrated_whatsapp = normalized['normalized_e164'] or traveler.integrated_whatsapp
         traveler.normalized_whatsapp = normalized['normalized_e164'] or traveler.normalized_whatsapp
         traveler.phone_lookup_key = lookup_key or traveler.phone_lookup_key
-    traveler.last_contacted_at = datetime.utcnow()
+    traveler.last_contacted_at = datetime.now(timezone.utc)
     db.session.commit()
     _sync_traveler_sheet(traveler_id)
     if request.is_json:
@@ -398,12 +456,120 @@ def update(traveler_id):
 
 @travelers_bp.route('/<traveler_id>', methods=['DELETE'])
 def delete(traveler_id):
-    traveler = Traveler.query.get_or_404(traveler_id)
+    traveler = db.get_or_404(Traveler, traveler_id)
     traveler.status = 'Inactive'
-    traveler.last_contacted_at = datetime.utcnow()
+    traveler.last_contacted_at = datetime.now(timezone.utc)
     db.session.commit()
     _sync_traveler_sheet(traveler_id)
     return jsonify({"status": "success", "message": "Traveler marked as Inactive"})
+
+@travelers_bp.route('/<traveler_id>/documents', methods=['POST'])
+def upload_document(traveler_id):
+    traveler = db.get_or_404(Traveler, traveler_id)
+    if 'file' not in request.files:
+        flash('Please select a document file to upload.', 'danger')
+        return redirect(url_for('travelers.detail', traveler_id=traveler_id))
+
+    f = request.files['file']
+    if not f or not f.filename:
+        flash('Please choose a valid file.', 'danger')
+        return redirect(url_for('travelers.detail', traveler_id=traveler_id))
+
+    if not _allowed_document(f.filename):
+        flash('Unsupported file type. Please upload JPG, JPEG, PNG, or PDF only.', 'danger')
+        return redirect(url_for('travelers.detail', traveler_id=traveler_id))
+
+    f.stream.seek(0, 2)
+    size = f.stream.tell()
+    f.stream.seek(0)
+    if size > MAX_UPLOAD_BYTES:
+        flash('File is too large. Maximum size is 10MB.', 'danger')
+        return redirect(url_for('travelers.detail', traveler_id=traveler_id))
+
+    docs_root = _documents_root() / traveler_id
+    docs_root.mkdir(parents=True, exist_ok=True)
+    original_name = f.filename
+    storage_path = _safe_document_path(docs_root, original_name)
+    f.save(storage_path)
+
+    category = (request.form.get('category') or 'passport').strip() or 'passport'
+    document = TravelerDocument(
+        traveler_id=traveler_id,
+        category=category,
+        file_name=storage_path.name,
+        original_file_name=original_name,
+        mime_type=f.mimetype,
+        file_extension=storage_path.suffix.lower().lstrip('.'),
+        file_size=size,
+        storage_path=str(storage_path),
+        uploaded_by=request.form.get('uploaded_by') or 'crm-ui',
+        passport_full_name=request.form.get('passport_full_name') or traveler.passport_name,
+        passport_number=request.form.get('passport_number') or traveler.passport_number,
+        passport_nationality=request.form.get('passport_nationality') or traveler.passport_nationality,
+        passport_expiry=_parse_date(request.form.get('passport_expiry')),
+        verification_status=request.form.get('verification_status') or 'pending',
+        notes=request.form.get('notes'),
+    )
+    traveler.passport_name = document.passport_full_name or traveler.passport_name
+    traveler.passport_number = document.passport_number or traveler.passport_number
+    traveler.passport_nationality = document.passport_nationality or traveler.passport_nationality
+    traveler.passport_expiry = document.passport_expiry or traveler.passport_expiry
+    traveler.passport_attachment_ref = str(storage_path.relative_to(_documents_root())) if storage_path.is_relative_to(_documents_root()) else str(storage_path)
+    db.session.add(document)
+    db.session.commit()
+
+    flash('Document uploaded successfully.', 'success')
+    return redirect(url_for('travelers.detail', traveler_id=traveler_id))
+
+
+@travelers_bp.route('/<traveler_id>/documents/passport/view')
+def view_passport(traveler_id):
+    traveler = db.get_or_404(Traveler, traveler_id)
+    passport_doc = (
+        TravelerDocument.query.filter_by(traveler_id=traveler.traveler_id)
+        .filter(db.func.lower(TravelerDocument.category) == "passport")
+        .order_by(TravelerDocument.uploaded_at.desc())
+        .first()
+    )
+    if passport_doc is None:
+        flash("No passport file is available for this traveler.", "warning")
+        return redirect(url_for("travelers.detail", traveler_id=traveler_id))
+
+    return _serve_traveler_document(traveler_id, passport_doc.document_id)
+
+
+@travelers_bp.route('/<traveler_id>/documents/<int:document_id>/view')
+def view_document(traveler_id, document_id: int):
+    return _serve_traveler_document(traveler_id, document_id)
+
+
+def _serve_traveler_document(traveler_id: str, document_id: int):
+    traveler = db.get_or_404(Traveler, traveler_id)
+    passport_doc = TravelerDocument.query.filter_by(document_id=document_id, traveler_id=traveler.traveler_id).first()
+    if passport_doc is None:
+        flash("Document not found for this traveler.", "warning")
+        return redirect(url_for("travelers.detail", traveler_id=traveler_id))
+
+    storage_path = Path(passport_doc.storage_path)
+    if not storage_path.is_absolute():
+        storage_path = (_documents_root() / storage_path).resolve()
+    else:
+        storage_path = storage_path.resolve()
+
+    docs_root = _documents_root().resolve()
+    if docs_root not in storage_path.parents and storage_path != docs_root:
+        flash("The passport file path is invalid or outside the uploads folder.", "danger")
+        return redirect(url_for("travelers.detail", traveler_id=traveler_id))
+    if not storage_path.exists():
+        flash("The passport file is missing on disk.", "warning")
+        return redirect(url_for("travelers.detail", traveler_id=traveler_id))
+
+    return send_file(
+        storage_path,
+        as_attachment=False,
+        download_name=passport_doc.original_file_name or passport_doc.file_name,
+    )
+
 
 @travelers_bp.route('/export')
 def export():

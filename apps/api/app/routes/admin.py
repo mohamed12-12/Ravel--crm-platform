@@ -10,8 +10,11 @@ from app.models.handoff import HandoffQueue
 from app.services.importer import run_full_import, run_sheets_import
 from app.services.identity import find_duplicates, merge_travelers
 from services.crm.system_services.config import get_database_diagnostics
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 import os
+import uuid
+from werkzeug.utils import secure_filename
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 
@@ -33,7 +36,7 @@ def dashboard():
     draft_booking_count = TripBooking.query.filter_by(booking_status='Draft').count()
 
     # Recent leads (last 7 days)
-    week_ago = datetime.utcnow() - timedelta(days=7)
+    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
     recent_leads = Lead.query.filter(Lead.created_at >= week_ago)\
         .order_by(Lead.created_at.desc()).limit(8).all()
 
@@ -81,7 +84,10 @@ def import_data():
             if not f or not f.filename:
                 flash('No file uploaded.', 'error')
                 return redirect(url_for('admin.import_data'))
-            upload_path = os.path.join('/tmp', f.filename)
+            safe_name = secure_filename(f.filename) or f"import-{uuid.uuid4().hex}.xlsx"
+            upload_root = Path(current_app.instance_path) / "uploads" / "imports"
+            upload_root.mkdir(parents=True, exist_ok=True)
+            upload_path = upload_root / f"{uuid.uuid4().hex}-{safe_name}"
             f.save(upload_path)
             try:
                 results = run_full_import(upload_path)
@@ -192,4 +198,3 @@ def retry_sync():
             return jsonify({'error': res.get('reason', 'Unknown sync failure')}), 500
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-

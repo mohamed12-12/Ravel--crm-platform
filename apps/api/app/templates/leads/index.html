@@ -507,15 +507,30 @@
                 </div>
                 <div class="form-group">
                     <label class="form-label">Trip Type Interest</label>
-                    <select class="form-select" name="preferred_trip_type">
+                    <select class="form-select" name="preferred_trip_type" id="create-lead-trip-type">
                         <option value="">Unknown</option>
                         <option value="Local">Local</option>
                         <option value="International">International</option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label class="form-label">Interested Trip IDs</label>
-                    <input class="form-input" type="text" name="interested_trip_ids" placeholder="e.g. TRIP-001, TRIP-002">
+                    <label class="form-label">Group Size</label>
+                    <input class="form-input" type="number" name="group_size" min="1" value="1" placeholder="1">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Interested Trip Name</label>
+                    <select class="form-select" name="interested_trip_ids" id="create-lead-trip-select" disabled>
+                        <option value="">Select trip type first</option>
+                        {% for trip in available_trips %}
+                        <option
+                            value="{{ trip.trip_id }}"
+                            data-trip-type="{{ trip.type or '' }}"
+                            data-empty-label="{{ trip.trip_name }}"
+                        >
+                            {{ trip.trip_name }}{% if trip.start_date %} · {{ trip.start_date.strftime('%d %b %Y') }}{% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
                 </div>
                 <div class="form-group">
                     <label class="form-label">Follow-up Date</label>
@@ -553,5 +568,42 @@ function closeModal(id) { document.getElementById(id).classList.remove('open'); 
 document.querySelectorAll('.modal-overlay').forEach(m => {
     m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
 });
+
+const createLeadTripType = document.getElementById('create-lead-trip-type');
+const createLeadTripSelect = document.getElementById('create-lead-trip-select');
+
+function syncCreateLeadTripOptions() {
+    if (!createLeadTripType || !createLeadTripSelect) return;
+
+    const selectedType = (createLeadTripType.value || '').trim();
+    const placeholder = createLeadTripSelect.options[0];
+    let hasVisibleTrips = false;
+
+    createLeadTripSelect.value = '';
+
+    Array.from(createLeadTripSelect.options).forEach((option, index) => {
+        if (index === 0) return;
+        const optionType = (option.dataset.tripType || '').trim();
+        const visible = Boolean(selectedType) && optionType === selectedType;
+        option.hidden = !visible;
+        if (visible) {
+            hasVisibleTrips = true;
+        }
+    });
+
+    if (!selectedType) {
+        createLeadTripSelect.disabled = true;
+        placeholder.textContent = 'Select trip type first';
+        return;
+    }
+
+    createLeadTripSelect.disabled = !hasVisibleTrips;
+    placeholder.textContent = hasVisibleTrips
+        ? `Select ${selectedType.toLowerCase()} trip`
+        : `No open ${selectedType.toLowerCase()} trips available`;
+}
+
+createLeadTripType?.addEventListener('change', syncCreateLeadTripOptions);
+syncCreateLeadTripOptions();
 </script>
 {% endblock %}

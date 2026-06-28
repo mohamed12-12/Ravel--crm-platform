@@ -51,6 +51,8 @@ instance/
 # Manual-review legacy MVP DB fixture moved with the Flask CRM.
 !apps/api/instance/
 !apps/api/instance/rahma_traveler_dev.db
+!tests/fixtures/
+!tests/fixtures/operational_db_fixture.db
 
 # Logs and temporary files
 logs/
@@ -74,3 +76,5 @@ Thumbs.db
 # Local history and caches
 .history/
 pytest-cache-files-*/
+
+testsprite_tests\tmp\config.json

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -8,15 +9,26 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from archive.legacy_demo_web.app import create_app
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 __all__ = ["create_app"]
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 if __name__ == "__main__":
     app = create_app()
     settings = app.config["SETTINGS"]
-    app.run(host=settings.app_host, port=settings.app_port, debug=(settings.app_env == "development"))
+    debug_enabled = _env_flag("APP_DEBUG", default=False)
+    use_reloader = _env_flag("APP_USE_RELOADER", default=False)
+    app.run(
+        host=settings.app_host,
+        port=settings.app_port,
+        debug=debug_enabled,
+        use_reloader=use_reloader,
+    )

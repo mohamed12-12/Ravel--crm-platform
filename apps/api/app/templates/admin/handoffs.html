@@ -628,7 +628,7 @@
 </style>
 
 {% macro render_card(item) %}
-<div class="handoff-card card-glow-{{ item.priority|lower }}" id="card-{{ item.handoff_id }}" draggable="true" data-id="{{ item.handoff_id }}" data-priority="{{ item.priority }}" data-search="{{ item.traveler_name|lower }} {{ item.handoff_id|lower }} {{ item.reason|lower }}">
+<div class="handoff-card card-glow-{{ item.priority|lower }}" id="card-{{ item.handoff_id }}" draggable="true" data-id="{{ item.handoff_id }}" data-priority="{{ item.priority }}" data-notes="{{ item.display_notes|e }}" data-search="{{ item.traveler_name|lower }} {{ item.handoff_id|lower }} {{ item.reason|lower }}">
     <!-- Priority Badge -->
     <div class="priority-badge prio-{{ item.priority|lower }}">
         {{ item.priority }}
@@ -804,7 +804,11 @@
                 <div class="modal-value modal-value-reason" id="modal-reason">N/A</div>
             </div>
             <div class="modal-field">
-                <span class="modal-label">Action Handoff Notes</span>
+                <span class="modal-label">System Guidance</span>
+                <div class="modal-value modal-value-reason" id="modal-guidance">No additional guidance recorded.</div>
+            </div>
+            <div class="modal-field">
+                <span class="modal-label">Resolution Notes</span>
                 <textarea id="modal-notes" class="modal-textarea" placeholder="Add administrative notes regarding what was discussed or decided with the traveler..."></textarea>
             </div>
         </div>
@@ -882,12 +886,14 @@
         const phone = card.querySelector('.traveler-phone').innerText;
         const reason = card.querySelector('.card-reason').innerText;
         const priority = card.getAttribute('data-priority');
+        const guidance = card.getAttribute('data-notes') || '';
 
         document.getElementById('modal-traveler-name').innerText = name;
         document.getElementById('modal-traveler-phone').innerText = phone;
         document.getElementById('modal-handoff-id').innerText = `#${handoffId}`;
         document.getElementById('modal-priority').innerText = priority;
         document.getElementById('modal-reason').innerText = reason;
+        document.getElementById('modal-guidance').innerText = guidance || 'No additional guidance recorded.';
         
         // Fetch current notes or settings if any
         document.getElementById('modal-notes').value = '';

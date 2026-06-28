@@ -3,6 +3,10 @@ const state = {
   session: null,
 };
 
+const PASSPORT_CHAT_STAGES = [
+  "awaiting_passport_upload",
+];
+
 const els = {
   sheetBackend: document.getElementById("sheet-backend"),
   runtimeWorkbook: document.getElementById("runtime-workbook"),
@@ -22,6 +26,8 @@ const els = {
   chatLog: document.getElementById("chat-log"),
   messageForm: document.getElementById("message-form"),
   messageInput: document.getElementById("message-input"),
+  passportFileInput: document.getElementById("passport-file-input"),
+  passportUploadBtn: document.getElementById("passport-upload-btn"),
   sendBtn: document.getElementById("send-btn"),
   intakeForm: document.getElementById("intake-form"),
   fullNameInput: document.getElementById("full-name-input"),
@@ -125,7 +131,18 @@ function renderSession(session) {
   renderStats(session.stats);
 
   const canIntake = session.stage === "awaiting_intake";
-  const canChat = ["awaiting_phone", "awaiting_trip_type", "awaiting_confirmation", "awaiting_room_type", "awaiting_flight", "awaiting_currency", "booking_created", "awaiting_clarification"].includes(session.stage);
+  const canChat = [
+    "awaiting_phone",
+    "awaiting_country_code",
+    "awaiting_trip_type",
+    "awaiting_confirmation",
+    "awaiting_group_size",
+    "awaiting_room_type",
+    "awaiting_flight",
+    "awaiting_currency",
+    "awaiting_clarification",
+    ...PASSPORT_CHAT_STAGES,
+  ].includes(session.stage);
   const isCompleted = ["completed", "handed_off", "cancelled"].includes(session.stage);
 
   if (session.rawPhone && !els.phoneInput.value) {
@@ -135,17 +152,12 @@ function renderSession(session) {
   if (!els.phoneInput.value && phoneNormalization.normalized_e164) {
     els.phoneInput.value = phoneNormalization.normalized_e164;
   }
-  if (phoneNormalization.country_code && !els.countryCodeInput.value) {
-    els.countryCodeInput.value = phoneNormalization.country_code;
-  }
-  if (phoneNormalization.inferred_nationality && !els.nationalityInput.value) {
-    els.nationalityInput.value = phoneNormalization.inferred_nationality;
-  }
   els.intakeForm.hidden = !canIntake;
   els.messageInput.disabled = !canChat || isCompleted;
-  els.messageInput.placeholder = messagePlaceholder(session.stage);
+  els.messageInput.placeholder = messagePlaceholder(session.stage, session.passportAttachmentRef);
   els.sendBtn.disabled = !canChat || isCompleted;
   renderQuickActions(session);
+  renderPassportUpload(session);
 
   renderCrmSnapshot(session);
   renderTripResult(session);
@@ -155,25 +167,43 @@ function renderSession(session) {
   renderBookingResult(session);
 }
 
-function messagePlaceholder(stage) {
+function messagePlaceholder(stage, passportAttachmentRef = "") {
   if (["completed", "handed_off", "cancelled"].includes(stage)) return "Session finished.";
   if (stage === "awaiting_phone") return "Enter WhatsApp number first...";
   if (stage === "awaiting_trip_type") return "Type local or international...";
   if (stage === "awaiting_confirmation") return "Type the trip number/name, or no...";
+  if (stage === "awaiting_passport_upload") {
+    return passportAttachmentRef
+      ? "Passport uploaded. Type done to continue..."
+      : "Upload passport, then type done...";
+  }
+  if (stage === "awaiting_country_code") return "Type the country code...";
+  if (stage === "awaiting_group_size") return "Type the number of travelers...";
   if (stage === "awaiting_room_type") return "Type single room, double boys room, double girls room, or triple room...";
   if (stage === "awaiting_flight") return "Type with flights or no flights...";
   if (stage === "awaiting_currency") return "Type EGP or USD...";
   if (stage === "booking_created") return "Booking draft created.";
-  if (stage === "booking_created") return "Confirm booking draft...";
   if (stage === "awaiting_clarification") return "Please clarify your choice...";
   return "Waiting for intake form...";
+}
+
+function renderPassportUpload(session) {
+  if (!els.passportUploadBtn || !els.passportFileInput) return;
+  const isUploadStage = session.stage === "awaiting_passport_upload";
+  const hasAttachment = Boolean(session.passportAttachmentRef);
+  els.passportUploadBtn.hidden = !isUploadStage;
+  els.passportUploadBtn.disabled = !isUploadStage || !state.sessionId;
+  els.passportUploadBtn.textContent = hasAttachment ? "Replace Passport" : "Attach Passport";
+  els.passportUploadBtn.title = hasAttachment
+    ? `Current file: ${session.passportAttachmentRef}`
+    : "Upload a passport image or PDF";
 }
 
 function renderQuickActions(session) {
   const stage = session.stage;
   const availableRoomReplies = getAvailableRoomReplies(session);
   const roomChoices = getAvailableRoomChoices(session);
-  const visible = ["awaiting_trip_type", "awaiting_confirmation", "awaiting_room_type", "awaiting_flight", "awaiting_currency", "booking_created", "awaiting_clarification"].includes(stage);
+  const visible = ["awaiting_trip_type", "awaiting_confirmation", "awaiting_room_type", "awaiting_flight", "awaiting_currency", "awaiting_clarification"].includes(stage);
   els.quickActions.hidden = !visible;
   const trip = getSelectedTrip(session);
   els.quickActions.querySelectorAll(".dynamic-room-choice").forEach((button) => button.remove());
@@ -413,6 +443,10 @@ function renderLeadResult(session) {
 }
 
 function renderBookingPanel(session) {
+  if (["completed", "handed_off", "cancelled"].includes(session.stage) || session.bookingResult) {
+    els.bookingFormPanel.innerHTML = `<p class="muted">Session completed. Booking follow-up can continue from the saved draft.</p>`;
+    return;
+  }
   const openTrips = session.finalResult?.trip_result?.open_trips || [];
   const travelerId = session.finalResult?.write_result?.created_traveler?.traveler_id || session.finalResult?.traveler?.traveler_id;
   if (!openTrips.length || !travelerId) {
@@ -579,6 +613,48 @@ els.messageForm?.addEventListener("submit", async (event) => {
     renderSession(data.session);
   } catch (err) {
     alert(err.message);
+  }
+});
+
+els.passportUploadBtn?.addEventListener("click", () => {
+  if (!state.sessionId || els.passportUploadBtn.disabled) return;
+  els.passportFileInput?.click();
+});
+
+els.passportFileInput?.addEventListener("change", async (event) => {
+  const file = event.target.files?.[0];
+  if (!file || !state.sessionId) return;
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    els.passportUploadBtn.disabled = true;
+    els.passportUploadBtn.textContent = "Uploading...";
+    const response = await fetch(`/api/session/${state.sessionId}/passport_attachment`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || `Upload failed: ${response.status}`);
+    }
+    const data = await response.json();
+    renderSession(data.session);
+    if (data.session?.stage === "awaiting_passport_upload") {
+      els.messageInput.value = "done";
+      els.messageInput.focus();
+      els.messageInput.select();
+    }
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    if (els.passportFileInput) {
+      els.passportFileInput.value = "";
+    }
+    if (state.session) {
+      renderPassportUpload(state.session);
+    }
   }
 });
 

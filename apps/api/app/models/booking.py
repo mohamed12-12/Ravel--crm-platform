@@ -1,7 +1,11 @@
 # app/models/booking.py
 from app.extensions import db
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 class TripBooking(db.Model):
     __tablename__ = 'trip_bookings'
@@ -20,15 +24,18 @@ class TripBooking(db.Model):
     flight_option = db.Column(db.String(50))
     date_option = db.Column(db.String(50))
     currency = db.Column(db.String(20))
+    group_size = db.Column(db.Integer, default=1)
     
     # Status/Audit
     booking_status = db.Column(db.String(50)) # Draft / Confirmed / Cancelled
-    draft_created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    draft_created_at = db.Column(db.DateTime, default=_utc_now)
     booking_source = db.Column(db.String(100))
     lead_id = db.Column(db.String(50))
     interaction_id = db.Column(db.String(50))
     alert_id = db.Column(db.String(50))
     payment_status = db.Column(db.String(100))
+    passport_required = db.Column(db.Boolean, default=False)
+    passport_status = db.Column(db.String(50))
     booking_notes = db.Column(db.Text)
 
     def __repr__(self):
@@ -61,13 +68,16 @@ class TripBooking(db.Model):
             flight_option=clean(row.get("Flight Option")),
             date_option=clean(row.get("Date Option")),
             currency=clean(row.get("Currency")),
+            group_size=int(clean(row.get("Group Size")) or 1),
             booking_status=clean(row.get("Booking Status")),
-            draft_created_at=to_datetime(row.get("Draft Created At")) or datetime.utcnow(),
+            draft_created_at=to_datetime(row.get("Draft Created At")) or _utc_now(),
             booking_source=clean(row.get("Booking Source")),
             lead_id=clean(row.get("Lead ID")),
             interaction_id=clean(row.get("Interaction ID")),
             alert_id=clean(row.get("Alert ID")),
             payment_status=clean(row.get("Payment Status")),
+            passport_required=bool(clean(row.get("Passport Required"))) if clean(row.get("Passport Required")) is not None else False,
+            passport_status=clean(row.get("Passport Status")),
             booking_notes=clean(row.get("Booking Notes"))
         )
 
@@ -83,6 +93,7 @@ class TripBooking(db.Model):
             "flight_option": self.flight_option,
             "date_option": self.date_option,
             "currency": self.currency,
+            "group_size": self.group_size or 1,
             "booking_status": self.booking_status,
             "draft_created_at": self.draft_created_at.isoformat() if self.draft_created_at else None,
             "booking_source": self.booking_source,
@@ -90,6 +101,8 @@ class TripBooking(db.Model):
             "interaction_id": self.interaction_id,
             "alert_id": self.alert_id,
             "payment_status": self.payment_status,
+            "passport_required": bool(self.passport_required),
+            "passport_status": self.passport_status,
             "booking_notes": self.booking_notes
         }
 
@@ -107,7 +120,7 @@ class CEBooking(db.Model):
     
     # Status/Audit
     status = db.Column(db.String(50))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=_utc_now)
     notes = db.Column(db.Text)
 
     def __repr__(self):
@@ -137,7 +150,7 @@ class CEBooking(db.Model):
             traveler_id=clean(row.get("Traveler ID")),
             traveler_name=clean(row.get("Traveler Name")),
             status=clean(row.get("Status")),
-            created_at=to_datetime(row.get("Created At")) or datetime.utcnow(),
+            created_at=to_datetime(row.get("Created At")) or _utc_now(),
             notes=clean(row.get("Notes"))
         )
 

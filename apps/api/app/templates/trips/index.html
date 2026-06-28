@@ -56,7 +56,7 @@
         </tr></thead>
         <tbody>
         {% for trip in trips %}
-        <tr onclick="window.location='{{ url_for('trips.detail', trip_id=trip.trip_id) }}'">
+        <tr onclick="window.location='{{ url_for('trips.detail', trip_id=trip.trip_id, q=q, status=current_status, type=current_type) }}'">
             <td class="mono">{{ trip.trip_id }}</td>
             <td>
                 <div class="primary">{{ trip.trip_name }}</div>

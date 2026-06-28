@@ -7,6 +7,7 @@ from typing import Any
 
 from services.ai_agent.ai_agent_app.logger import agent_logger
 from scripts.phase1_readonly_agent import normalize_trip_type
+from services.crm.system_services import UnifiedCRMService
 from services.crm.system_services.phone_normalization import normalize_phone_input
 
 
@@ -15,6 +16,26 @@ from services.crm.system_services.phone_normalization import normalize_phone_inp
 # ---------------------------------------------------------------------------
 
 _ARABIC_PATTERN = re.compile(r"[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]")
+_AI_REWRITABLE_MESSAGE_KEYS = {
+    "session.ask_phone_first",
+    "session.ask_phone",
+    "session.explain_phone_request",
+    "session.explain_country_code",
+    "session.ask_country_code",
+    "session.retry_country_code",
+    "session.new_traveler_intake_start",
+    "session.ask_trip_type",
+    "session.ask_trip_type_retry",
+    "session.ask_passport_upload",
+    "session.passport_upload_pending",
+    "session.ask_room_type",
+    "session.ask_room_type_retry",
+    "session.ask_group_size",
+    "session.ask_flight",
+    "session.ask_currency",
+    "session.clarification_retry",
+    "session.fallback",
+}
 
 
 def detect_language(text: str) -> str:
@@ -54,6 +75,7 @@ class SessionState:
     selected_trip_name: str = ""
     room_type: str = ""
     room_group: str = ""
+    group_size: int = 1
     flight_option: str = ""
     currency: str = ""
     lead_status: str = ""
@@ -80,16 +102,22 @@ class SessionFlowManager:
         agent_persona_name: str = "",
         website_url: str = "",
         post_trip_handoff_enabled: bool = False,
+        handoff_keywords: str = "",
         post_trip_handoff_responsible_employee: str = "Operations Team",
         default_country_code: str = "20",
+        conversation_ai: Any | None = None,
     ) -> None:
         self._sessions: dict[str, SessionState] = {}
         self.human_handoff_phone = human_handoff_phone
         self.agent_persona_name = agent_persona_name or "Rahvel Agent"
         self.website_url = website_url
         self.post_trip_handoff_enabled = post_trip_handoff_enabled
+        self.handoff_keywords = [part.strip().lower() for part in str(handoff_keywords or "").split(",") if part.strip()]
         self.post_trip_handoff_responsible_employee = post_trip_handoff_responsible_employee
         self.default_country_code = default_country_code or ""
+        self.conversation_ai = conversation_ai
+        self._active_session: SessionState | None = None
+        self._active_user_text: str = ""
 
     def clear(self) -> None:
         self._sessions.clear()
@@ -101,6 +129,8 @@ class SessionFlowManager:
 
     def create_session(self, gateway=None) -> SessionState:
         session = SessionState(id=uuid.uuid4().hex)
+        self._active_session = session
+        self._active_user_text = ""
         session.messages.append(
             {
                 "role": "assistant",
@@ -126,6 +156,8 @@ class SessionFlowManager:
             session.stage = stage
 
     def submit_intake(self, session: SessionState, payload: dict[str, Any], gateway) -> SessionState:
+        self._active_session = session
+        self._active_user_text = "intake_form_submitted"
         if session.stage == "completed":
             session.messages.append(
                 {
@@ -255,6 +287,8 @@ class SessionFlowManager:
         clean_text = text.strip()
         if not clean_text:
             return session
+        self._active_session = session
+        self._active_user_text = clean_text
 
         # Auto-detect language from customer's message and update session if needed
         detected = detect_language(clean_text)
@@ -274,10 +308,30 @@ class SessionFlowManager:
                 }
             )
             return session
+        if session.stage in {"handed_off", "cancelled"}:
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "text": self._copy_text(
+                        gateway,
+                        "session.terminal",
+                        "This session has ended. Start a new session to continue.",
+                        language=session.language,
+                    ),
+                }
+            )
+            return session
 
         # --- Website intent detection (works in any stage) ---
         if self._is_website_intent(clean_text):
             session.messages.append({"role": "assistant", "text": self._website_response(gateway, session.language)})
+            return session
+        if self._is_human_handoff_intent(clean_text):
+            self._handoff_on_customer_request(session, gateway, clean_text)
+            return session
+        visa_response = self._maybe_handle_visa_intent(session, gateway, clean_text)
+        if visa_response:
+            session.messages.append({"role": "assistant", "text": visa_response})
             return session
 
         # Legacy typing path kept for manual testing; the demo UI uses submit_intake.
@@ -299,6 +353,20 @@ class SessionFlowManager:
             return session
 
         if session.stage == "awaiting_phone":
+            if not re.search(r"\d", clean_text):
+                session.messages.append(
+                    {
+                        "role": "assistant",
+                        "text": self._copy_text(
+                            gateway,
+                            "session.explain_phone_request",
+                            "I mean your WhatsApp number so I can check whether you already have a traveler profile with us. Please send the number, for example +201012345678.",
+                            language=session.language,
+                        ),
+                    }
+                )
+                return session
+
             explicit_local = self.default_country_code == "20" and self._looks_like_egypt_local_number(clean_text)
             detected = normalize_phone_input(
                 clean_text,
@@ -313,7 +381,12 @@ class SessionFlowManager:
                 session.messages.append(
                     {
                         "role": "assistant",
-                        "text": "I couldn't confidently detect the country code. Please reply with the country code, such as 20 or 966.",
+                        "text": self._copy_text(
+                            gateway,
+                            "session.ask_country_code",
+                            "I couldn't confirm the country from that number yet. Please send just the country code, such as 20 for Egypt or 966 for Saudi Arabia.",
+                            language=session.language,
+                        ),
                     }
                 )
                 return session
@@ -387,12 +460,31 @@ class SessionFlowManager:
             return session
 
         if session.stage == "awaiting_country_code":
+            if not re.search(r"\d", clean_text):
+                session.messages.append(
+                    {
+                        "role": "assistant",
+                        "text": self._copy_text(
+                            gateway,
+                            "session.explain_country_code",
+                            "I need the country code for the WhatsApp number so I can format it correctly in the CRM. For example, Egypt is 20 and Saudi Arabia is 966. Please send only the code.",
+                            language=session.language,
+                        ),
+                    }
+                )
+                return session
+
             confirmed = re.sub(r"\D", "", clean_text)
             if not confirmed:
                 session.messages.append(
                     {
                         "role": "assistant",
-                        "text": "Please reply with the numeric country code, for example 20 or 966.",
+                        "text": self._copy_text(
+                            gateway,
+                            "session.retry_country_code",
+                            "Please reply with the numeric country code only, for example 20 or 966.",
+                            language=session.language,
+                        ),
                     }
                 )
                 return session
@@ -403,7 +495,12 @@ class SessionFlowManager:
                 session.messages.append(
                     {
                         "role": "assistant",
-                        "text": "I still couldn't normalize that number. Please re-enter it with the country code, for example +966512345678.",
+                        "text": self._copy_text(
+                            gateway,
+                            "session.retry_country_code",
+                            "I still couldn't format that number correctly. Please send the full WhatsApp number with the country code, for example +966512345678.",
+                            language=session.language,
+                        ),
                     }
                 )
                 return session
@@ -528,18 +625,18 @@ class SessionFlowManager:
             session.final_result = result
             session.lead_status = str(((result.get("write_result") or {}).get("lead_update") or {}).get("lead_stage") or "")
 
-            # For international trips: collect passport info before room booking
+            # For international trips: require passport attachment before room booking
             if session.trip_type == "international":
-                self._set_stage(session, "awaiting_passport_name")
-                session._passport_step = "name"
+                self._set_stage(session, "awaiting_passport_upload")
+                session._passport_step = "attachment"
                 session.messages.append(
                     {
                         "role": "assistant",
                         "text": self._copy_text(
                             gateway,
-                            "session.ask_passport_name",
-                            "For international trips, I need your passport details.\n"
-                            "Please provide your full name exactly as it appears on your passport:",
+                            "session.ask_passport_upload",
+                            "For international trips, please send a clear passport photo or PDF using the attachment button. "
+                            "Once it is uploaded, type 'done' and I will continue.",
                             language=session.language,
                         ),
                     }
@@ -557,91 +654,15 @@ class SessionFlowManager:
             return session
 
         # -----------------------------------------------------------------------
-        # Passport collection stages (international trips only)
+        # Passport attachment stage (international trips only)
         # -----------------------------------------------------------------------
-
-        if session.stage == "awaiting_passport_name":
-            session.passport_name = clean_text
-            self._set_stage(session, "awaiting_passport_number")
-            session.messages.append(
-                {
-                    "role": "assistant",
-                    "text": self._copy_text(
-                        gateway,
-                        "session.ask_passport_number",
-                        "Thank you. Please provide your passport number:",
-                        language=session.language,
-                    ),
-                }
-            )
-            return session
-
-        if session.stage == "awaiting_passport_number":
-            session.passport_number = clean_text
-            self._set_stage(session, "awaiting_passport_expiry")
-            session.messages.append(
-                {
-                    "role": "assistant",
-                    "text": self._copy_text(
-                        gateway,
-                        "session.ask_passport_expiry",
-                        "What is the expiry date of your passport? (format: YYYY-MM-DD or DD/MM/YYYY)",
-                        language=session.language,
-                    ),
-                }
-            )
-            return session
-
-        if session.stage == "awaiting_passport_expiry":
-            session.passport_expiry = clean_text
-            self._set_stage(session, "awaiting_passport_nationality")
-            session.messages.append(
-                {
-                    "role": "assistant",
-                    "text": self._copy_text(
-                        gateway,
-                        "session.ask_passport_nationality",
-                        "What nationality is listed on your passport?",
-                        language=session.language,
-                    ),
-                }
-            )
-            return session
-
-        if session.stage == "awaiting_passport_nationality":
-            session.passport_nationality = clean_text
-            # Passport image upload is handled via the /upload endpoint on the frontend;
-            # here we just prompt and move on. The attachment_ref will be set later via
-            # the POST /api/session/<id>/passport_attachment endpoint.
-            self._set_stage(session, "awaiting_passport_upload")
-            session.messages.append(
-                {
-                    "role": "assistant",
-                    "text": self._copy_text(
-                        gateway,
-                        "session.ask_passport_upload",
-                        "Please upload a clear photo or scan of your passport using the attachment button. "
-                        "Once uploaded, type 'done' or 'skip' to continue.",
-                        language=session.language,
-                    ),
-                }
-            )
-            return session
 
         if session.stage == "awaiting_passport_upload":
             lowered = clean_text.lower()
-            if lowered in {"done", "skip", "continue", "تمام", "جاهز", "next", "ok", "okay"}:
+            if session.passport_attachment_ref and lowered in {"done", "continue", "uploaded", "sent", "تمام", "جاهز", "next", "ok", "okay"}:
                 # Passport collection complete — proceed to room type
-                discount_note = ""
-                try:
-                    discount_note = gateway.get_trip_discount_notes(session.selected_trip_id)
-                except Exception:
-                    pass
                 self._set_stage(session, "awaiting_room_type")
-                room_msg = self._room_type_prompt(gateway, session)
-                if discount_note:
-                    room_msg = f"{room_msg}\n\n📢 Special offer: {discount_note}"
-                session.messages.append({"role": "assistant", "text": room_msg})
+                session.messages.append({"role": "assistant", "text": self._room_type_prompt(gateway, session)})
             else:
                 session.messages.append(
                     {
@@ -649,7 +670,7 @@ class SessionFlowManager:
                         "text": self._copy_text(
                             gateway,
                             "session.passport_upload_pending",
-                            "Please upload your passport photo using the attachment button, then type 'done' to continue.",
+                            "I still need the passport as an attachment for this international trip. Please upload the file using the attachment button, then type 'done' so I can continue.",
                             language=session.language,
                         ),
                     }
@@ -660,7 +681,62 @@ class SessionFlowManager:
         # Room, flight, currency stages
         # -----------------------------------------------------------------------
 
+        if session.stage == "awaiting_group_size":
+            group_size = self._extract_group_size(clean_text, allow_plain_number=True)
+            if group_size is None or group_size < 2:
+                session.messages.append(
+                    {
+                        "role": "assistant",
+                        "text": self._copy_text(
+                            gateway,
+                            "session.ask_group_size",
+                            "Please send the group size as a number, for example 4 or 6 travelers.",
+                            language=session.language,
+                        ),
+                    }
+                )
+                return session
+            session.group_size = group_size
+            self._set_stage(session, "awaiting_room_type")
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "text": (
+                        f"I noted this as a group reservation for {group_size} travelers.\n\n"
+                        f"{self._room_type_prompt(gateway, session)}"
+                    ),
+                }
+            )
+            return session
+
         if session.stage == "awaiting_room_type":
+            if self._looks_like_group_booking_intent(clean_text):
+                group_size = self._extract_group_size(clean_text, allow_plain_number=False)
+                if group_size is None:
+                    self._set_stage(session, "awaiting_group_size")
+                    session.messages.append(
+                        {
+                            "role": "assistant",
+                            "text": self._copy_text(
+                                gateway,
+                                "session.ask_group_size",
+                                "How many travelers are in the group booking? Please send the number, for example 4 or 6.",
+                                language=session.language,
+                            ),
+                        }
+                    )
+                    return session
+                session.group_size = max(group_size, 2)
+                session.messages.append(
+                    {
+                        "role": "assistant",
+                        "text": (
+                            f"I noted this as a group reservation for {session.group_size} travelers.\n\n"
+                            f"{self._room_type_prompt(gateway, session)}"
+                        ),
+                    }
+                )
+                return session
             choice = self._resolve_room_choice(clean_text, session)
             if choice is None:
                 self._set_stage(session, "awaiting_clarification")
@@ -701,7 +777,7 @@ class SessionFlowManager:
                     "text": self._copy_text(
                         gateway,
                         "session.ask_flight",
-                        "Would you like to book flights with us?\n1. Yes\n2. No",
+                        "Most of our trips are offered without flights by default. Would you like me to note a flight request for this booking?\n1. Yes\n2. No",
                         language=session.language,
                     ),
                 }
@@ -760,9 +836,26 @@ class SessionFlowManager:
                 session.handoff_state = "cancelled"
                 return session
 
+            if session.trip_type == "international" and not session.passport_attachment_ref:
+                self._set_stage(session, "awaiting_passport_upload")
+                session.messages.append(
+                    {
+                        "role": "assistant",
+                        "text": self._copy_text(
+                            gateway,
+                            "session.passport_upload_pending",
+                            "I still need the passport as an attachment for this international trip. Please upload the file using the attachment button, then type 'done' so I can continue.",
+                            language=session.language,
+                        ),
+                    }
+                )
+                return session
+
             room_choice_label = self._room_choice_label(session.room_type, session.room_group)
             agent_logger.info(f"Finalizing booking: traveler={session.customer_name}, trip={trip_id}, room={room_choice_label}, flight={session.flight_option}, currency={session.currency}")
 
+            passport_required = session.trip_type == 'international'
+            passport_status = 'provided' if session.passport_attachment_ref else ('pending' if passport_required else '')
             booking = gateway.create_booking(
                 traveler_id=(session.final_result.get("traveler") or {}).get("traveler_id", "TBD"),
                 traveler_name=session.customer_name,
@@ -774,12 +867,17 @@ class SessionFlowManager:
                 lead_id=(session.final_result.get("write_result") or {}).get("lead_update", {}).get("lead_id", "TBD"),
                 source="Web Shared Booking Module",
                 agent_notes=f"Room: {room_choice_label}, Flight: {session.flight_option}, Currency: {session.currency}",
+                passport_required=passport_required,
+                passport_status=passport_status,
+                group_size=session.group_size,
             )
             booking["room_group"] = session.room_group
             booking["room_choice_label"] = room_choice_label
+            booking["group_size"] = session.group_size
             session.booking_result = booking
             session.booking_status = str(booking.get("booking_status") or "Draft")
-            self._set_stage(session, "booking_created")
+            session.handoff_state = "completed"
+            self._set_stage(session, "completed")
 
             booking_id = (booking.get("write_result") or {}).get("booking_draft", {}).get("booking_id", "NEW")
             booking_status = booking.get("booking_status") or "Draft"
@@ -789,21 +887,10 @@ class SessionFlowManager:
                     "role": "assistant",
                     "text": self._copy_text(
                         gateway,
-                        "session.confirm_booking",
-                        f"Thank you. I have created booking draft {booking_id}. Current booking status is {booking_status} and payment status is {payment_status}. Would you like to confirm it by paying the deposit?",
+                        "session.booking_created_complete",
+                        f"I created booking draft {booking_id}. Booking status is {booking_status} and payment status is {payment_status}. Our team can continue the payment follow-up directly from this draft.",
                         language=session.language,
                         booking_id=booking_id,
-                    ),
-                }
-            )
-            session.messages.append(
-                {
-                    "role": "assistant",
-                    "text": self._copy_text(
-                        gateway,
-                        "session.ask_booking_confirmation",
-                        "Please reply yes to continue with confirmation, or no if you want to stop here.",
-                        language=session.language,
                     ),
                 }
             )
@@ -834,44 +921,13 @@ class SessionFlowManager:
             return session
 
         if session.stage == "booking_created":
-            if self._is_positive_confirmation(clean_text):
-                session.handoff_state = "completed"
-                self._set_stage(session, "completed")
-                session.messages.append(
-                    {
-                        "role": "assistant",
-                        "text": self._copy_text(
-                            gateway,
-                            "session.booking_completed",
-                            "Thank you. The booking flow is complete and the customer can now continue with payment follow-up.",
-                            language=session.language,
-                        ),
-                    }
-                )
-                return session
-            if self._is_negative_confirmation(clean_text):
-                self._set_stage(session, "cancelled")
-                session.handoff_state = "cancelled"
-                session.messages.append(
-                    {
-                        "role": "assistant",
-                        "text": self._copy_text(
-                            gateway,
-                            "session.booking_cancelled",
-                            "Understood. I will keep the booking draft open for follow-up and end this session for now.",
-                            language=session.language,
-                        ),
-                    }
-                )
-                return session
-            self._set_stage(session, "awaiting_clarification")
             session.messages.append(
                 {
                     "role": "assistant",
                     "text": self._copy_text(
                         gateway,
-                        "session.booking_clarification",
-                        "Please reply with yes or no so I can finish the booking flow.",
+                        "session.booking_completed",
+                        "The booking draft is already created. Our team can continue the follow-up from the saved draft.",
                         language=session.language,
                     ),
                 }
@@ -920,6 +976,28 @@ class SessionFlowManager:
     # ---------------------------------------------------------------------------
     # Internal helpers
     # ---------------------------------------------------------------------------
+
+    def _persist_passport_profile(self, gateway, session: SessionState) -> None:
+        traveler = (session.final_result or {}).get("traveler") or {}
+        traveler_id = str(traveler.get("traveler_id") or "").strip()
+        if not traveler_id or not hasattr(gateway, "save_traveler_passport"):
+            return
+        try:
+            gateway.save_traveler_passport(
+                traveler_id,
+                passport_name=session.passport_name,
+                passport_number=session.passport_number,
+                passport_expiry=session.passport_expiry,
+                passport_nationality=session.passport_nationality,
+                passport_attachment_ref=session.passport_attachment_ref,
+            )
+        except Exception as exc:
+            agent_logger.warning(
+                "Session %s: failed to persist passport profile for %s: %s",
+                session.id,
+                traveler_id,
+                exc,
+            )
 
     def _handoff_message(self, gateway, language: str, reason: str = "") -> str:
         if reason == "phone_name_conflict":
@@ -976,6 +1054,64 @@ class SessionFlowManager:
         lowered = text.lower()
         return any(kw in lowered for kw in ("website", "site", "link", "url", "موقع", "رابط"))
 
+    def _is_human_handoff_intent(self, text: str) -> bool:
+        lowered = text.lower()
+        return any(keyword in lowered for keyword in self.handoff_keywords)
+
+    def _handoff_on_customer_request(self, session: SessionState, gateway, clean_text: str) -> None:
+        final_result = session.final_result or {}
+        traveler = final_result.get("traveler") if isinstance(final_result.get("traveler"), dict) else {}
+        lead = (final_result.get("write_result") or {}).get("lead_update") or {}
+        handoff_result = {}
+        if hasattr(gateway, "create_handoff_case"):
+            try:
+                handoff_result = gateway.create_handoff_case(
+                    lead_id=str(lead.get("lead_id") or ""),
+                    traveler_id=str(traveler.get("traveler_id") or ""),
+                    trip_id=session.selected_trip_id,
+                    flow_key="agent_chat",
+                    reason_code="customer_requested_human_agent",
+                    reason_text="Customer requested a human travel agent.",
+                    channel="web-demo",
+                    customer_name=session.customer_name,
+                    customer_summary=clean_text,
+                    agent_summary=f"Stage when customer requested handoff: {session.stage}",
+                    notes="Requested directly from AI chat.",
+                )
+            except Exception as exc:
+                agent_logger.warning("Customer-requested handoff failed: %s", exc)
+        session.handoff_state = "handed_off"
+        self._set_stage(session, "handed_off")
+        handoff_id = str(handoff_result.get("handoff_id") or "").strip()
+        message = "I’ve handed this over to our human team so they can continue with you directly."
+        if handoff_id:
+            message = f"I’ve handed this over to our human team. Your handoff reference is {handoff_id}."
+        session.messages.append({"role": "assistant", "text": message})
+
+    def _maybe_handle_visa_intent(self, session: SessionState, gateway, clean_text: str) -> str:
+        lowered = clean_text.lower()
+        if "visa" not in lowered and "ØªØ£Ø´ÙŠØ±" not in lowered and "ÙÙŠØ²Ø§" not in lowered:
+            return ""
+        destination = self._extract_visa_destination(clean_text)
+        nationality = (session.nationality or "").strip()
+        if not destination:
+            return "Please tell me the destination country and the traveler's nationality so I can check the visa requirement safely."
+        result = gateway.get_visa_requirement(destination, nationality=nationality)
+        summary = str(result.get("summary") or result.get("notes") or "").strip()
+        disclaimer = str(result.get("disclaimer") or "").strip()
+        if summary:
+            return f"{summary}\n\n{disclaimer}".strip()
+        if result.get("needs_nationality"):
+            return str(result.get("summary") or "Please share the traveler's nationality first so I can check visa rules accurately.")
+        return f"I couldn't verify a reliable visa answer for {destination} right now. {disclaimer}".strip()
+
+    @staticmethod
+    def _extract_visa_destination(text: str) -> str:
+        match = re.search(r"\bvisa\s+(?:for|to)\s+([A-Za-z][A-Za-z\s]{1,60})", text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip(" ?!.,")
+        return ""
+
     def _trip_type_prompt(self, gateway, language: str, *, existing_traveler: bool = False) -> str:
         if existing_traveler:
             fallback = (
@@ -1007,6 +1143,9 @@ class SessionFlowManager:
         local_trips = int(traveler.get("local_trips_count") or 0)
         international_trips = int(traveler.get("international_trips_count") or 0)
         total_trips = int(traveler.get("total_trips") or 0)
+        vip_tail = ""
+        if status == "VIP":
+            vip_tail = "\nSpecial offer: You are one of our VIP travelers, so your reservation can receive a VIP discount."
         return self._copy_text(
             gateway,
             "session.profile_found_existing",
@@ -1015,7 +1154,7 @@ class SessionFlowManager:
                 "Name: {full_name}\n"
                 "Traveler ID: {traveler_id}\n"
                 "Status: {status}\n"
-                "History: {local_trips} local, {international_trips} international, {total_trips} total"
+                "History: {local_trips} local, {international_trips} international, {total_trips} total{vip_tail}"
             ),
             language=language,
             full_name=full_name,
@@ -1024,6 +1163,7 @@ class SessionFlowManager:
             local_trips=local_trips,
             international_trips=international_trips,
             total_trips=total_trips,
+            vip_tail=vip_tail,
         )
 
     def _room_choice_label(self, room_type: str, room_group: str = "") -> str:
@@ -1113,7 +1253,41 @@ class SessionFlowManager:
         if choices and "available" not in text.lower():
             opts_inline = " / ".join(f"{i+1}. {choice['label']}" for i, choice in enumerate(choices))
             text = f"{text}\nAvailable: {opts_inline}"
+        commercial_note = self._room_prompt_commercial_note(session, gateway)
+        if commercial_note:
+            text = f"{text}\n\n{commercial_note}"
+        text = f"{text}\nIf this reservation is for a group, reply with the number of travelers, for example '5 travelers'."
         return text
+
+    def _room_prompt_commercial_note(self, session: SessionState, gateway) -> str:
+        traveler = (session.final_result or {}).get("traveler") if isinstance((session.final_result or {}).get("traveler"), dict) else None
+        commercial_context = UnifiedCRMService.resolve_commercial_context(
+            traveler=traveler,
+            trip_type=session.trip_type,
+            requested_group_size=session.group_size,
+            trip_id=session.selected_trip_id,
+        )
+        notes: list[str] = []
+        if commercial_context.get("vip", {}).get("recognized"):
+            vip_offer = str(commercial_context.get("vip", {}).get("offer_text") or "").strip()
+            if vip_offer:
+                notes.append(f"VIP offer: {vip_offer}")
+            else:
+                notes.append("VIP offer: your booking is eligible for VIP discount handling.")
+        if session.group_size > 1:
+            group_offer = str(commercial_context.get("group", {}).get("offer_text") or "").strip()
+            if group_offer:
+                notes.append(f"Group offer: {group_offer}")
+            elif commercial_context.get("group", {}).get("eligible"):
+                notes.append("Group offer: your booking qualifies for group pricing review.")
+        if not notes:
+            try:
+                discount_note = gateway.get_trip_discount_notes(session.selected_trip_id)
+            except Exception:
+                discount_note = ""
+            if discount_note:
+                notes.append(f"Special offer: {discount_note}")
+        return "\n".join(notes)
 
     def _selected_trip(self, session: SessionState) -> dict[str, Any] | None:
         trip_id = session.selected_trip_id
@@ -1152,6 +1326,43 @@ class SessionFlowManager:
             return int(value) > 0
         except (TypeError, ValueError):
             return False
+
+    @staticmethod
+    def _looks_like_group_booking_intent(text: str) -> bool:
+        normalized = str(text or "").strip().lower()
+        return any(
+            token in normalized
+            for token in (
+                "group",
+                "traveler",
+                "travelers",
+                "people",
+                "persons",
+                "friends",
+                "family",
+                "we are",
+                "for us",
+            )
+        )
+
+    def _extract_group_size(self, text: str, *, allow_plain_number: bool) -> int | None:
+        normalized = str(text or "").strip().lower()
+        if not normalized:
+            return None
+        if allow_plain_number and normalized.isdigit():
+            try:
+                return max(int(normalized), 1)
+            except (TypeError, ValueError):
+                return None
+        if not self._looks_like_group_booking_intent(normalized):
+            return None
+        match = re.search(r"(\d+)", normalized)
+        if not match:
+            return None
+        try:
+            return max(int(match.group(1)), 1)
+        except (TypeError, ValueError):
+            return None
 
     def _resolve_trip_type(self, text: str) -> str | None:
         """Resolve trip type from numbered reply (1/2) or typed word."""
@@ -1263,14 +1474,96 @@ class SessionFlowManager:
                     text = text.format(**values)
                 except (KeyError, ValueError):
                     pass
-
-            agent_logger.debug(f"Resolved copy: {message_key} [{language}] -> {text}")
-            agent_logger.info(f"OUTGOING: {text}")
-            return text
         except Exception as e:
             agent_logger.error(f"Error resolving copy {message_key}: {e}")
-            agent_logger.info(f"OUTGOING: {text}")
+        text = self._maybe_rewrite_with_ai(message_key, text, language)
+        agent_logger.debug(f"Resolved copy: {message_key} [{language}] -> {text}")
+        agent_logger.info(f"OUTGOING: {text}")
+        return text
+
+    def _maybe_rewrite_with_ai(self, message_key: str, text: str, language: str) -> str:
+        if not text or not self.conversation_ai or message_key not in _AI_REWRITABLE_MESSAGE_KEYS:
             return text
+        session = self._active_session
+        if session is None:
+            return text
+        try:
+            rewritten = self.conversation_ai.rewrite_message(
+                message_key=message_key,
+                base_text=text,
+                language=language,
+                user_text=self._active_user_text,
+                required_action=self._required_action_hint(session),
+                session_context={
+                    "stage": session.stage,
+                    "customer_name": session.customer_name,
+                    "trip_type": session.trip_type,
+                    "selected_trip_name": session.selected_trip_name,
+                    "selected_trip_id": session.selected_trip_id,
+                    "room_type": session.room_type,
+                    "flight_option": session.flight_option,
+                    "currency": session.currency,
+                    "booking_status": session.booking_status,
+                    "has_passport_attachment": bool(session.passport_attachment_ref),
+                    "passport_required": session.trip_type == "international",
+                },
+            )
+        except Exception as exc:
+            agent_logger.warning("Conversation AI rewrite failed for %s: %s", message_key, exc)
+            return text
+        if not rewritten:
+            return text
+        if self._rewrite_violates_constraints(message_key, rewritten):
+            return text
+        return rewritten
+
+    def _required_action_hint(self, session: SessionState) -> str:
+        if session.stage == "awaiting_phone":
+            return "Ask for the WhatsApp number."
+        if session.stage == "awaiting_country_code":
+            return "Explain that you need the country code only to format the WhatsApp number correctly, then ask for that code."
+        if session.stage == "awaiting_trip_type":
+            return "Help the traveler choose local or international."
+        if session.stage == "awaiting_confirmation":
+            return "Help the traveler choose one of the offered trips or stop."
+        if session.stage == "awaiting_passport_upload":
+            return "Ask only for the passport attachment upload."
+        if session.stage == "awaiting_group_size":
+            return "Ask only for the group size as a number."
+        if session.stage == "awaiting_room_type":
+            return "Help the traveler choose a room type from the available options."
+        if session.stage == "awaiting_flight":
+            return "Ask whether flights should be included."
+        if session.stage == "awaiting_currency":
+            return "Ask for the preferred payment currency."
+        if session.stage in {"completed", "booking_created"}:
+            return "Keep the tone helpful and confirm the saved booking draft without asking for deposit confirmation."
+        return "Reply naturally and keep the traveler on the current workflow step."
+
+    def _rewrite_violates_constraints(self, message_key: str, rewritten: str) -> bool:
+        lowered = rewritten.lower()
+        if message_key in {"session.ask_passport_upload", "session.passport_upload_pending"}:
+            forbidden = (
+                "passport number",
+                "passport expiry",
+                "expiry date",
+                "passport nationality",
+                "full name exactly",
+            )
+            if any(bit in lowered for bit in forbidden):
+                return True
+        if message_key in {"session.booking_created_complete", "session.booking_completed"}:
+            forbidden_payment_prompts = (
+                "would you like to pay",
+                "would you like to confirm",
+                "pay the deposit",
+                "reply yes",
+                "reply no",
+                "confirm the deposit",
+            )
+            if any(bit in lowered for bit in forbidden_payment_prompts):
+                return True
+        return False
 
     def _result_message(self, result: dict[str, Any], gateway, language: str = "en") -> str:
         return self._preview_message(result, gateway, language)

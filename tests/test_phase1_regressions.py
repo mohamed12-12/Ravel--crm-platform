@@ -14,6 +14,7 @@ if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
 from app.extensions import db
+from app.models.traveler import Traveler
 from app.models.booking import TripBooking
 from services.crm.system_services.phone_normalization import normalize_phone_input
 from test_phase11_demo_features import _make_app_with_db
@@ -81,9 +82,48 @@ class Phase1BookingRouteTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 302)
         with self.app.app_context():
-            booking = TripBooking.query.get("B-001")
+            booking = db.session.get(TripBooking, "B-001")
             self.assertEqual(booking.booking_status, "Payment Pending")
             self.assertEqual(booking.payment_status, "Fully Paid")
+
+    def test_travelers_index_normalizes_legacy_slash_datetime_values(self) -> None:
+        with self.app.app_context():
+            db.session.add(
+                Traveler(
+                    traveler_id="TR-LEGACY-1",
+                    full_name="Legacy Traveler",
+                    status="Active",
+                )
+            )
+            db.session.commit()
+            db.session.execute(
+                db.text(
+                    """
+                    UPDATE travelers
+                    SET created_at = :created_at,
+                        last_contacted_at = :last_contacted_at
+                    WHERE traveler_id = :traveler_id
+                    """
+                ),
+                {
+                    "traveler_id": "TR-LEGACY-1",
+                    "created_at": "06/28/2026",
+                    "last_contacted_at": "06/29/2026 14:30:00",
+                },
+            )
+            db.session.commit()
+
+        reloaded_app = _create_temp_app(self.db_path)
+        reloaded_app.config["TESTING"] = True
+        client = reloaded_app.test_client()
+        response = client.get("/travelers/")
+        self.assertEqual(response.status_code, 200)
+
+        with reloaded_app.app_context():
+            traveler = db.session.get(Traveler, "TR-LEGACY-1")
+            self.assertIsNotNone(traveler)
+            self.assertEqual(traveler.created_at.isoformat(), "2026-06-28T00:00:00")
+            self.assertEqual(traveler.last_contacted_at.isoformat(), "2026-06-29T14:30:00")
 
 
 class Phase1AgentSessionTests(unittest.TestCase):
@@ -117,8 +157,7 @@ class Phase1AgentSessionTests(unittest.TestCase):
         client.post(f"/api/session/{session_id}/message", json={"text": "single"})
         client.post(f"/api/session/{session_id}/message", json={"text": "no"})
         session = client.post(f"/api/session/{session_id}/message", json={"text": "EGP"}).get_json()["session"]
-        self.assertEqual(session["stage"], "booking_created")
-        self.assertNotEqual(session["stage"], "completed")
+        self.assertEqual(session["stage"], "completed")
 
 
 if __name__ == "__main__":

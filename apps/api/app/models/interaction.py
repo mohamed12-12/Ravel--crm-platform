@@ -1,7 +1,11 @@
 # app/models/interaction.py
 from app.extensions import db
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 class Interaction(db.Model):
     __tablename__ = 'interactions'
@@ -10,7 +14,7 @@ class Interaction(db.Model):
     interaction_id = db.Column(db.String(50), primary_key=True)
     
     # Core Fields
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    timestamp = db.Column(db.DateTime, default=_utc_now)
     channel = db.Column(db.String(50))
     customer_name = db.Column(db.String(200))
     raw_phone = db.Column(db.String(50))
@@ -84,7 +88,7 @@ class Interaction(db.Model):
 
         return cls(
             interaction_id=clean(row.get("Interaction ID")),
-            timestamp=to_datetime(row.get("Timestamp")) or datetime.utcnow(),
+            timestamp=to_datetime(row.get("Timestamp")) or _utc_now(),
             channel=clean(row.get("Channel")),
             customer_name=clean(row.get("Customer Name")),
             raw_phone=clean(row.get("Raw Phone")),

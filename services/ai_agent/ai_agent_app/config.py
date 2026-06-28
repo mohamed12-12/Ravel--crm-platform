@@ -6,6 +6,9 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_AGENT_CONVERSATION_PROMPT_FILE = (
+    PROJECT_ROOT / "services" / "ai_agent" / "ai_agent_app" / "prompts" / "agent_conversation.md"
+)
 
 
 def _load_env_file(path: Path) -> None:
@@ -38,6 +41,13 @@ def _optional_path(raw: str | None) -> Path | None:
     if not candidate.is_absolute():
         candidate = PROJECT_ROOT / candidate
     return candidate
+
+
+def _read_text_file(raw: str | None, default_path: Path) -> str:
+    candidate = _optional_path(raw) if raw else default_path
+    if candidate is None or not candidate.exists():
+        return ""
+    return candidate.read_text(encoding="utf-8").strip()
 
 
 def _extract_sheet_id(value: str) -> str:
@@ -86,6 +96,7 @@ class Settings:
     demo_write_mode: str
 
     agent_persona_name: str
+    agent_conversation_prompt: str
     website_url: str
     post_trip_handoff_enabled: bool
     post_trip_handoff_keywords: str
@@ -97,6 +108,8 @@ class Settings:
 
     def validate(self) -> list[str]:
         errors: list[str] = []
+        if self.app_env == "production" and not self.app_secret_key:
+            errors.append("APP_SECRET_KEY is required in production.")
         if self.sheet_backend not in {"excel", "google", "google_sheets"}:
             errors.append("SHEET_BACKEND must be either 'excel', 'google', or 'google_sheets'.")
         if self.sheet_backend == "excel" and not self.excel_source_workbook.exists():
@@ -114,6 +127,7 @@ class Settings:
 
 def load_settings() -> Settings:
     _load_env_file(PROJECT_ROOT / ".env")
+    app_env = os.getenv("APP_ENV", "development").strip().lower()
 
     source = os.getenv("EXCEL_SOURCE_WORKBOOK", "archive/source-artifacts/RT - Travelers Database.phase5.ready.xlsx")
     runtime = os.getenv("EXCEL_RUNTIME_WORKBOOK", "archive/source-artifacts/RT - Travelers Database.phase5.demo.xlsx")
@@ -129,7 +143,10 @@ def load_settings() -> Settings:
         app_env=os.getenv("APP_ENV", "development"),
         app_host=os.getenv("APP_HOST", "127.0.0.1"),
         app_port=int(os.getenv("APP_PORT", "5001")),
-        app_secret_key=os.getenv("APP_SECRET_KEY", "rahma-traveler-demo"),
+        app_secret_key=(
+            os.getenv("APP_SECRET_KEY", "").strip()
+            or ("rahma-traveler-demo" if app_env != "production" else "")
+        ),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         ai_provider=os.getenv("AI_PROVIDER", "gemini").strip().lower(),
         gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
@@ -154,6 +171,13 @@ def load_settings() -> Settings:
         default_country_code=os.getenv("DEFAULT_COUNTRY_CODE", "20").strip(),
         demo_write_mode=os.getenv("DEMO_WRITE_MODE", "demo").strip().lower(),
         agent_persona_name=os.getenv("AGENT_PERSONA_NAME", "").strip(),
+        agent_conversation_prompt=(
+            os.getenv("AGENT_CONVERSATION_PROMPT", "").strip()
+            or _read_text_file(
+                os.getenv("AGENT_CONVERSATION_PROMPT_FILE", "").strip(),
+                DEFAULT_AGENT_CONVERSATION_PROMPT_FILE,
+            )
+        ),
         website_url=os.getenv("WEBSITE_URL", "").strip(),
         post_trip_handoff_enabled=_bool(os.getenv("POST_TRIP_HANDOFF_ENABLED"), default=False),
         post_trip_handoff_keywords=os.getenv("POST_TRIP_HANDOFF_KEYWORDS", "help,support,agent,human,assistance,مساعدة,دعم,انسان,بشر").strip(),

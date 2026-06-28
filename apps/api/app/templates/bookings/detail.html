@@ -41,6 +41,13 @@
                 <div><div class="form-label">Trip ID</div><div class="mono" style="color:var(--accent-2)">{{ booking.trip_id or '—' }}</div></div>
                 <div><div class="form-label">Room Type</div><div style="color:var(--text-main)">{{ booking.room_type or '—' }}</div></div>
                 <div><div class="form-label">Flight Option</div><div style="color:var(--text-main)">{{ booking.flight_option or '—' }}</div></div>
+                <div><div class="form-label">Commercial Review</div>
+                    <div style="color:var(--text-main)">
+                        {% if commercial_context.vip.recognized %}VIP customer{% else %}Standard customer{% endif %}
+                        {% if commercial_context.group.eligible %}<span class="badge badge-yellow" style="margin-left:0.35rem">Group quote review</span>{% endif %}
+                    </div>
+                </div>
+                <div><div class="form-label">Flight Policy</div><div style="color:var(--text-main)">{{ commercial_context.flight_policy.summary }}</div></div>
                 <div><div class="form-label">Currency</div><div style="color:var(--text-main)">{{ booking.currency or '—' }}</div></div>
                 <div><div class="form-label">Source</div><div style="color:var(--text-main)">{{ booking.booking_source or '—' }}</div></div>
                 <div><div class="form-label">Lead ID</div><div class="mono" style="color:var(--accent-2)">{{ booking.lead_id or '—' }}</div></div>
@@ -49,6 +56,30 @@
                 <div class="col-span-2"><div class="form-label">Notes</div>
                 <div style="color:var(--text-dim);font-size:0.83rem;white-space:pre-wrap">{{ booking.booking_notes }}</div></div>
                 {% endif %}
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Commercial Summary</span>
+            </div>
+            <div class="grid-2" style="gap:1rem">
+                <div>
+                    <div class="form-label">Group Size</div>
+                    <div style="color:var(--text-main)">{{ booking.group_size or commercial_context.group.size }}</div>
+                </div>
+                <div>
+                    <div class="form-label">Manual Quote</div>
+                    <div style="color:var(--text-main)">{% if commercial_context.group.manual_quote_required %}Required{% else %}Not required{% endif %}</div>
+                </div>
+                <div>
+                    <div class="form-label">VIP Review</div>
+                    <div style="color:var(--text-main)">{% if commercial_context.vip.manual_review_recommended %}Recommended{% else %}No{% endif %}</div>
+                </div>
+                <div>
+                    <div class="form-label">Flight Default</div>
+                    <div style="color:var(--text-main)">{{ commercial_context.flight_policy.mode }}</div>
+                </div>
             </div>
         </div>
 

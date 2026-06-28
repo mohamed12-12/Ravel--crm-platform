@@ -29,6 +29,9 @@ def index():
             TripBooking.traveler_name.ilike(f'%{q}%'),
             TripBooking.booking_id.ilike(f'%{q}%'),
             TripBooking.trip_name.ilike(f'%{q}%'),
+            TripBooking.booking_notes.ilike(f'%{q}%'),
+            TripBooking.booking_source.ilike(f'%{q}%'),
+            TripBooking.traveler_id.ilike(f'%{q}%'),
         ))
     if status:
         query = query.filter(TripBooking.booking_status == status)
@@ -57,9 +60,15 @@ def index():
 
 @bookings_bp.route('/<string:booking_id>')
 def detail(booking_id):
-    booking = TripBooking.query.get_or_404(booking_id)
-    traveler = Traveler.query.get(booking.traveler_id) if booking.traveler_id else None
-    trip = Trip.query.get(booking.trip_id) if booking.trip_id else None
+    booking = db.get_or_404(TripBooking, booking_id)
+    traveler = db.session.get(Traveler, booking.traveler_id) if booking.traveler_id else None
+    trip = db.session.get(Trip, booking.trip_id) if booking.trip_id else None
+    commercial_context = UnifiedCRMService.resolve_commercial_context(
+        traveler=traveler.to_dict() if traveler else None,
+        trip_type=trip.type if trip else None,
+        requested_group_size=booking.group_size or 1,
+        trip_id=booking.trip_id or "",
+    )
     try:
         UnifiedCRMService().ensure_operational_schema()
     except Exception:
@@ -76,6 +85,7 @@ def detail(booking_id):
                            booking=booking,
                            traveler=traveler,
                            trip=trip,
+                           commercial_context=commercial_context,
                            event_trail=event_trail,
                            status_history=status_history,
                            booking_statuses=BOOKING_STATUSES,
@@ -89,18 +99,30 @@ def create():
     trip_id = data.get('trip_id')
     traveler_id = data.get('traveler_id')
     room_type = data.get('room_type')
+    group_size = data.get('group_size', '1').strip() or '1'
     
     if not trip_id or not traveler_id or not room_type:
         flash("Trip, Traveler, and Room Type are required to create a booking.", "error")
         return redirect(url_for('bookings.index'))
 
-    traveler = Traveler.query.get(traveler_id)
+    traveler = db.session.get(Traveler, traveler_id)
     if not traveler:
         flash(f"Traveler '{traveler_id}' was not found.", "error")
         return redirect(url_for('bookings.index'))
         
     try:
         service = UnifiedCRMService()
+        trip = db.session.get(Trip, trip_id)
+        passport_required = bool(trip and str(trip.type or '').strip().lower() == 'international')
+        passport_status = 'provided' if traveler.passport_number or traveler.passport_attachment_ref else ('pending' if passport_required else '')
+        booking_notes = (data.get('booking_notes', '') or '').strip()
+        try:
+            normalized_group_size = max(int(group_size), 1)
+        except Exception:
+            normalized_group_size = 1
+        if normalized_group_size > 1:
+            group_note = f"Group size: {normalized_group_size}"
+            booking_notes = f"{group_note}\n{booking_notes}" if booking_notes else group_note
         result = service.create_booking(
             trip_id=trip_id,
             traveler_id=traveler_id,
@@ -112,7 +134,10 @@ def create():
             booking_status='Draft',
             booking_source=data.get('booking_source', 'Admin'),
             payment_status=data.get('payment_status', 'Pending'),
-            booking_notes=data.get('booking_notes', ''),
+            booking_notes=booking_notes,
+            passport_required=passport_required,
+            passport_status=passport_status,
+            group_size=normalized_group_size,
         )
         booking_id = result["booking_id"]
         flash(f"Booking {booking_id} created successfully.", 'success')
@@ -127,7 +152,7 @@ def create():
 
 @bookings_bp.route('/<string:booking_id>/status', methods=['POST'])
 def update_status(booking_id):
-    booking = TripBooking.query.get_or_404(booking_id)
+    booking = db.get_or_404(TripBooking, booking_id)
     data = request.get_json(silent=True) or request.form.to_dict()
     new_status = data.get('booking_status')
     new_payment = data.get('payment_status')
@@ -149,7 +174,7 @@ def update_status(booking_id):
             notes=data.get('booking_notes', ''),
         )
         if result:
-            booking = TripBooking.query.get_or_404(booking_id)
+            booking = db.get_or_404(TripBooking, booking_id)
     except ValueError as e:
         flash(str(e), 'error')
         return redirect(url_for('bookings.detail', booking_id=booking_id))

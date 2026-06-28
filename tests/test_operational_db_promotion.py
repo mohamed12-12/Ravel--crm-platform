@@ -12,7 +12,7 @@ from services.ai_agent.ai_agent_app.config import load_settings
 from services.crm.system_services.config import get_database_diagnostics, resolve_system_db_path
 
 
-PROMOTED_DB = Path("apps/api/instance/rahma_traveler_dev.db")
+PROMOTED_DB = Path("tests/fixtures/operational_db_fixture.db")
 WORKBOOK = Path("RT - Travelers Database.xlsx")
 
 

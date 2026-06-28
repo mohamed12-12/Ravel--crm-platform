@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+import re
 import shutil
 import threading
 import time
 import sqlite3
 from pathlib import Path
 from typing import Any
+from urllib import parse, request
 from zipfile import BadZipFile, is_zipfile
 
 from openpyxl import load_workbook
 
 from services.ai_agent.ai_agent_app.config import Settings
 from services.ai_agent.ai_agent_app.logger import sheet_logger
-from services.ai_agent.ai_agent_app.system_bridge import check_traveler_completed_trips, create_system_booking, get_system_preview_result, get_system_trip_result, qualify_system_lead, run_system_sales_cycle
+from services.ai_agent.ai_agent_app.system_bridge import check_traveler_completed_trips, create_system_booking, create_system_handoff, get_system_preview_result, get_system_trip_result, qualify_system_lead, run_system_sales_cycle, save_system_traveler_passport
 from services.crm.system_services.config import resolve_system_db_path
 from scripts.phase1_readonly_agent import build_agent_response
 
@@ -151,6 +153,9 @@ class ExcelSheetGateway:
         flight_option: str = "",
         date_option: str = "",
         currency: str = "",
+        passport_required: bool = False,
+        passport_status: str = "",
+        group_size: int | str = 1,
     ) -> dict[str, Any]:
         sheet_logger.info(f"Creating booking draft: traveler={traveler_id}, trip={trip_id}")
         with self._lock:
@@ -167,6 +172,9 @@ class ExcelSheetGateway:
                 flight_option=flight_option,
                 date_option=date_option,
                 currency=currency,
+                passport_required=passport_required,
+                passport_status=passport_status,
+                group_size=group_size,
             )
 
     def get_demo_stats(self) -> dict[str, Any]:
@@ -199,7 +207,52 @@ class ExcelSheetGateway:
         """
         return check_traveler_completed_trips(self.settings, traveler_id)
 
-    def get_visa_requirement(self, destination: str) -> dict[str, Any]:
+    def save_traveler_passport(
+        self,
+        traveler_id: str,
+        *,
+        passport_name: str = "",
+        passport_number: str = "",
+        passport_expiry: str = "",
+        passport_nationality: str = "",
+        passport_attachment_ref: str = "",
+        uploaded_by: str = "ai-agent",
+        attachment_file_name: str = "",
+        attachment_original_name: str = "",
+        attachment_mime_type: str = "",
+        attachment_size: int | None = None,
+        notes: str = "",
+    ) -> dict[str, Any]:
+        with self._lock:
+            try:
+                return save_system_traveler_passport(
+                    self.settings,
+                    traveler_id,
+                    passport_name=passport_name,
+                    passport_number=passport_number,
+                    passport_expiry=passport_expiry,
+                    passport_nationality=passport_nationality,
+                    passport_attachment_ref=passport_attachment_ref,
+                    uploaded_by=uploaded_by,
+                    attachment_file_name=attachment_file_name,
+                    attachment_original_name=attachment_original_name,
+                    attachment_mime_type=attachment_mime_type,
+                    attachment_size=attachment_size,
+                    notes=notes,
+                )
+            except Exception as exc:
+                sheet_logger.warning(
+                    "Traveler passport persistence failed for %s: %s",
+                    traveler_id,
+                    exc,
+                )
+                return {}
+
+    def create_handoff_case(self, **payload: Any) -> dict[str, Any]:
+        with self._lock:
+            return create_system_handoff(self.settings, **payload)
+
+    def get_visa_requirement(self, destination: str, nationality: str = "") -> dict[str, Any]:
         """Look up visa requirement from the 'Visa Requirements' sheet in the runtime workbook.
 
         Returns a dict with:
@@ -214,50 +267,173 @@ class ExcelSheetGateway:
             "or consulate of your destination country before travel. Rahma Travel is not "
             "responsible for visa denials or entry refusals."
         )
+        nationality = str(nationality or "").strip()
         if not destination or not destination.strip():
-            return {"required": None, "destination": "", "notes": "", "disclaimer": DISCLAIMER, "source": "unknown"}
+            return {
+                "required": None,
+                "destination": "",
+                "nationality": nationality,
+                "notes": "",
+                "summary": "",
+                "disclaimer": DISCLAIMER,
+                "source": "unknown",
+                "source_mode": "unknown",
+                "sources": [],
+            }
 
         dest_clean = destination.strip().lower()
         try:
             wb = self._load_runtime_workbook(data_only=True, read_only=True)
             try:
                 if "Visa Requirements" not in wb.sheetnames:
-                    return {"required": None, "destination": destination, "notes": "", "disclaimer": DISCLAIMER, "source": "unknown"}
-                ws = wb["Visa Requirements"]
-                # Expected columns: Destination | Visa Required (Yes/No) | Notes
-                headers: dict[str, int] = {}
-                for col in range(1, ws.max_column + 1):
-                    val = _normalize_text(ws.cell(1, col).value)
-                    if val:
-                        headers[val.lower()] = col
-                dest_col = headers.get("destination") or headers.get("country") or 1
-                req_col = headers.get("visa required") or headers.get("required") or 2
-                notes_col = headers.get("notes") or headers.get("note") or 3
-                for row_idx in range(2, ws.max_row + 1):
-                    row_dest = _normalize_text(ws.cell(row_idx, dest_col).value).lower()
-                    if not row_dest:
-                        continue
-                    if dest_clean in row_dest or row_dest in dest_clean:
-                        req_raw = _normalize_text(ws.cell(row_idx, req_col).value).lower()
-                        required: bool | None = None
-                        if req_raw in {"yes", "y", "true", "1", "required"}:
-                            required = True
-                        elif req_raw in {"no", "n", "false", "0", "not required"}:
-                            required = False
-                        notes = _normalize_text(ws.cell(row_idx, notes_col).value)
-                        return {
-                            "required": required,
-                            "destination": _normalize_text(ws.cell(row_idx, dest_col).value),
-                            "notes": notes,
-                            "disclaimer": DISCLAIMER,
-                            "source": "table",
-                        }
-                return {"required": None, "destination": destination, "notes": "", "disclaimer": DISCLAIMER, "source": "unknown"}
+                    table_result = None
+                else:
+                    ws = wb["Visa Requirements"]
+                    # Expected columns: Destination | Visa Required (Yes/No) | Notes
+                    headers: dict[str, int] = {}
+                    for col in range(1, ws.max_column + 1):
+                        val = _normalize_text(ws.cell(1, col).value)
+                        if val:
+                            headers[val.lower()] = col
+                    dest_col = headers.get("destination") or headers.get("country") or 1
+                    req_col = headers.get("visa required") or headers.get("required") or 2
+                    notes_col = headers.get("notes") or headers.get("note") or 3
+                    table_result = None
+                    for row_idx in range(2, ws.max_row + 1):
+                        row_dest = _normalize_text(ws.cell(row_idx, dest_col).value).lower()
+                        if not row_dest:
+                            continue
+                        if dest_clean in row_dest or row_dest in dest_clean:
+                            req_raw = _normalize_text(ws.cell(row_idx, req_col).value).lower()
+                            required: bool | None = None
+                            if req_raw in {"yes", "y", "true", "1", "required"}:
+                                required = True
+                            elif req_raw in {"no", "n", "false", "0", "not required"}:
+                                required = False
+                            notes = _normalize_text(ws.cell(row_idx, notes_col).value)
+                            table_result = {
+                                "required": required,
+                                "destination": _normalize_text(ws.cell(row_idx, dest_col).value),
+                                "nationality": nationality,
+                                "notes": notes,
+                                "summary": notes or ("Visa required." if required else "Visa not required." if required is False else ""),
+                                "disclaimer": DISCLAIMER,
+                                "source": "table",
+                                "source_mode": "internal",
+                                "sources": [],
+                            }
+                            break
+                if table_result:
+                    return table_result
             finally:
                 wb.close()
         except Exception as exc:
             sheet_logger.error(f"get_visa_requirement error for {destination!r}: {exc}")
-            return {"required": None, "destination": destination, "notes": "", "disclaimer": DISCLAIMER, "source": "unknown"}
+            return {
+                "required": None,
+                "destination": destination,
+                "nationality": nationality,
+                "notes": "",
+                "summary": "",
+                "disclaimer": DISCLAIMER,
+                "source": "unknown",
+                "source_mode": "unknown",
+                "sources": [],
+            }
+
+        if not nationality:
+            return {
+                "required": None,
+                "destination": destination,
+                "nationality": "",
+                "notes": "",
+                "summary": "I need the traveler's nationality or passport country to check visa rules accurately.",
+                "disclaimer": DISCLAIMER,
+                "source": "unknown",
+                "source_mode": "unknown",
+                "sources": [],
+                "needs_nationality": True,
+            }
+
+        web_result = self._lookup_visa_requirement_on_web(destination, nationality, disclaimer=DISCLAIMER)
+        if web_result:
+            return web_result
+        return {
+            "required": None,
+            "destination": destination,
+            "nationality": nationality,
+            "notes": "",
+            "summary": "I could not verify a reliable visa requirement from the available sources.",
+            "disclaimer": DISCLAIMER,
+            "source": "unknown",
+            "source_mode": "unknown",
+            "sources": [],
+        }
+
+    def _lookup_visa_requirement_on_web(self, destination: str, nationality: str, *, disclaimer: str) -> dict[str, Any] | None:
+        search_url = self._build_visa_search_url(destination, nationality)
+        if not search_url:
+            return None
+        for url in self._extract_candidate_visa_links(self._fetch_url_text(search_url)):
+            page_text = self._fetch_url_text(url)
+            parsed = self._parse_visa_requirement_from_text(page_text)
+            if not parsed:
+                continue
+            return {
+                "required": parsed["required"],
+                "destination": destination,
+                "nationality": nationality,
+                "notes": parsed["summary"],
+                "summary": parsed["summary"],
+                "disclaimer": disclaimer,
+                "source": "web",
+                "source_mode": "web",
+                "sources": [{"url": url, "label": self._source_label(url)}],
+            }
+        return None
+
+    @staticmethod
+    def _build_visa_search_url(destination: str, nationality: str) -> str:
+        query = f"official visa requirements {nationality} passport {destination}"
+        return "https://duckduckgo.com/html/?" + parse.urlencode({"q": query})
+
+    @staticmethod
+    def _fetch_url_text(url: str) -> str:
+        req = request.Request(url, headers={"User-Agent": "Mozilla/5.0 RahmaTravelerVisaLookup/1.0"})
+        with request.urlopen(req, timeout=6) as response:
+            return response.read().decode("utf-8", errors="replace")
+
+    @staticmethod
+    def _extract_candidate_visa_links(html: str) -> list[str]:
+        if not html:
+            return []
+        links = re.findall(r'href="(https?://[^"]+)"', html, flags=re.IGNORECASE)
+        official = []
+        for link in links:
+            lowered = link.lower()
+            if any(bit in lowered for bit in (".gov", ".gc.ca", ".gob.", "embassy", "consulate", "gov.uk", "state.gov")):
+                official.append(link)
+        return list(dict.fromkeys(official))[:5]
+
+    @staticmethod
+    def _parse_visa_requirement_from_text(text: str) -> dict[str, Any] | None:
+        normalized = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text or "")).strip()
+        lowered = normalized.lower()
+        for required, phrases in (
+            (False, ("visa-free", "no visa required", "visa not required", "visa on arrival")),
+            (True, ("visa required", "must obtain a visa", "need a visa")),
+        ):
+            for phrase in phrases:
+                index = lowered.find(phrase)
+                if index >= 0:
+                    snippet = normalized[max(0, index - 80): index + len(phrase) + 120].strip()
+                    return {"required": required, "summary": snippet}
+        return None
+
+    @staticmethod
+    def _source_label(url: str) -> str:
+        parsed = parse.urlparse(url)
+        return parsed.netloc or url
 
     def get_trip_discount_notes(self, trip_id: str) -> str:
         """Return the trip notes field for a given trip_id from the Trips sheet.
@@ -268,6 +444,30 @@ class ExcelSheetGateway:
         """
         if not trip_id:
             return ""
+        try:
+            from services.crm.system_services import UnifiedCRMService
+
+            commercial_context = UnifiedCRMService.resolve_commercial_context(
+                traveler=None,
+                trip_type=None,
+                requested_group_size=1,
+                trip_id=trip_id,
+            )
+            note_parts: list[str] = []
+            vip_offer = str((commercial_context.get("vip") or {}).get("offer_text") or "").strip()
+            group_offer = str((commercial_context.get("group") or {}).get("offer_text") or "").strip()
+            if vip_offer:
+                note_parts.append(f"VIP discount: {vip_offer}")
+            if group_offer:
+                threshold = int((commercial_context.get("group") or {}).get("threshold") or 0)
+                if threshold > 0:
+                    note_parts.append(f"Group discount for {threshold}+ travelers: {group_offer}")
+                else:
+                    note_parts.append(f"Group discount: {group_offer}")
+            if note_parts:
+                return " | ".join(note_parts)
+        except Exception:
+            pass
         try:
             wb = self._load_runtime_workbook(data_only=True, read_only=True)
             try:

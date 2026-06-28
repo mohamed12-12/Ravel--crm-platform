@@ -12,19 +12,25 @@ SYSTEM_ROOT = Path(__file__).resolve().parent.parent / "apps" / "api"
 if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
-from app.extensions import db
-from app.models.booking import TripBooking
-from app.models.booking_status_history import BookingStatusHistory
-from app.models.traveler import Traveler
-from app.models.trip import Trip
-from services.crm.system_services import UnifiedCRMService
-
-
-
-
 def _create_temp_app():
+    for module_name in list(sys.modules):
+        if module_name == "app" or module_name.startswith("app."):
+            sys.modules.pop(module_name, None)
     from app import create_app
     return create_app("development")
+
+
+def _load_app_objects():
+    from app.extensions import db
+    from app.models.booking import TripBooking
+    from app.models.booking_status_history import BookingStatusHistory
+    from app.models.traveler import Traveler
+    from app.models.trip import Trip
+    from services.crm.system_services import UnifiedCRMService
+
+    return db, TripBooking, BookingStatusHistory, Traveler, Trip, UnifiedCRMService
+
+
 class Phase3BookingLifecycleTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = Path(".tmp-test-workdirs") / f"phase3-booking-life-{uuid.uuid4().hex}"
@@ -33,12 +39,13 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
         os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path.resolve().as_posix()}"
         os.environ["RAHMA_SYSTEM_DB_PATH"] = str(self.db_path)
         self.app = _create_temp_app()
+        self.db, self.TripBooking, self.BookingStatusHistory, self.Traveler, self.Trip, UnifiedCRMService = _load_app_objects()
         self.app.config["TESTING"] = True
         with self.app.app_context():
-            db.drop_all()
-            db.create_all()
-            db.session.add(
-                Traveler(
+            self.db.drop_all()
+            self.db.create_all()
+            self.db.session.add(
+                self.Traveler(
                     traveler_id="TR100",
                     full_name="Returning Traveler",
                     integrated_whatsapp="20:1000000000",
@@ -46,8 +53,8 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
                     phone_lookup_key="20:1000000000",
                 )
             )
-            db.session.add(
-                Trip(
+            self.db.session.add(
+                self.Trip(
                     trip_id="TRIP-100",
                     trip_name="Lifecycle Trip",
                     type="Local",
@@ -63,7 +70,7 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
                     draft_holds_triple=0,
                 )
             )
-            db.session.commit()
+            self.db.session.commit()
         self.client = self.app.test_client()
         self.service = UnifiedCRMService()
 
@@ -74,7 +81,7 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
 
     def test_lifecycle_transitions_and_history_are_recorded(self) -> None:
         with self.app.app_context():
-            booking = TripBooking(
+            booking = self.TripBooking(
                 booking_id="B-100",
                 trip_id="TRIP-100",
                 trip_name="Lifecycle Trip",
@@ -85,8 +92,8 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
                 booking_source="Admin",
                 payment_status="Pending",
             )
-            db.session.add(booking)
-            db.session.commit()
+            self.db.session.add(booking)
+            self.db.session.commit()
 
         first = self.service.update_booking_status("B-100", new_status="Waiting Customer", notes="Waiting on reply")
         second = self.service.update_booking_status("B-100", new_status="Pending Confirmation")
@@ -104,7 +111,7 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
         self.assertEqual(sixth["booking_status"], "Completed")
 
         with self.app.app_context():
-            history = BookingStatusHistory.query.filter_by(booking_id="B-100").order_by(BookingStatusHistory.history_id.asc()).all()
+            history = self.BookingStatusHistory.query.filter_by(booking_id="B-100").order_by(self.BookingStatusHistory.history_id.asc()).all()
             self.assertEqual([(row.old_status, row.new_status) for row in history], [
                 ("Draft", "Waiting Customer"),
                 ("Waiting Customer", "Pending Confirmation"),
@@ -116,7 +123,7 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
 
     def test_invalid_transition_is_rejected(self) -> None:
         with self.app.app_context():
-            booking = TripBooking(
+            booking = self.TripBooking(
                 booking_id="B-101",
                 trip_id="TRIP-100",
                 trip_name="Lifecycle Trip",
@@ -127,8 +134,8 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
                 booking_source="Admin",
                 payment_status="Pending",
             )
-            db.session.add(booking)
-            db.session.commit()
+            self.db.session.add(booking)
+            self.db.session.commit()
 
         with self.assertRaises(ValueError):
             self.service.update_booking_status("B-101", new_status="Confirmed")
@@ -144,12 +151,12 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(booking["traveler_id"], "TR100")
         with self.app.app_context():
-            self.assertEqual(Traveler.query.count(), 1)
-            self.assertEqual(TripBooking.query.filter_by(traveler_id="TR100").count(), 1)
+            self.assertEqual(self.Traveler.query.count(), 1)
+            self.assertEqual(self.TripBooking.query.filter_by(traveler_id="TR100").count(), 1)
 
     def test_admin_booking_ui_updates_lifecycle_and_history(self) -> None:
         with self.app.app_context():
-            booking = TripBooking(
+            booking = self.TripBooking(
                 booking_id="B-102",
                 trip_id="TRIP-100",
                 trip_name="Lifecycle Trip",
@@ -160,8 +167,8 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
                 booking_source="Admin",
                 payment_status="Pending",
             )
-            db.session.add(booking)
-            db.session.commit()
+            self.db.session.add(booking)
+            self.db.session.commit()
 
         response = self.client.post(
             "/bookings/B-102/status",
@@ -174,19 +181,19 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
 
         with self.app.app_context():
-            booking = TripBooking.query.get("B-102")
+            booking = self.db.session.get(self.TripBooking, "B-102")
             self.assertEqual(booking.booking_status, "Payment Pending")
             self.assertEqual(booking.payment_status, "Deposit Paid")
-            history = BookingStatusHistory.query.filter_by(booking_id="B-102").all()
+            history = self.BookingStatusHistory.query.filter_by(booking_id="B-102").all()
             self.assertEqual(len(history), 1)
             self.assertEqual(history[0].old_status, "Confirmed")
             self.assertEqual(history[0].new_status, "Payment Pending")
 
     def test_trip_detail_shows_remaining_after_active_bookings(self) -> None:
         with self.app.app_context():
-            db.session.add_all(
+            self.db.session.add_all(
                 [
-                    TripBooking(
+                    self.TripBooking(
                         booking_id="B-200",
                         trip_id="TRIP-100",
                         trip_name="Lifecycle Trip",
@@ -197,7 +204,7 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
                         booking_source="Admin",
                         payment_status="Pending",
                     ),
-                    TripBooking(
+                    self.TripBooking(
                         booking_id="B-201",
                         trip_id="TRIP-100",
                         trip_name="Lifecycle Trip",
@@ -210,7 +217,7 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
                     ),
                 ]
             )
-            db.session.commit()
+            self.db.session.commit()
 
         response = self.client.get("/trips/TRIP-100")
         self.assertEqual(response.status_code, 200)

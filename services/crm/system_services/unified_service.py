@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import re
 import sqlite3
 import uuid
@@ -8,13 +7,13 @@ import os
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
 
-from .config import SystemServiceSettings, load_system_settings
+from .config import SystemServiceSettings, load_system_settings, resolve_system_db_path
 from .field_mapping import (
     SHEET_TABLE_MAPPINGS,
     TRIPS_DATA_START_ROW,
@@ -30,6 +29,7 @@ REVIEW_STATUSES = {"payment risk", "high maintenance"}
 INACTIVE_TRIP_STATUSES = {"cancelled", "closed", "archived"}
 QUALIFIED_LEAD_STAGES = {"Qualified", "VIP Priority", "Repeat Priority"}
 BOOKING_DRAFT_LEAD_STAGES = {"Booking Draft Created", "VIP Booking Draft", "Repeat Booking Draft"}
+GROUP_DISCOUNT_THRESHOLD = 4
 ROOM_HOLD_COLUMNS = {
     "Single": "draft_holds_single",
     "Double": "draft_holds_double",
@@ -69,6 +69,11 @@ BOOKING_TRANSITIONS = {
     "Cancelled": set(),
 }
 _SHEET_WRITE_LOCK = threading.RLock()
+_SCHEMA_READY_LOCK = threading.RLock()
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 @dataclass
@@ -83,6 +88,8 @@ class IdentityResolution:
 
 
 class UnifiedCRMService:
+    _schema_ready_paths: set[str] = set()
+
     def __init__(self, settings: SystemServiceSettings | None = None) -> None:
         self.settings = settings or load_system_settings()
 
@@ -94,6 +101,84 @@ class UnifiedCRMService:
             yield connection
         finally:
             connection.close()
+
+    @staticmethod
+    def parse_trip_sales_notes(raw_notes: str | None, *, default_group_threshold: int = GROUP_DISCOUNT_THRESHOLD) -> dict[str, Any]:
+        notes = str(raw_notes or "").replace("\r\n", "\n")
+        vip_offer = ""
+        group_offer = ""
+        group_threshold = default_group_threshold
+        freeform_lines: list[str] = []
+
+        for raw_line in notes.splitlines():
+            line = raw_line.strip()
+            if not line:
+                freeform_lines.append(raw_line)
+                continue
+            upper = line.upper()
+            if upper.startswith("VIP_DISCOUNT:"):
+                vip_offer = line.split(":", 1)[1].strip()
+                continue
+            if upper.startswith("GROUP_DISCOUNT:"):
+                group_offer = line.split(":", 1)[1].strip()
+                continue
+            if upper.startswith("GROUP_THRESHOLD:"):
+                try:
+                    group_threshold = max(int(line.split(":", 1)[1].strip() or default_group_threshold), 2)
+                except (TypeError, ValueError):
+                    group_threshold = default_group_threshold
+                continue
+            freeform_lines.append(raw_line)
+
+        return {
+            "vip_offer": vip_offer,
+            "group_offer": group_offer,
+            "group_threshold": group_threshold,
+            "notes_body": "\n".join(freeform_lines).strip(),
+        }
+
+    @classmethod
+    def compose_trip_sales_notes(
+        cls,
+        *,
+        existing_notes: str | None = None,
+        vip_offer: str = "",
+        group_offer: str = "",
+        group_threshold: int = GROUP_DISCOUNT_THRESHOLD,
+        notes_body: str = "",
+    ) -> str:
+        parsed = cls.parse_trip_sales_notes(existing_notes, default_group_threshold=group_threshold)
+        final_notes_body = str(notes_body).strip() if str(notes_body).strip() else parsed["notes_body"]
+        lines: list[str] = []
+        if str(vip_offer).strip():
+            lines.append(f"VIP_DISCOUNT: {str(vip_offer).strip()}")
+        if str(group_offer).strip():
+            lines.append(f"GROUP_DISCOUNT: {str(group_offer).strip()}")
+        if group_threshold and int(group_threshold) != GROUP_DISCOUNT_THRESHOLD:
+            lines.append(f"GROUP_THRESHOLD: {int(group_threshold)}")
+        if final_notes_body:
+            lines.append(final_notes_body)
+        return "\n".join(lines).strip()
+
+    @classmethod
+    def load_trip_commercial_config(cls, trip_id: str) -> dict[str, Any]:
+        if not str(trip_id or "").strip():
+            return cls.parse_trip_sales_notes("")
+        try:
+            db_path = resolve_system_db_path()
+            if not db_path.exists():
+                return cls.parse_trip_sales_notes("")
+            connection = sqlite3.connect(db_path)
+            try:
+                row = connection.execute(
+                    "SELECT sales_notes FROM trips WHERE trip_id = ?",
+                    (str(trip_id).strip(),),
+                ).fetchone()
+            finally:
+                connection.close()
+            return cls.parse_trip_sales_notes(row[0] if row else "")
+        except Exception:
+            return cls.parse_trip_sales_notes("")
 
     @staticmethod
     def normalize_phone(raw_phone: str, country_code: str = "20") -> dict[str, str]:
@@ -524,24 +609,58 @@ class UnifiedCRMService:
         except (TypeError, ValueError):
             return 0.0
 
-    def next_traveler_id(self) -> str:
+    @staticmethod
+    def _extract_numeric_traveler_id(traveler_id: str) -> int:
+        match = re.fullmatch(r"TR(\d+)", str(traveler_id or "").strip())
+        return int(match.group(1)) if match else 0
+
+    def _max_traveler_id_from_workbook(self, workbook_path: Path | None) -> int:
+        if not workbook_path or not workbook_path.exists():
+            return 0
+        wb = load_workbook(workbook_path, read_only=True, data_only=True)
+        try:
+            if "Travelers" not in wb.sheetnames:
+                return 0
+            ws = wb["Travelers"]
+            headers = {
+                str(ws.cell(1, col_idx).value or "").strip().lower(): col_idx
+                for col_idx in range(1, ws.max_column + 1)
+                if ws.cell(1, col_idx).value
+            }
+            id_col = headers.get("traveler id") or 2
+            max_number = 0
+            for row_idx in range(2, ws.max_row + 1):
+                traveler_id = str(ws.cell(row_idx, id_col).value or "").strip()
+                current_number = self._extract_numeric_traveler_id(traveler_id)
+                if current_number > max_number:
+                    max_number = current_number
+            return max_number
+        finally:
+            wb.close()
+
+    def _max_traveler_id_from_db(self) -> int:
         with self.connect() as connection:
             row = connection.execute(
                 """
-                SELECT traveler_id 
-                FROM travelers 
-                WHERE traveler_id LIKE 'TR%' 
-                ORDER BY CAST(SUBSTR(traveler_id, 3) AS INTEGER) DESC 
+                SELECT traveler_id
+                FROM travelers
+                WHERE traveler_id LIKE 'TR%'
+                ORDER BY CAST(SUBSTR(traveler_id, 3) AS INTEGER) DESC
                 LIMIT 1
                 """
             ).fetchone()
 
-        max_number = 0
         if row and row["traveler_id"]:
-            traveler_id = str(row["traveler_id"]).strip()
-            match = re.fullmatch(r"TR(\d+)", traveler_id)
-            if match:
-                max_number = int(match.group(1))
+            return self._extract_numeric_traveler_id(str(row["traveler_id"]).strip())
+        return 0
+
+    def next_traveler_id(self) -> str:
+        max_number = self._max_traveler_id_from_db()
+        if max_number <= 0:
+            max_number = max(
+                self._max_traveler_id_from_workbook(self.settings.excel_runtime_workbook),
+                self._max_traveler_id_from_workbook(self.settings.excel_source_workbook),
+            )
 
         next_number = max_number + 1
         return f"TR{next_number:05d}"
@@ -560,11 +679,11 @@ class UnifiedCRMService:
     ) -> dict[str, Any]:
         phone = self.normalize_phone(raw_phone, country_code)
         first_name, last_name = self._split_name(full_name)
-        now = datetime.utcnow().replace(microsecond=0).isoformat()
+        now = _utc_now().replace(microsecond=0).isoformat()
         
         max_retries = 3
+        traveler_id = self.next_traveler_id()
         for attempt in range(max_retries):
-            traveler_id = self.next_traveler_id()
             try:
                 with self.connect() as connection:
                     connection.execute(
@@ -597,9 +716,13 @@ class UnifiedCRMService:
                     )
                     connection.commit()
                 break
-            except sqlite3.IntegrityError:
+            except sqlite3.IntegrityError as exc:
+                error_text = str(exc)
+                if "travelers.traveler_id" not in error_text and "UNIQUE constraint failed" not in error_text:
+                    raise
                 if attempt == max_retries - 1:
                     raise
+                traveler_id = f"TR{self._extract_numeric_traveler_id(traveler_id) + 1:05d}"
         return {
             "traveler_id": traveler_id,
             "full_name": full_name.strip(),
@@ -637,29 +760,34 @@ class UnifiedCRMService:
         handoff_reason: str = "",
         language: str = "",
         country_code: str = "20",
+        group_size: int | str = 1,
+        force_create_new: bool = False,
     ) -> dict[str, Any]:
         phone = self.normalize_phone(raw_phone, country_code)
         lookup_keys = self.lookup_key_variants(phone)
-        now = datetime.utcnow().replace(microsecond=0).isoformat()
+        now = _utc_now().replace(microsecond=0).isoformat()
+        created = False
         with self.connect() as connection:
-            query = """
-                SELECT lead_id, interaction_count FROM leads
-                WHERE (? <> '' AND traveler_id = ?)
-                ORDER BY created_at DESC
-                LIMIT 1
-            """
-            params: list[Any] = [traveler_id or "", traveler_id or ""]
-            if lookup_keys:
-                placeholders = ", ".join("?" for _ in lookup_keys)
-                query = query.replace(
-                    "WHERE (? <> '' AND traveler_id = ?)",
-                    f"WHERE (? <> '' AND phone_lookup_key IN ({placeholders})) OR (? <> '' AND traveler_id = ?)",
-                )
-                params = [phone["lookup_key"] or "", *lookup_keys, *params]
-            existing = connection.execute(
-                query,
-                params,
-            ).fetchone()
+            existing = None
+            if not force_create_new:
+                query = """
+                    SELECT lead_id, interaction_count FROM leads
+                    WHERE (? <> '' AND traveler_id = ?)
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """
+                params: list[Any] = [traveler_id or "", traveler_id or ""]
+                if lookup_keys:
+                    placeholders = ", ".join("?" for _ in lookup_keys)
+                    query = query.replace(
+                        "WHERE (? <> '' AND traveler_id = ?)",
+                        f"WHERE (? <> '' AND phone_lookup_key IN ({placeholders})) OR (? <> '' AND traveler_id = ?)",
+                    )
+                    params = [phone["lookup_key"] or "", *lookup_keys, *params]
+                existing = connection.execute(
+                    query,
+                    params,
+                ).fetchone()
             if existing:
                 lead_id = str(existing["lead_id"])
                 interaction_count = self._as_int(existing["interaction_count"], default=0) or 0
@@ -669,7 +797,7 @@ class UnifiedCRMService:
                     SET updated_at = ?, customer_name = ?, raw_phone = ?, integrated_whatsapp = ?,
                         phone_lookup_key = ?, traveler_id = ?, traveler_status = ?, customer_tier = ?,
                         match_status = ?, lead_stage = ?, lead_source = ?, channel = ?,
-                        preferred_trip_type = ?, interested_trip_ids = ?, suggested_trip_ids = ?,
+                        preferred_trip_type = ?, group_size = ?, interested_trip_ids = ?, suggested_trip_ids = ?,
                         priority = ?, follow_up_status = ?, follow_up_due_date = ?, last_interaction_id = ?,
                         interaction_count = ?, notes = ?, booking_id = ?, flow_key = ?, current_step = ?,
                         handoff_required = ?, handoff_reason = ?, language = ?
@@ -689,6 +817,7 @@ class UnifiedCRMService:
                         lead_source,
                         channel,
                         preferred_trip_type or None,
+                        self._as_int(group_size, default=1) or 1,
                         interested_trip_ids or None,
                         suggested_trip_ids or None,
                         priority,
@@ -707,17 +836,18 @@ class UnifiedCRMService:
                     ),
                 )
             else:
+                created = True
                 lead_id = self._next_prefixed_id(connection, "leads", "lead_id", "LD", 5)
                 connection.execute(
                     """
                     INSERT INTO leads (
                         lead_id, created_at, updated_at, customer_name, raw_phone, integrated_whatsapp,
                         phone_lookup_key, traveler_id, traveler_status, customer_tier, match_status,
-                        lead_stage, lead_source, channel, preferred_trip_type, interested_trip_ids,
+                        lead_stage, lead_source, channel, preferred_trip_type, group_size, interested_trip_ids,
                         suggested_trip_ids, priority, follow_up_status, follow_up_due_date,
                         last_interaction_id, interaction_count, notes, booking_id, flow_key,
                         current_step, handoff_required, handoff_reason, language
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         lead_id,
@@ -735,6 +865,7 @@ class UnifiedCRMService:
                         lead_source,
                         channel,
                         preferred_trip_type or None,
+                        self._as_int(group_size, default=1) or 1,
                         interested_trip_ids or None,
                         suggested_trip_ids or None,
                         priority,
@@ -768,6 +899,7 @@ class UnifiedCRMService:
             "follow_up_status": follow_up_status,
             "follow_up_due_date": follow_up_due_date,
             "interaction_id": last_interaction_id,
+            "created": created,
         }
 
     def record_agent_outcome(
@@ -788,6 +920,8 @@ class UnifiedCRMService:
         manual_lead_stage: str = "",
         manual_priority: str = "",
         manual_follow_up_due_date: str = "",
+        force_create_new_lead: bool = False,
+        group_size: int | str = 1,
         **legacy_kwargs: Any,
     ) -> dict[str, Any]:
         """Persist an agent qualification outcome to the system DB, then sync sheets."""
@@ -797,11 +931,13 @@ class UnifiedCRMService:
             agent_notes = str(legacy_kwargs.pop("status_snapshot", "") or "").strip()
         if not source:
             source = str(legacy_kwargs.pop("intent", "") or "System").strip() or "System"
+        if "group_size" in legacy_kwargs and group_size in (1, "1", "", None):
+            group_size = legacy_kwargs.pop("group_size")
         legacy_kwargs.clear()
         self.ensure_operational_schema()
         resolution = self.resolve_identity(full_name, raw_phone, country_code)
         trip_result = self.build_trip_result(trip_type) if trip_type else {"open_trips": [], "date_tbd_trips": []}
-        timestamp = datetime.utcnow().replace(microsecond=0)
+        timestamp = _utc_now().replace(microsecond=0)
 
         created_traveler: dict[str, Any] | None = None
         traveler = resolution.traveler.copy() if resolution.traveler else None
@@ -841,21 +977,38 @@ class UnifiedCRMService:
         else:
             interested_trip_ids = ", ".join(suggested_trip_ids)
 
+        commercial_context = self.resolve_commercial_context(
+            traveler=traveler,
+            trip_type=trip_type,
+            requested_group_size=self._as_int(group_size, default=1) or 1,
+            trip_id=preferred_trip_id or (suggested_trip_ids[0] if suggested_trip_ids else ""),
+        )
+        effective_handoff_required = bool(
+            resolution.handoff_required or commercial_context.get("manual_handoff_recommended")
+        )
+        effective_handoff_reason = (
+            str(resolution.handoff_reason or "").strip()
+            or str(commercial_context.get("handoff_reason") or "").strip()
+        )
+        if commercial_context.get("group", {}).get("manual_quote_required"):
+            actions.append("group_booking_quote_required")
+
         preview: dict[str, Any] = {
             "match_status": resolution.match_status,
-            "handoff_required": resolution.handoff_required,
-            "handoff_reason": resolution.handoff_reason,
+            "handoff_required": effective_handoff_required,
+            "handoff_reason": effective_handoff_reason,
             "traveler": traveler,
             "lookup_phone": resolution.lookup_phone,
             "name_match_status": resolution.name_match_status,
             "actions": actions,
             "trip_result": trip_result,
+            "commercial_context": commercial_context,
         }
 
         derived_stage, derived_priority = self.derive_lead_stage(preview)
         follow_up_status, derived_due_date = self.derive_follow_up(preview, timestamp)
 
-        if resolution.handoff_required:
+        if effective_handoff_required:
             lead_stage = derived_stage
             priority = derived_priority
             follow_up_due_date = derived_due_date
@@ -881,8 +1034,8 @@ class UnifiedCRMService:
             trip_type=trip_type or "",
             suggested_trips=", ".join(suggested_trip_ids),
             action_taken=", ".join(actions),
-            handoff_required=resolution.handoff_required,
-            handoff_reason=resolution.handoff_reason,
+            handoff_required=effective_handoff_required,
+            handoff_reason=effective_handoff_reason,
             agent_notes=agent_notes,
             flow_key="booking",
             step_key="lead_qualification",
@@ -910,10 +1063,11 @@ class UnifiedCRMService:
             last_interaction_id=interaction["interaction_id"],
             flow_key="booking",
             current_step="lead_qualification",
-            handoff_required=resolution.handoff_required,
-            handoff_reason=resolution.handoff_reason,
+            handoff_required=effective_handoff_required,
+            handoff_reason=effective_handoff_reason,
             language=language,
             country_code=country_code,
+            force_create_new=force_create_new_lead,
         )
 
         events = [
@@ -960,7 +1114,7 @@ class UnifiedCRMService:
                     occurred_at=timestamp,
                 )
             )
-        if resolution.handoff_required:
+        if effective_handoff_required:
             events.append(
                 self.create_booking_event(
                     event_type="handoff_required",
@@ -969,8 +1123,8 @@ class UnifiedCRMService:
                     lead_id=lead_update["lead_id"],
                     interaction_id=interaction["interaction_id"],
                     channel=channel,
-                    notes=resolution.handoff_reason,
-                    metadata={"handoff_reason": resolution.handoff_reason},
+                    notes=effective_handoff_reason,
+                    metadata={"handoff_reason": effective_handoff_reason, "commercial_context": commercial_context},
                     occurred_at=timestamp,
                 )
             )
@@ -993,6 +1147,126 @@ class UnifiedCRMService:
         }
         return preview
 
+    def create_handoff_case(
+        self,
+        *,
+        lead_id: str = "",
+        traveler_id: str = "",
+        trip_id: str = "",
+        flow_key: str = "",
+        reason_code: str = "",
+        reason_text: str = "",
+        priority: str = "",
+        channel: str = "",
+        status: str = "Pending",
+        customer_name: str = "",
+        agent_summary: str = "",
+        customer_summary: str = "",
+        notes: str = "",
+        metadata: dict[str, Any] | None = None,
+        lead_stage_override: str = "",
+        update_lead: bool = True,
+    ) -> dict[str, Any]:
+        self.ensure_operational_schema()
+        reason_code = str(reason_code or "").strip()
+        reason_text = str(reason_text or reason_code or "manual_handoff").strip()
+        priority = priority or self._default_handoff_priority(reason_code)
+        package = {
+            "reason_code": reason_code,
+            "reason_text": reason_text,
+            "customer_name": customer_name,
+            "customer_summary": customer_summary,
+            "agent_summary": agent_summary,
+            "metadata": metadata or {},
+        }
+        display_reason = self._handoff_display_summary(reason_code, reason_text, package)
+        notes_blob = self._handoff_notes_blob(display_reason, package, notes)
+        timestamp = _utc_now().replace(microsecond=0)
+
+        with self.connect() as connection:
+            handoff_id = self._next_prefixed_id(connection, "handoff_queue", "handoff_id", "H-", 8)
+            connection.execute(
+                """
+                INSERT INTO handoff_queue (
+                    handoff_id, created_at, lead_id, traveler_id, trip_id, flow_key,
+                    reason, priority, channel, status, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    handoff_id,
+                    timestamp.isoformat(timespec="seconds"),
+                    lead_id or None,
+                    traveler_id or None,
+                    trip_id or None,
+                    flow_key or None,
+                    display_reason,
+                    priority,
+                    channel or None,
+                    status or "Pending",
+                    notes_blob or None,
+                ),
+            )
+            if update_lead and lead_id:
+                stage = lead_stage_override or ("Blocked" if reason_code == "blacklisted_customer" else "Needs Review")
+                connection.execute(
+                    """
+                    UPDATE leads
+                    SET handoff_required = 1,
+                        handoff_reason = ?,
+                        handoff_id = ?,
+                        lead_stage = ?,
+                        priority = ?,
+                        updated_at = ?
+                    WHERE lead_id = ?
+                    """,
+                    (
+                        reason_code or reason_text,
+                        handoff_id,
+                        stage,
+                        priority,
+                        timestamp.isoformat(timespec="seconds"),
+                        lead_id,
+                    ),
+                )
+            connection.commit()
+
+        event = None
+        try:
+            event = self.create_booking_event(
+                event_type="handoff_required",
+                event_label="Handoff required",
+                traveler_id=traveler_id,
+                lead_id=lead_id,
+                trip_id=trip_id,
+                channel=channel,
+                actor="system",
+                notes=display_reason,
+                metadata={"handoff_id": handoff_id, "priority": priority, "reason_code": reason_code, "package": package},
+                occurred_at=timestamp,
+            )
+            self.sync_agent_write_to_sheet(
+                traveler_id=traveler_id,
+                lead_id=lead_id,
+                trip_id=trip_id,
+                event_ids=[event["event_id"]] if event else [],
+            )
+            self.sync_record_to_sheet("Handoff Queue", handoff_id)
+        except Exception:
+            pass
+
+        return {
+            "handoff_id": handoff_id,
+            "lead_id": lead_id,
+            "traveler_id": traveler_id,
+            "trip_id": trip_id,
+            "reason_code": reason_code,
+            "reason_text": display_reason,
+            "priority": priority,
+            "status": status or "Pending",
+            "package": package,
+            "event_id": event["event_id"] if event else "",
+        }
+
     def update_existing_traveler_profile(
         self,
         traveler_id: str,
@@ -1002,7 +1276,7 @@ class UnifiedCRMService:
         nationality: str = "",
         timestamp: datetime | None = None,
     ) -> dict[str, Any]:
-        timestamp = timestamp or datetime.utcnow().replace(microsecond=0)
+        timestamp = timestamp or _utc_now().replace(microsecond=0)
         updates: dict[str, Any] = {}
         with self.connect() as connection:
             row = connection.execute(
@@ -1107,6 +1381,9 @@ class UnifiedCRMService:
         currency: str = "",
         source: str = "",
         agent_notes: str = "",
+        passport_required: bool = False,
+        passport_status: str = "",
+        group_size: int | str = 1,
     ) -> dict[str, Any]:
         return self.create_booking(
             trip_id=trip_id,
@@ -1122,6 +1399,9 @@ class UnifiedCRMService:
             booking_source=source,
             payment_status="Pending",
             booking_notes=agent_notes,
+            passport_required=passport_required,
+            passport_status=passport_status,
+            group_size=group_size,
         )
 
     @staticmethod
@@ -1164,7 +1444,7 @@ class UnifiedCRMService:
         self.ensure_operational_schema()
         if not new_status and not new_payment_status and not notes:
             raise ValueError("No booking update supplied.")
-        timestamp = datetime.utcnow().replace(microsecond=0)
+        timestamp = _utc_now().replace(microsecond=0)
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             booking = connection.execute(
@@ -1266,9 +1546,12 @@ class UnifiedCRMService:
         interaction_id: str = "",
         payment_status: str = "Pending",
         booking_notes: str = "",
+        passport_required: bool = False,
+        passport_status: str = "",
+        group_size: int | str = 1,
     ) -> dict[str, Any]:
         self.ensure_operational_schema()
-        timestamp = datetime.utcnow().replace(microsecond=0)
+        timestamp = _utc_now().replace(microsecond=0)
         if room_type not in ROOM_HOLD_COLUMNS:
             raise ValueError(f"Unsupported room type {room_type!r}")
         if booking_status not in BOOKING_LIFECYCLE_STATUSES:
@@ -1332,32 +1615,40 @@ class UnifiedCRMService:
                 )
 
             booking_id = self._next_booking_id(connection, trip_id, traveler_id)
+            booking_columns = [
+                "booking_id", "trip_id", "trip_name", "traveler_id", "traveler_name", "room_type",
+                "flight_option", "date_option", "currency", "booking_status", "draft_created_at",
+                "booking_source", "lead_id", "interaction_id", "alert_id", "payment_status",
+                "passport_required", "passport_status", "group_size", "booking_notes",
+            ]
+            booking_values = [
+                booking_id,
+                trip_id,
+                str(trip["trip_name"]) if trip else "",
+                traveler_id,
+                traveler_name,
+                room_type,
+                flight_option or None,
+                date_option or None,
+                currency or None,
+                booking_status,
+                timestamp.isoformat(timespec="seconds"),
+                booking_source or None,
+                lead_id or None,
+                interaction_id or None,
+                None,
+                payment_status or None,
+                1 if passport_required else 0,
+                passport_status or None,
+                self._as_int(group_size, default=1) or 1,
+                booking_notes or None,
+            ]
             connection.execute(
-                """
-                INSERT INTO trip_bookings (
-                    booking_id, trip_id, trip_name, traveler_id, traveler_name, room_type,
-                    flight_option, date_option, currency, booking_status, draft_created_at,
-                    booking_source, lead_id, interaction_id, payment_status, booking_notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                f"""
+                INSERT INTO trip_bookings ({', '.join(booking_columns)})
+                VALUES ({', '.join(['?'] * len(booking_columns))})
                 """,
-                (
-                    booking_id,
-                    trip_id,
-                    str(trip["trip_name"]) if trip else "",
-                    traveler_id,
-                    traveler_name,
-                    room_type,
-                    flight_option or None,
-                    date_option or None,
-                    currency or None,
-                    booking_status,
-                    timestamp.isoformat(timespec="seconds"),
-                    booking_source or None,
-                    lead_id or None,
-                    interaction_id or None,
-                    payment_status or None,
-                    booking_notes or None,
-                ),
+                booking_values,
             )
             connection.execute(
                 f"UPDATE trips SET {ROOM_HOLD_COLUMNS[room_type]} = ? WHERE trip_id = ?",
@@ -1429,6 +1720,8 @@ class UnifiedCRMService:
             "currency": currency,
             "booking_status": booking_status,
             "payment_status": payment_status or "Pending",
+            "passport_required": bool(passport_required),
+            "passport_status": passport_status or ("pending" if passport_required else ""),
             "available_before_draft": available,
             "available_after_draft": available - 1,
             "interaction": {"interaction_id": interaction_id},
@@ -1450,7 +1743,7 @@ class UnifiedCRMService:
 
     def qualify_lead(self, lead_id: str, *, channel: str = "") -> bool:
         self.ensure_operational_schema()
-        timestamp = datetime.utcnow().replace(microsecond=0)
+        timestamp = _utc_now().replace(microsecond=0)
         with self.connect() as connection:
             lead = connection.execute(
                 """
@@ -1546,7 +1839,7 @@ class UnifiedCRMService:
         metadata: dict[str, Any] | None = None,
         occurred_at: datetime | None = None,
     ) -> dict[str, Any]:
-        occurred_at = occurred_at or datetime.utcnow().replace(microsecond=0)
+        occurred_at = occurred_at or _utc_now().replace(microsecond=0)
         metadata_json = json.dumps(metadata or {}, ensure_ascii=True, sort_keys=True)
         with self.connect() as connection:
             self._ensure_booking_event_trail_table(connection)
@@ -1643,6 +1936,16 @@ class UnifiedCRMService:
         trip_id: str = "",
         event_ids: list[str] | None = None,
     ) -> dict[str, Any]:
+        if self.settings.sheet_backend == "excel" and type(self).sync_record_to_sheet is UnifiedCRMService.sync_record_to_sheet:
+            return self._sync_agent_write_to_excel(
+                traveler_id=traveler_id,
+                lead_id=lead_id,
+                interaction_id=interaction_id,
+                booking_id=booking_id,
+                trip_id=trip_id,
+                event_ids=event_ids,
+            )
+
         synced: dict[str, Any] = {}
         if traveler_id:
             synced["traveler"] = self.sync_record_to_sheet("Travelers", traveler_id)
@@ -1655,6 +1958,70 @@ class UnifiedCRMService:
         for event_id in event_ids or []:
             synced.setdefault("events", []).append(self.sync_record_to_sheet("Booking Event Trail", event_id))
         return synced
+
+    def _sync_agent_write_to_excel(
+        self,
+        *,
+        traveler_id: str = "",
+        lead_id: str = "",
+        interaction_id: str = "",
+        booking_id: str = "",
+        trip_id: str = "",
+        event_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        record_jobs: list[tuple[str, dict[str, Any], str, dict[str, Any]]] = []
+        if traveler_id:
+            record = self._fetch_table_record("travelers", "traveler_id", traveler_id)
+            if record:
+                record_jobs.append(("Travelers", SHEET_TABLE_MAPPINGS["Travelers"], "traveler_id", record))
+        if lead_id:
+            record = self._fetch_table_record("leads", "lead_id", lead_id)
+            if record:
+                record_jobs.append(("Leads", SHEET_TABLE_MAPPINGS["Leads"], "lead_id", record))
+        if interaction_id:
+            record = self._fetch_table_record("interactions", "interaction_id", interaction_id)
+            if record:
+                record_jobs.append(("Interactions", SHEET_TABLE_MAPPINGS["Interactions"], "interaction_id", record))
+        if booking_id:
+            record = self._fetch_table_record("trip_bookings", "booking_id", booking_id)
+            if record:
+                record_jobs.append(("Trip Bookings", SHEET_TABLE_MAPPINGS["Trip Bookings"], "booking_id", record))
+        for event_id in event_ids or []:
+            record = self._fetch_table_record("booking_event_trail", "event_id", event_id)
+            if record:
+                record_jobs.append(("Booking Event Trail", SHEET_TABLE_MAPPINGS["Booking Event Trail"], "event_id", record))
+
+        synced: dict[str, Any] = {}
+        if not record_jobs:
+            return synced
+
+        backend = self.settings.sheet_backend
+        try:
+            updated = 0
+            for workbook_path in self._excel_outcome_workbooks():
+                self._upsert_records_in_excel(workbook_path, record_jobs)
+                updated += 1
+            for mapping_name, _mapping, key_column, record in record_jobs:
+                record_id = str(record.get(key_column) or "").strip()
+                if record_id:
+                    self._record_sync_success(mapping_name, record_id)
+                    if mapping_name == "Booking Event Trail":
+                        synced.setdefault("events", []).append({"status": "ok", "backend": backend, "updated_workbooks": updated})
+                    elif mapping_name == "Trip Bookings":
+                        synced["booking"] = {"status": "ok", "backend": backend, "updated_workbooks": updated}
+                    elif mapping_name == "Interactions":
+                        synced["interaction"] = {"status": "ok", "backend": backend, "updated_workbooks": updated}
+                    elif mapping_name == "Leads":
+                        synced["lead"] = {"status": "ok", "backend": backend, "updated_workbooks": updated}
+                    elif mapping_name == "Travelers":
+                        synced["traveler"] = {"status": "ok", "backend": backend, "updated_workbooks": updated}
+            return synced
+        except Exception as exc:
+            for mapping_name, _mapping, key_column, record in record_jobs:
+                record_id = str(record.get(key_column) or "").strip()
+                if record_id:
+                    self._record_sync_failure(mapping_name, record_id, str(exc))
+            return {"status": "failed", "backend": backend, "reason": str(exc)}
 
     def sync_record_to_sheet(self, mapping_name: str, record_id: str) -> dict[str, Any]:
         if not record_id:
@@ -1694,7 +2061,7 @@ class UnifiedCRMService:
             connection.commit()
 
     def _record_sync_failure(self, mapping_name: str, record_id: str, error_message: str) -> None:
-        timestamp = datetime.utcnow().replace(microsecond=0).isoformat(timespec="seconds")
+        timestamp = _utc_now().replace(microsecond=0).isoformat(timespec="seconds")
         with self.connect() as connection:
             self._ensure_sync_queue_table(connection)
             connection.execute(
@@ -1718,13 +2085,23 @@ class UnifiedCRMService:
             return [dict(r) for r in rows]
 
     def ensure_operational_schema(self) -> None:
-        with self.connect() as connection:
-            self._ensure_booking_event_trail_table(connection)
-            self._ensure_booking_status_history_table(connection)
-            self._ensure_sync_queue_table(connection)
-            self._migrate_travelers_passport_columns(connection)
-            self._migrate_trips_room_columns(connection)
-            connection.commit()
+        db_key = str(Path(self.settings.db_path).resolve())
+        if db_key in self._schema_ready_paths:
+            return
+
+        with _SCHEMA_READY_LOCK:
+            if db_key in self._schema_ready_paths:
+                return
+            with self.connect() as connection:
+                self._ensure_booking_event_trail_table(connection)
+                self._ensure_booking_status_history_table(connection)
+                self._ensure_traveler_documents_table(connection)
+                self._ensure_sync_queue_table(connection)
+                self._migrate_travelers_passport_columns(connection)
+                self._migrate_trips_room_columns(connection)
+                self._migrate_trip_booking_passport_columns(connection)
+                connection.commit()
+            self._schema_ready_paths.add(db_key)
 
     @staticmethod
     def _migrate_travelers_passport_columns(connection: sqlite3.Connection) -> None:
@@ -1819,6 +2196,61 @@ class UnifiedCRMService:
         return ", ".join([*base_columns, *[column for column in optional_columns if column in existing]])
 
     @staticmethod
+    def _migrate_trip_booking_passport_columns(connection: sqlite3.Connection) -> None:
+        try:
+            rows = connection.execute("PRAGMA table_info(trip_bookings)").fetchall()
+        except Exception:
+            return
+        if not rows:
+            return
+        existing_cols = {row[1] for row in rows}
+        if 'passport_required' not in existing_cols:
+            connection.execute("ALTER TABLE trip_bookings ADD COLUMN passport_required INTEGER DEFAULT 0")
+        if 'passport_status' not in existing_cols:
+            connection.execute("ALTER TABLE trip_bookings ADD COLUMN passport_status TEXT")
+        if 'group_size' not in existing_cols:
+            connection.execute("ALTER TABLE trip_bookings ADD COLUMN group_size INTEGER DEFAULT 1")
+
+    @staticmethod
+    def _migrate_lead_group_columns(connection: sqlite3.Connection) -> None:
+        try:
+            rows = connection.execute("PRAGMA table_info(leads)").fetchall()
+        except Exception:
+            return
+        if not rows:
+            return
+        existing_cols = {row[1] for row in rows}
+        if 'group_size' not in existing_cols:
+            connection.execute("ALTER TABLE leads ADD COLUMN group_size INTEGER DEFAULT 1")
+
+    @staticmethod
+    def _ensure_traveler_documents_table(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS traveler_documents (
+                document_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                traveler_id TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'document',
+                file_name TEXT NOT NULL,
+                original_file_name TEXT,
+                mime_type TEXT,
+                file_extension TEXT,
+                file_size INTEGER,
+                storage_path TEXT NOT NULL,
+                uploaded_at TEXT NOT NULL,
+                uploaded_by TEXT,
+                passport_full_name TEXT,
+                passport_number TEXT,
+                passport_nationality TEXT,
+                passport_expiry TEXT,
+                verification_status TEXT DEFAULT 'pending',
+                notes TEXT,
+                FOREIGN KEY(traveler_id) REFERENCES travelers (traveler_id)
+            )
+            """
+        )
+
+    @staticmethod
     def _ensure_sync_queue_table(connection: sqlite3.Connection) -> None:
         # TODO(production): replace this lightweight sync queue with a durable retry worker
         # and dead-letter handling for sheet/API failures.
@@ -1873,6 +2305,167 @@ class UnifiedCRMService:
         except Exception:
             return False
 
+    def save_traveler_passport(
+        self,
+        traveler_id: str,
+        *,
+        passport_name: str = "",
+        passport_number: str = "",
+        passport_expiry: str = "",
+        passport_nationality: str = "",
+        passport_attachment_ref: str = "",
+        uploaded_by: str = "ai-agent",
+        attachment_file_name: str = "",
+        attachment_original_name: str = "",
+        attachment_mime_type: str = "",
+        attachment_size: int | None = None,
+        notes: str = "",
+    ) -> dict[str, Any]:
+        traveler_key = str(traveler_id or "").strip()
+        if not traveler_key:
+            raise ValueError("traveler_id is required")
+
+        passport_name = str(passport_name or "").strip()
+        passport_number = str(passport_number or "").strip()
+        passport_nationality = str(passport_nationality or "").strip()
+        passport_attachment_ref = str(passport_attachment_ref or "").strip()
+        attachment_file_name = str(attachment_file_name or "").strip()
+        attachment_original_name = str(attachment_original_name or "").strip()
+        attachment_mime_type = str(attachment_mime_type or "").strip()
+        notes = str(notes or "").strip()
+        normalized_expiry = self._normalize_date_string(passport_expiry)
+        timestamp = _utc_now().replace(microsecond=0).isoformat(timespec="seconds")
+
+        with self.connect() as connection:
+            self._ensure_traveler_documents_table(connection)
+            self._migrate_travelers_passport_columns(connection)
+            traveler_exists = connection.execute(
+                "SELECT traveler_id FROM travelers WHERE traveler_id = ?",
+                (traveler_key,),
+            ).fetchone()
+            if not traveler_exists:
+                raise ValueError(f"traveler {traveler_key} was not found")
+
+            connection.execute(
+                """
+                UPDATE travelers
+                SET passport_name = ?,
+                    passport_number = ?,
+                    passport_expiry = ?,
+                    passport_nationality = ?,
+                    passport_attachment_ref = ?,
+                    last_contacted_at = ?
+                WHERE traveler_id = ?
+                """,
+                (
+                    passport_name or None,
+                    passport_number or None,
+                    normalized_expiry,
+                    passport_nationality or None,
+                    passport_attachment_ref or None,
+                    timestamp,
+                    traveler_key,
+                ),
+            )
+
+            document_id = None
+            if passport_attachment_ref:
+                file_name = attachment_file_name or Path(passport_attachment_ref).name or "passport"
+                original_name = attachment_original_name or file_name
+                file_extension = Path(file_name).suffix.lower().lstrip(".")
+                existing_document = connection.execute(
+                    """
+                    SELECT document_id
+                    FROM traveler_documents
+                    WHERE traveler_id = ? AND storage_path = ?
+                    ORDER BY document_id DESC
+                    LIMIT 1
+                    """,
+                    (traveler_key, passport_attachment_ref),
+                ).fetchone()
+                if existing_document:
+                    document_id = int(existing_document["document_id"])
+                    connection.execute(
+                        """
+                        UPDATE traveler_documents
+                        SET category = ?,
+                            file_name = ?,
+                            original_file_name = ?,
+                            mime_type = ?,
+                            file_extension = ?,
+                            file_size = ?,
+                            uploaded_at = ?,
+                            uploaded_by = ?,
+                            passport_full_name = ?,
+                            passport_number = ?,
+                            passport_nationality = ?,
+                            passport_expiry = ?,
+                            verification_status = ?,
+                            notes = ?
+                        WHERE document_id = ?
+                        """,
+                        (
+                            "passport",
+                            file_name,
+                            original_name or None,
+                            attachment_mime_type or None,
+                            file_extension or None,
+                            attachment_size,
+                            timestamp,
+                            uploaded_by or None,
+                            passport_name or None,
+                            passport_number or None,
+                            passport_nationality or None,
+                            normalized_expiry,
+                            "pending",
+                            notes or None,
+                            document_id,
+                        ),
+                    )
+                else:
+                    cursor = connection.execute(
+                        """
+                        INSERT INTO traveler_documents (
+                            traveler_id, category, file_name, original_file_name, mime_type,
+                            file_extension, file_size, storage_path, uploaded_at, uploaded_by,
+                            passport_full_name, passport_number, passport_nationality,
+                            passport_expiry, verification_status, notes
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            traveler_key,
+                            "passport",
+                            file_name,
+                            original_name or None,
+                            attachment_mime_type or None,
+                            file_extension or None,
+                            attachment_size,
+                            passport_attachment_ref,
+                            timestamp,
+                            uploaded_by or None,
+                            passport_name or None,
+                            passport_number or None,
+                            passport_nationality or None,
+                            normalized_expiry,
+                            "pending",
+                            notes or None,
+                        ),
+                    )
+                    document_id = int(cursor.lastrowid or 0)
+
+            connection.commit()
+
+        return {
+            "traveler_id": traveler_key,
+            "passport_name": passport_name,
+            "passport_number": passport_number,
+            "passport_expiry": normalized_expiry,
+            "passport_nationality": passport_nationality,
+            "passport_attachment_ref": passport_attachment_ref,
+            "document_id": document_id,
+            "uploaded_at": timestamp,
+        }
+
     @staticmethod
     def infer_customer_tier(result: dict[str, Any]) -> str:
         traveler = result.get("traveler")
@@ -1883,6 +2476,170 @@ class UnifiedCRMService:
             if status:
                 return status
         return "Standard"
+
+    @classmethod
+    def resolve_commercial_context(
+        cls,
+        *,
+        traveler: dict[str, Any] | None,
+        trip_type: str | None = None,
+        requested_group_size: int = 1,
+        trip_id: str = "",
+    ) -> dict[str, Any]:
+        traveler_status = str((traveler or {}).get("status") or "").strip()
+        offer_config = cls.load_trip_commercial_config(trip_id)
+        normalized_group_size = max(int(requested_group_size or 1), 1)
+        vip_recognized = traveler_status == "VIP"
+        group_threshold = max(int(offer_config.get("group_threshold") or GROUP_DISCOUNT_THRESHOLD), 2)
+        group_eligible = normalized_group_size >= group_threshold
+        return {
+            "flight_policy": {
+                "mode": "without_flights_default",
+                "summary": "Most Rahma trips are offered without flights by default.",
+                "customer_can_request_flights": True,
+            },
+            "vip": {
+                "recognized": vip_recognized,
+                "discount_configured": bool(str(offer_config.get("vip_offer") or "").strip()),
+                "offer_text": str(offer_config.get("vip_offer") or "").strip(),
+                "manual_review_recommended": vip_recognized,
+            },
+            "group": {
+                "size": normalized_group_size,
+                "threshold": group_threshold,
+                "eligible": group_eligible,
+                "discount_configured": bool(str(offer_config.get("group_offer") or "").strip()),
+                "offer_text": str(offer_config.get("group_offer") or "").strip(),
+                "manual_quote_required": group_eligible,
+            },
+            "manual_handoff_recommended": group_eligible,
+            "handoff_reason": "group_booking_quote" if group_eligible else "",
+            "trip_type": cls.normalize_trip_type(trip_type) or (trip_type or ""),
+            "trip_id": trip_id,
+        }
+
+    @staticmethod
+    def _default_handoff_priority(reason_code: str) -> str:
+        reason = str(reason_code or "").strip().lower()
+        if reason == "blacklisted_customer":
+            return "Critical"
+        if reason in {"duplicate_phone_match", "phone_name_conflict", "group_booking_quote", "customer_requested_human_agent"}:
+            return "High"
+        return "Medium"
+
+    @staticmethod
+    def _handoff_display_summary(reason_code: str, reason_text: str, package: dict[str, Any]) -> str:
+        reason = str(reason_code or "").strip().lower()
+        metadata = package.get("metadata") if isinstance(package.get("metadata"), dict) else {}
+        customer_name = str(package.get("customer_name") or "").strip()
+        trip_id = str(metadata.get("trip_id") or "").strip()
+        trip_type = str(metadata.get("trip_type") or "").strip()
+        group_size = str(metadata.get("group_size") or "").strip()
+
+        if reason == "blacklisted_customer":
+            return (
+                f"Blocked traveler match for {customer_name or 'this customer'}. "
+                "The WhatsApp number or traveler profile is marked as blacklisted, so sales follow-up must stop until an authorized employee reviews the case."
+            )
+        if reason == "phone_name_conflict":
+            return (
+                f"Name and phone conflict for {customer_name or 'this customer'}. "
+                "The WhatsApp number matches an existing traveler, but the submitted name does not match the traveler profile."
+            )
+        if reason == "duplicate_phone_match":
+            return (
+                "Duplicate traveler match detected. "
+                "This WhatsApp number is linked to more than one traveler profile, so the employee must resolve the identity before continuing."
+            )
+        if reason == "archived_traveler":
+            return (
+                f"Archived or inactive traveler match for {customer_name or 'this customer'}. "
+                "The employee should confirm whether the traveler should be reactivated before continuing sales work."
+            )
+        if reason == "group_booking_quote":
+            scope = []
+            if group_size:
+                scope.append(f"group size {group_size}")
+            if trip_id:
+                scope.append(f"trip {trip_id}")
+            elif trip_type:
+                scope.append(f"{trip_type.lower()} trip request")
+            detail = f" for {', '.join(scope)}" if scope else ""
+            return (
+                f"Manual commercial review needed{detail}. "
+                "The request qualifies for a group booking quote and should be reviewed by an employee before confirmation."
+            )
+        if reason == "customer_requested_human_agent":
+            return (
+                f"Customer requested a human agent for {customer_name or 'this conversation'}. "
+                "The employee should continue the conversation directly and confirm the next step."
+            )
+        if reason == "manual_admin_handoff":
+            return str(reason_text or "Manual handoff requested by an employee.").strip()
+        return str(reason_text or reason_code or "Manual handoff").strip()
+
+    @classmethod
+    def _handoff_action_steps(cls, reason_code: str, package: dict[str, Any]) -> list[str]:
+        reason = str(reason_code or "").strip().lower()
+        metadata = package.get("metadata") if isinstance(package.get("metadata"), dict) else {}
+        steps: list[str] = []
+
+        if reason == "blacklisted_customer":
+            steps.extend([
+                "Review the matched traveler profile and confirm why it was blacklisted.",
+                "Do not continue automated sales follow-up until the blacklist decision is verified.",
+                "Escalate to a supervisor if the traveler claims the blacklist is incorrect.",
+            ])
+        elif reason == "phone_name_conflict":
+            steps.extend([
+                "Verify who owns the WhatsApp number before editing the traveler profile.",
+                "Compare the matched traveler name with the newly submitted customer name.",
+                "Continue only after confirming whether this is the same traveler or a true mismatch.",
+            ])
+        elif reason == "duplicate_phone_match":
+            steps.extend([
+                "Open the matching traveler profiles and identify which profile is valid.",
+                "Resolve or merge duplicates before attaching new bookings or leads.",
+                "Document the final identity decision in the handoff notes.",
+            ])
+        elif reason == "archived_traveler":
+            steps.extend([
+                "Check why the matched traveler was archived or marked inactive.",
+                "Confirm whether reactivation is allowed before continuing the sales flow.",
+            ])
+        elif reason == "group_booking_quote":
+            group_size = metadata.get("group_size")
+            trip_id = metadata.get("trip_id")
+            steps.extend([
+                "Review current capacity, room mix, and commercial terms before promising availability.",
+                "Prepare the group pricing or discount decision for the traveler.",
+            ])
+            if group_size:
+                steps.append(f"Confirm the requested group size: {group_size}.")
+            if trip_id:
+                steps.append(f"Review the requested trip: {trip_id}.")
+        elif reason == "customer_requested_human_agent":
+            steps.extend([
+                "Continue the conversation directly with the traveler.",
+                "Confirm the reason for the handoff and the traveler’s expected next step.",
+            ])
+        elif reason == "manual_admin_handoff":
+            steps.append("Review the employee notes and continue handling the case manually.")
+
+        return steps
+
+    @staticmethod
+    def _handoff_notes_blob(reason_text: str, package: dict[str, Any], notes: str) -> str:
+        reason_code = str(package.get("reason_code") or "").strip()
+        lines = [reason_text.strip()] if str(reason_text or "").strip() else []
+        action_steps = UnifiedCRMService._handoff_action_steps(reason_code, package)
+        if action_steps:
+            lines.append("Recommended actions:\n- " + "\n- ".join(action_steps))
+        if notes.strip():
+            lines.append(f"Employee notes:\n{notes.strip()}")
+        compact = json.dumps(package, ensure_ascii=False, separators=(",", ":"))
+        lines.append(f"handoff_context={compact}")
+        return "\n\n".join(line for line in lines if line)
 
     @classmethod
     def derive_lead_stage(cls, result: dict[str, Any]) -> tuple[str, str]:
@@ -2289,6 +3046,34 @@ class UnifiedCRMService:
             finally:
                 wb.close()
 
+    def _upsert_records_in_excel(
+        self,
+        workbook_path: Path,
+        record_jobs: list[tuple[str, dict[str, Any], str, dict[str, Any]]],
+    ) -> None:
+        if not workbook_path or not workbook_path.exists() or not record_jobs:
+            return
+        with _SHEET_WRITE_LOCK:
+            wb = load_workbook(workbook_path)
+            try:
+                for _mapping_name, mapping, key_column, record in record_jobs:
+                    ws = wb[mapping["sheet_name"]] if mapping["sheet_name"] in wb.sheetnames else wb.create_sheet(mapping["sheet_name"])
+                    header_row = int(mapping["header_row"])
+                    header_map = self._ensure_sheet_headers(ws, header_row, list(mapping["columns"].values()))
+                    key_header = mapping["columns"][key_column]
+                    key_value = str(record.get(key_column) or "").strip()
+                    target_row = self._find_sheet_row(ws, header_map[key_header], key_value, header_row + 1)
+                    if target_row is None:
+                        target_row = ws.max_row + 1
+                        if target_row <= header_row:
+                            target_row = header_row + 1
+                    for field_name, header in mapping["columns"].items():
+                        value = self._sheet_value(field_name, record.get(field_name))
+                        ws.cell(target_row, header_map[header]).value = value
+                wb.save(workbook_path)
+            finally:
+                wb.close()
+
     def _upsert_record_in_google_sheet(
         self,
         mapping: dict[str, Any],
@@ -2456,7 +3241,7 @@ class UnifiedCRMService:
             traveler_part = traveler_id or "NEW"
         parts = trip_id.split("-")
         trip_mode = "I" if "-INT-" in trip_id else "L"
-        trip_year = parts[2] if len(parts) > 2 else datetime.utcnow().strftime("%y")
+        trip_year = parts[2] if len(parts) > 2 else _utc_now().strftime("%y")
         trip_serial = parts[3] if len(parts) > 3 else "000"
         candidate = f"{traveler_part}-{trip_mode}{trip_year}{trip_serial}-{sequence:03d}"
         existing = {str(row["booking_id"]) for row in rows}
@@ -2490,6 +3275,27 @@ class UnifiedCRMService:
                 return int(float(value))
             except (TypeError, ValueError):
                 return default
+
+    @staticmethod
+    def _normalize_date_string(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            return value.date().isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        text = str(value).strip()
+        if not text:
+            return None
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%Y/%m/%d"):
+            try:
+                return datetime.strptime(text, fmt).date().isoformat()
+            except ValueError:
+                continue
+        try:
+            return datetime.fromisoformat(text).date().isoformat()
+        except ValueError:
+            return text
 
     @staticmethod
     def _iso_date(value: Any) -> str | None:

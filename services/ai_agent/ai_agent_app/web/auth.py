@@ -1,4 +1,7 @@
 from functools import wraps
+import hmac
+import os
+from werkzeug.security import check_password_hash
 from flask import request, redirect, session, render_template, Blueprint, current_app
 
 auth_bp = Blueprint("auth", __name__)
@@ -15,12 +18,21 @@ def login_required(f):
 def login():
     error = None
     if request.method == "POST":
-        # Demo-only single password auth.
-        # TODO(production): replace with operator accounts, RBAC, audit logs, and login rate limiting.
         password = request.form.get("password")
-        if password == "rahma2026": # Default demo password
+        password_hash = os.environ.get("APP_PASSWORD_HASH", "").strip()
+        password_value = os.environ.get("APP_PASSWORD", "").strip()
+        demo_password = os.environ.get("APP_DEMO_PASSWORD", "").strip()
+        if password_hash:
+            ok = bool(password) and check_password_hash(password_hash, password)
+        elif password_value:
+            ok = bool(password) and hmac.compare_digest(password_value, password or "")
+        elif current_app.config.get("DEBUG"):
+            ok = bool(password) and hmac.compare_digest(demo_password or "rahma2026", password or "")
+        else:
+            ok = False
+        if ok:
             session["logged_in"] = True
-            return redirect("/crm")
+            return redirect("/")
         else:
             error = "Invalid password"
     return render_template("login.html", error=error)

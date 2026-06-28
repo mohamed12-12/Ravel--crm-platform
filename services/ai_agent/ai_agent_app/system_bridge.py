@@ -146,6 +146,24 @@ def qualify_system_lead(settings: Settings, lead_id: str) -> bool:
     return service.qualify_lead(lead_id)
 
 
+def save_system_traveler_passport(
+    settings: Settings,
+    traveler_id: str,
+    **payload: Any,
+) -> dict[str, Any]:
+    service = get_system_service(settings)
+    if service is None:
+        raise RuntimeError("System DB write-through is unavailable; refusing passport profile save.")
+    return service.save_traveler_passport(traveler_id, **payload)
+
+
+def create_system_handoff(settings: Settings, **payload: Any) -> dict[str, Any]:
+    service = get_system_service(settings)
+    if service is None:
+        raise RuntimeError("System DB write-through is unavailable; refusing handoff creation.")
+    return service.create_handoff_case(**payload)
+
+
 def check_traveler_completed_trips(settings: Settings, traveler_id: str) -> bool:
     """Return True if the traveler has at least one past booking (post-trip handoff check)."""
     service = get_system_service(settings)

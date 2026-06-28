@@ -1,13 +1,17 @@
 from app.extensions import db
-from datetime import datetime
+from datetime import datetime, timezone
 import json
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class BookingEventTrail(db.Model):
     __tablename__ = 'booking_event_trail'
 
     event_id = db.Column(db.String(50), primary_key=True)
-    occurred_at = db.Column(db.DateTime, default=datetime.utcnow)
+    occurred_at = db.Column(db.DateTime, default=_utc_now)
     event_type = db.Column(db.String(100))
     event_label = db.Column(db.String(150))
     traveler_id = db.Column(db.String(20), db.ForeignKey('travelers.traveler_id'))

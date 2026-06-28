@@ -263,6 +263,9 @@ class GoogleSheetsApiGateway(ExcelSheetGateway):
         flight_option: str = "",
         date_option: str = "",
         currency: str = "",
+        passport_required: bool = False,
+        passport_status: str = "",
+        group_size: int | str = 1,
     ) -> dict[str, Any]:
         with self._lock:
             result = super().create_booking(
@@ -277,6 +280,44 @@ class GoogleSheetsApiGateway(ExcelSheetGateway):
                 flight_option=flight_option,
                 date_option=date_option,
                 currency=currency,
+                passport_required=passport_required,
+                passport_status=passport_status,
+                group_size=group_size,
             )
             self._invalidate("Trips", "Trip Bookings", "Interactions", "Leads", "Booking Event Trail")
+            return result
+
+    def save_traveler_passport(
+        self,
+        traveler_id: str,
+        *,
+        passport_name: str = "",
+        passport_number: str = "",
+        passport_expiry: str = "",
+        passport_nationality: str = "",
+        passport_attachment_ref: str = "",
+        uploaded_by: str = "ai-agent",
+        attachment_file_name: str = "",
+        attachment_original_name: str = "",
+        attachment_mime_type: str = "",
+        attachment_size: int | None = None,
+        notes: str = "",
+    ) -> dict[str, Any]:
+        with self._lock:
+            result = super().save_traveler_passport(
+                traveler_id,
+                passport_name=passport_name,
+                passport_number=passport_number,
+                passport_expiry=passport_expiry,
+                passport_nationality=passport_nationality,
+                passport_attachment_ref=passport_attachment_ref,
+                uploaded_by=uploaded_by,
+                attachment_file_name=attachment_file_name,
+                attachment_original_name=attachment_original_name,
+                attachment_mime_type=attachment_mime_type,
+                attachment_size=attachment_size,
+                notes=notes,
+            )
+            if result:
+                self._invalidate("Travelers")
             return result

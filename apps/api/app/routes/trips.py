@@ -5,15 +5,37 @@ from app.models.booking import TripBooking
 from app.extensions import db
 from sqlalchemy import or_
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from services.crm.system_services import UnifiedCRMService
 
 trips_bp = Blueprint('trips', __name__, url_prefix='/trips')
 
 
+def _trip_commercial_config(trip: Trip) -> dict:
+    return UnifiedCRMService.parse_trip_sales_notes(trip.sales_notes or "")
+
+
+def _compose_trip_sales_notes(data: dict, existing_trip: Trip | None = None) -> str:
+    vip_offer = data.get('vip_discount_note', '')
+    group_offer = data.get('group_discount_note', '')
+    group_threshold_raw = data.get('group_discount_threshold', '')
+    notes_body = data.get('sales_notes', '')
+    try:
+        group_threshold = max(int(group_threshold_raw or 4), 2)
+    except Exception:
+        group_threshold = 4
+    return UnifiedCRMService.compose_trip_sales_notes(
+        existing_notes=existing_trip.sales_notes if existing_trip else "",
+        vip_offer=vip_offer,
+        group_offer=group_offer,
+        group_threshold=group_threshold,
+        notes_body=notes_body,
+    )
+
+
 def _generate_trip_id(trip_type: str, year: int | None, trip_name: str) -> str:
     prefix = "RT-INT" if (trip_type or "").strip() == "International" else "RT-LOC"
-    year_part = str(year % 100).zfill(2) if year else datetime.utcnow().strftime("%y")
+    year_part = str(year % 100).zfill(2) if year else datetime.now(timezone.utc).strftime("%y")
     slug = "".join(ch for ch in (trip_name or "").upper() if ch.isalnum())[:3] or "TRP"
     return f"{prefix}-{year_part}-{slug}"
 
@@ -59,7 +81,17 @@ def index():
 
 @trips_bp.route('/<string:trip_id>')
 def detail(trip_id):
-    trip = Trip.query.get_or_404(trip_id)
+    trip = db.get_or_404(Trip, trip_id)
+    commercial_config = _trip_commercial_config(trip)
+    back_query = {
+        key: value
+        for key, value in (
+            ("q", request.args.get("q", "").strip()),
+            ("status", request.args.get("status", "").strip()),
+            ("type", request.args.get("type", "").strip()),
+        )
+        if value
+    }
     bookings = TripBooking.query.filter_by(trip_id=trip_id)\
         .order_by(TripBooking.draft_created_at.desc()).all()
     active_room_bookings = {
@@ -86,9 +118,11 @@ def detail(trip_id):
     return render_template(
         'trips/detail.html',
         trip=trip,
+        commercial_config=commercial_config,
         bookings=bookings,
         room_counts=room_counts,
         display_remaining=display_remaining,
+        back_query=back_query,
     )
 
 
@@ -109,7 +143,7 @@ def create():
         trip_id = _generate_trip_id(trip_type, trip_year, trip_name)
     trip_id = trip_id.upper()
 
-    if Trip.query.get(trip_id):
+    if db.session.get(Trip, trip_id):
         flash(f"Trip ID '{trip_id}' already exists.", 'error')
         return redirect(url_for('trips.index'))
 
@@ -148,7 +182,7 @@ def create():
         girls_triple=to_int(data.get('girls_triple')),
         public_price=data.get('public_price', ''),
         public_description=data.get('public_description', ''),
-        sales_notes=data.get('sales_notes', ''),
+        sales_notes=_compose_trip_sales_notes(data),
     )
     db.session.add(trip)
     db.session.commit()
@@ -164,7 +198,7 @@ def update(trip_id):
     if method_override == 'DELETE':
         return delete(trip_id)
 
-    trip = Trip.query.get_or_404(trip_id)
+    trip = db.get_or_404(Trip, trip_id)
     data = request.form.to_dict()
 
     def to_date(v):
@@ -199,7 +233,7 @@ def update(trip_id):
     trip.girls_triple = to_int(data.get('girls_triple'))
     trip.public_price = data.get('public_price', trip.public_price)
     trip.public_description = data.get('public_description', trip.public_description)
-    trip.sales_notes = data.get('sales_notes', trip.sales_notes)
+    trip.sales_notes = _compose_trip_sales_notes(data, trip)
 
     db.session.commit()
     _sync_trip_after_commit(trip.trip_id)
@@ -208,7 +242,7 @@ def update(trip_id):
 
 
 def delete(trip_id):
-    trip = Trip.query.get_or_404(trip_id)
+    trip = db.get_or_404(Trip, trip_id)
     trip.sales_status = 'Cancelled'
     db.session.commit()
     _sync_trip_after_commit(trip.trip_id)
@@ -219,7 +253,7 @@ def delete(trip_id):
 @trips_bp.route('/<string:trip_id>/inventory', methods=['POST'])
 def update_inventory(trip_id):
     """Quick inventory adjustment via JSON API."""
-    trip = Trip.query.get_or_404(trip_id)
+    trip = db.get_or_404(Trip, trip_id)
     data = request.get_json()
     if not data:
         return jsonify({'error': 'No data'}), 400

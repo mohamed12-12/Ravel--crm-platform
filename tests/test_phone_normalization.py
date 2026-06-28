@@ -83,6 +83,16 @@ class PhoneNormalizationIntegrationTests(unittest.TestCase):
         self.assertEqual(session["stage"], "awaiting_country_code")
         self.assertTrue(session["phoneNormalization"]["requires_country_confirmation"])
 
+    def test_non_phone_clarification_keeps_phone_stage(self) -> None:
+        client, _ = _make_app_with_db(self.tmp)
+        session = client.post("/api/session", json={}).get_json()["session"]
+        session = client.post(
+            f"/api/session/{session['id']}/message",
+            json={"text": "what?"},
+        ).get_json()["session"]
+        self.assertEqual(session["stage"], "awaiting_phone")
+        self.assertIn("whatsapp number", session["messages"][-1]["text"].lower())
+
 
 if __name__ == "__main__":
     unittest.main()

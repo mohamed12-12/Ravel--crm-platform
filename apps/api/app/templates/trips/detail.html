@@ -3,7 +3,7 @@
 {% block topbar_title %}Trip Detail{% endblock %}
 
 {% block topbar_actions %}
-<a href="{{ url_for('trips.index') }}" class="btn btn-ghost btn-sm">← All Trips</a>
+<a href="{{ url_for('trips.index', **back_query) if back_query else url_for('trips.index') }}" class="btn btn-ghost btn-sm">← All Trips</a>
 <button onclick="openModal('editTrip')" class="btn btn-primary btn-sm">✏ Edit Trip</button>
 {% endblock %}
 
@@ -94,10 +94,33 @@
         </div>
         {% endif %}
 
-        {% if trip.sales_notes %}
+        {% if commercial_config.vip_offer or commercial_config.group_offer %}
+        <div class="card">
+            <div class="card-title" style="margin-bottom:0.75rem">💸 Commercial Offers</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+                <div>
+                    <div style="font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.35rem">VIP Discount</div>
+                    <div style="color:var(--text-main);font-size:0.84rem;line-height:1.6">{{ commercial_config.vip_offer or 'Not configured' }}</div>
+                </div>
+                <div>
+                    <div style="font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.35rem">Group Discount</div>
+                    <div style="color:var(--text-main);font-size:0.84rem;line-height:1.6">
+                        {% if commercial_config.group_offer %}
+                            {{ commercial_config.group_offer }}<br>
+                            <span style="color:var(--text-muted)">Applies from {{ commercial_config.group_threshold }} travelers</span>
+                        {% else %}
+                            Not configured
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if commercial_config.notes_body %}
         <div class="card">
             <div class="card-title" style="margin-bottom:0.75rem">🔒 Sales Notes (Internal)</div>
-            <div style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;white-space:pre-wrap">{{ trip.sales_notes }}</div>
+            <div style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;white-space:pre-wrap">{{ commercial_config.notes_body }}</div>
         </div>
         {% endif %}
 
@@ -257,9 +280,21 @@
                     <label class="form-label">Description</label>
                     <textarea class="form-textarea" name="public_description">{{ trip.public_description or '' }}</textarea>
                 </div>
+                <div class="form-group">
+                    <label class="form-label">VIP Discount Note</label>
+                    <input class="form-input" type="text" name="vip_discount_note" value="{{ commercial_config.vip_offer or '' }}" placeholder="e.g. 10% VIP discount">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Group Discount Threshold</label>
+                    <input class="form-input" type="number" name="group_discount_threshold" value="{{ commercial_config.group_threshold or 4 }}" min="2" placeholder="4">
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Group Discount Note</label>
+                    <input class="form-input" type="text" name="group_discount_note" value="{{ commercial_config.group_offer or '' }}" placeholder="e.g. 15% off for group bookings">
+                </div>
                 <div class="form-group col-span-2">
                     <label class="form-label">Sales Notes</label>
-                    <textarea class="form-textarea" name="sales_notes">{{ trip.sales_notes or '' }}</textarea>
+                    <textarea class="form-textarea" name="sales_notes">{{ commercial_config.notes_body or '' }}</textarea>
                 </div>
             </div>
             <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1rem">

@@ -1,7 +1,11 @@
 # app/models/traveler.py
 from app.extensions import db
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 import pandas as pd
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 class Traveler(db.Model):
     __tablename__ = 'travelers'
@@ -38,7 +42,7 @@ class Traveler(db.Model):
     normalized_whatsapp = db.Column(db.String(50))
     phone_lookup_key = db.Column(db.String(50))
     lead_source = db.Column(db.String(100))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=_utc_now)
     last_contacted_at = db.Column(db.DateTime)
     agent_notes = db.Column(db.Text)
     data_audit = db.Column(db.Text)
@@ -56,6 +60,7 @@ class Traveler(db.Model):
     passport_attachment_ref = db.Column(db.String(300))
 
     # Relationships
+    documents = db.relationship('TravelerDocument', backref='traveler_record', lazy=True, cascade='all, delete-orphan')
     trip_bookings = db.relationship('TripBooking', backref='traveler', lazy=True)
     ce_bookings = db.relationship('CEBooking', backref='traveler', lazy=True)
     leads = db.relationship('Lead', backref='traveler', lazy=True)
@@ -158,7 +163,7 @@ class Traveler(db.Model):
             normalized_whatsapp=clean(get("Normalized WhatsApp")),
             phone_lookup_key=clean(get("Phone Lookup Key")),
             lead_source=clean(get("Lead Source")),
-            created_at=to_datetime(get("Created At")) or datetime.utcnow(),
+            created_at=to_datetime(get("Created At")) or _utc_now(),
             last_contacted_at=to_datetime(get("Last Contacted At")),
             agent_notes=clean(get("Agent Notes")),
             data_audit=clean(get("Data Audit")),
