@@ -29,7 +29,7 @@ class ReadOnlyCRMTools:
         except Exception:
             return {key: row[key] for key in row.keys()}
 
-    def search_traveler_by_phone(self, *, raw_phone: str, country_code: str = "") -> dict[str, Any]:
+    def search_traveler(self, *, raw_phone: str, country_code: str = "") -> dict[str, Any]:
         resolution = self.service.resolve_identity("", raw_phone, country_code or self.settings.default_country_code)
         return {
             "lookup_phone": resolution.lookup_phone,
@@ -40,6 +40,9 @@ class ReadOnlyCRMTools:
             "actions": list(resolution.actions),
             "traveler": resolution.traveler,
         }
+
+    def search_traveler_by_phone(self, *, raw_phone: str, country_code: str = "") -> dict[str, Any]:
+        return self.search_traveler(raw_phone=raw_phone, country_code=country_code)
 
     def get_traveler_profile(
         self,
@@ -62,7 +65,7 @@ class ReadOnlyCRMTools:
             return {"traveler": self._row_to_dict(row), "lookup_mode": "traveler_id"}
 
         if raw_phone:
-            search = self.search_traveler_by_phone(raw_phone=raw_phone, country_code=country_code)
+            search = self.search_traveler(raw_phone=raw_phone, country_code=country_code)
             traveler = search.get("traveler")
             return {"traveler": traveler, "lookup_mode": "phone", **search}
 
@@ -93,7 +96,7 @@ class ReadOnlyCRMTools:
             row = connection.execute("SELECT * FROM trips WHERE trip_id = ?", (trip_id,)).fetchone()
         return {"trip": self._row_to_dict(row)}
 
-    def lookup_booking(
+    def get_booking_status(
         self,
         *,
         booking_id: str = "",
@@ -115,6 +118,15 @@ class ReadOnlyCRMTools:
         with self.service.connect() as connection:
             rows = connection.execute(query, params).fetchall()
         return {"bookings": [self._row_to_dict(row) for row in rows]}
+
+    def lookup_booking(
+        self,
+        *,
+        booking_id: str = "",
+        traveler_id: str = "",
+        lead_id: str = "",
+        ) -> dict[str, Any]:
+        return self.get_booking_status(booking_id=booking_id, traveler_id=traveler_id, lead_id=lead_id)
 
     def lookup_lead(
         self,

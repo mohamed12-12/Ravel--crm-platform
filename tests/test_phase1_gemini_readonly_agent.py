@@ -259,7 +259,7 @@ class TestPhase1GeminiReadOnlyAgent(unittest.TestCase):
         payload = json.loads(provider.calls[0]["messages"][0]["parts"][0]["text"])
         self.assertEqual(payload["language"], "en")
         self.assertEqual(payload["session_context"]["raw_phone"], "1112223333")
-        self.assertIn("search_traveler_by_phone", payload["available_tools"])
+        self.assertIn("search_traveler", payload["available_tools"])
         self.assertIn("traveler_lookup", payload["crm_context"])
 
     def test_gemini_agent_handles_arabic_and_write_refusal(self) -> None:

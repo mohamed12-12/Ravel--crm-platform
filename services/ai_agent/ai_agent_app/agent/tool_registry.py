@@ -19,8 +19,8 @@ class ToolSpec:
 
 def build_read_only_tool_registry() -> dict[str, ToolSpec]:
     return {
-        "search_traveler_by_phone": ToolSpec(
-            name="search_traveler_by_phone",
+        "search_traveler": ToolSpec(
+            name="search_traveler",
             description="Search the CRM for traveler matches using WhatsApp or phone data.",
             input_schema={
                 "type": "object",
@@ -67,8 +67,8 @@ def build_read_only_tool_registry() -> dict[str, ToolSpec]:
             },
             output_schema={"type": "object"},
         ),
-        "lookup_booking": ToolSpec(
-            name="lookup_booking",
+        "get_booking_status": ToolSpec(
+            name="get_booking_status",
             description="Look up booking details by booking_id, traveler_id, or lead_id.",
             input_schema={
                 "type": "object",
@@ -76,20 +76,6 @@ def build_read_only_tool_registry() -> dict[str, ToolSpec]:
                     "booking_id": {"type": "string"},
                     "traveler_id": {"type": "string"},
                     "lead_id": {"type": "string"},
-                },
-            },
-            output_schema={"type": "object"},
-        ),
-        "lookup_lead": ToolSpec(
-            name="lookup_lead",
-            description="Look up lead details by lead_id, traveler_id, or phone.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "lead_id": {"type": "string"},
-                    "traveler_id": {"type": "string"},
-                    "raw_phone": {"type": "string"},
-                    "country_code": {"type": "string"},
                 },
             },
             output_schema={"type": "object"},
