@@ -65,6 +65,9 @@ class SessionState:
     stage: str = "awaiting_phone"
     previous_stage: str = ""
     language: str = "en"
+    agent_mode: str = "deterministic"
+    tools_used: list[str] = field(default_factory=list)
+    fallback_used: bool = False
     customer_name: str = ""
     birthday: str = ""
     gender: str = ""

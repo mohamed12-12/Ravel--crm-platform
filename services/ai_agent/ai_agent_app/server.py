@@ -10,6 +10,7 @@ from werkzeug.utils import secure_filename
 from flask import Flask, jsonify, redirect, render_template, request, session
 
 from services.ai_agent.ai_agent_app.agent import GeminiAgent, SessionFlowManager
+from services.ai_agent.ai_agent_app.agent.session_flow import detect_language
 from services.ai_agent.ai_agent_app.config import Settings, load_settings
 from services.ai_agent.ai_agent_app.conversation_ai import GeminiConversationAI
 from services.ai_agent.ai_agent_app.sheets import ExcelSheetGateway, build_sheet_gateway
@@ -48,6 +49,9 @@ def _serialize_session(gateway: ExcelSheetGateway, session) -> dict[str, Any]:
         "id": session.id,
         "stage": session.stage,
         "messages": session.messages,
+        "agentMode": getattr(session, "agent_mode", "deterministic"),
+        "toolsUsed": list(getattr(session, "tools_used", []) or []),
+        "fallbackUsed": bool(getattr(session, "fallback_used", False)),
         "customerName": session.customer_name,
         "birthday": session.birthday,
         "gender": session.gender,
@@ -76,6 +80,123 @@ def _serialize_session(gateway: ExcelSheetGateway, session) -> dict[str, Any]:
         "passportAttachmentRef": session.passport_attachment_ref,
         "stats": gateway.get_demo_stats(),
     }
+
+
+def _safe_gemini_fallback_message(language: str) -> str:
+    if str(language or "").strip().lower().startswith("ar"):
+        return "أواجه مشكلة مؤقتة في الوصول إلى المساعد الآن. حاول مرة أخرى بعد قليل."
+    return "I’m having trouble accessing the assistant right now. Please try again in a moment."
+
+
+def _extract_session_linked_ids(session) -> dict[str, str]:
+    linked_ids: dict[str, str] = {
+        "traveler_id": "",
+        "lead_id": "",
+        "booking_id": "",
+    }
+    final_result = session.final_result if isinstance(session.final_result, dict) else {}
+    booking_result = session.booking_result if isinstance(session.booking_result, dict) else {}
+    preview = session.preview if isinstance(session.preview, dict) else {}
+
+    traveler = final_result.get("traveler") if isinstance(final_result.get("traveler"), dict) else {}
+    write_result = final_result.get("write_result") if isinstance(final_result.get("write_result"), dict) else {}
+    created_traveler = (
+        write_result.get("created_traveler") if isinstance(write_result.get("created_traveler"), dict) else {}
+    )
+    lead_update = write_result.get("lead_update") if isinstance(write_result.get("lead_update"), dict) else {}
+    preview_traveler = preview.get("traveler") if isinstance(preview.get("traveler"), dict) else {}
+
+    linked_ids["traveler_id"] = str(
+        created_traveler.get("traveler_id")
+        or traveler.get("traveler_id")
+        or preview_traveler.get("traveler_id")
+        or ""
+    ).strip()
+    linked_ids["lead_id"] = str(lead_update.get("lead_id") or final_result.get("lead_id") or "").strip()
+    linked_ids["booking_id"] = str(booking_result.get("booking_id") or "").strip()
+    return linked_ids
+
+
+def _build_gemini_session_context(session, user_text: str) -> dict[str, Any]:
+    linked_ids = _extract_session_linked_ids(session)
+    return {
+        "session_id": session.id,
+        "stage": session.stage,
+        "language": session.language,
+        "customer_name": session.customer_name,
+        "birthday": session.birthday,
+        "gender": session.gender,
+        "nationality": session.nationality,
+        "raw_phone": session.raw_phone,
+        "pending_raw_phone": session.pending_raw_phone,
+        "country_code": session.country_code,
+        "trip_type": session.trip_type,
+        "selected_trip_id": session.selected_trip_id,
+        "selected_trip_name": session.selected_trip_name,
+        "room_type": session.room_type,
+        "room_group": session.room_group,
+        "group_size": session.group_size,
+        "flight_option": session.flight_option,
+        "currency": session.currency,
+        "lead_status": session.lead_status,
+        "booking_status": session.booking_status,
+        "handoff_state": session.handoff_state,
+        "passport_attachment_ref": session.passport_attachment_ref,
+        "traveler_id": linked_ids["traveler_id"],
+        "lead_id": linked_ids["lead_id"],
+        "booking_id": linked_ids["booking_id"],
+        "preview": session.preview,
+        "final_result": session.final_result,
+        "booking_result": session.booking_result,
+        "last_user_message": user_text,
+        "conversation_history": list(session.messages[-12:]),
+    }
+
+
+def _route_live_message_with_gemini(session, text: str, gemini_agent: GeminiAgent) -> None:
+    detected = detect_language(text)
+    if detected == "ar":
+        session.language = "ar"
+    elif session.language == "ar" and len(text) > 10:
+        session.language = "en"
+
+    session_context = _build_gemini_session_context(session, text)
+    result = gemini_agent.respond(
+        user_message=text,
+        session_context=session_context,
+        conversation_history=session.messages[-12:],
+    )
+
+    reply = str(result.get("reply") or "").strip()
+    error = str(result.get("error") or "").strip()
+    if error and error != "write_request_rejected":
+        reply = _safe_gemini_fallback_message(session.language)
+        fallback_used = True
+        tools_used: list[str] = []
+    else:
+        if not reply:
+            reply = _safe_gemini_fallback_message(session.language)
+            fallback_used = True
+        else:
+            fallback_used = False
+        tools_used = [
+            str(event.get("name") or "").strip()
+            for event in result.get("tool_requests", [])
+            if isinstance(event, dict) and str(event.get("name") or "").strip()
+        ]
+
+    session.agent_mode = "gemini"
+    session.tools_used = tools_used
+    session.fallback_used = fallback_used
+    session.messages.append({"role": "user", "text": text})
+    session.messages.append({"role": "assistant", "text": reply})
+    app_logger.info(
+        "Live Gemini session %s mode=%s tools=%s fallback=%s",
+        session.id,
+        session.agent_mode,
+        ",".join(session.tools_used),
+        session.fallback_used,
+    )
 
 
 def _extract_booking_payload(session) -> tuple[str, str, str]:
@@ -363,6 +484,12 @@ def create_app(
     def create_session_route():
         sessions: SessionFlowManager = app.config["SESSIONS"]
         session = sessions.create_session(gateway)
+        session.agent_mode = "gemini" if (
+            str(app.config.get("AI_AGENT_MODE") or "").strip().lower() == "gemini"
+            and isinstance(getattr(sessions, "conversation_ai", None), GeminiAgent)
+        ) else "deterministic"
+        session.tools_used = []
+        session.fallback_used = False
         return jsonify({"session": _serialize_session(gateway, session)})
 
     @app.get("/api/session/<session_id>")
@@ -386,7 +513,15 @@ def create_app(
             if not text:
                 return jsonify({"error": "empty_message"}), 400
 
-            sessions.handle_message(session, text, gateway)
+            requested_mode = str(app.config.get("AI_AGENT_MODE") or "deterministic").strip().lower()
+            gemini_agent = getattr(sessions, "conversation_ai", None)
+            if requested_mode == "gemini" and isinstance(gemini_agent, GeminiAgent):
+                _route_live_message_with_gemini(session, text, gemini_agent)
+            else:
+                sessions.handle_message(session, text, gateway)
+                session.agent_mode = "deterministic"
+                session.tools_used = []
+                session.fallback_used = requested_mode == "gemini"
             return jsonify({"session": _serialize_session(gateway, session)})
         except Exception as e:
             app_logger.error(f"Error handling message for session {session_id}: {e}", exc_info=True)
