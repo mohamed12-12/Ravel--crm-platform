@@ -15,6 +15,9 @@ Phase 11 test suite: validates demo-phase features implemented per client spec:
 from __future__ import annotations
 
 import io
+import hashlib
+import hmac
+import json
 import os
 import shutil
 import sqlite3
@@ -23,6 +26,7 @@ import unittest
 import uuid
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import Workbook
 
@@ -225,6 +229,116 @@ class TestLanguageDetection(unittest.TestCase):
     def test_detect_empty(self):
         from services.ai_agent.ai_agent_app.agent.session_flow import detect_language
         self.assertEqual(detect_language(""), "en")
+
+
+class TestInstagramWebhookPersistence(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(".tmp-test-phase11") / uuid.uuid4().hex
+        self.tmp.mkdir(parents=True, exist_ok=True)
+        self.original_env = dict(os.environ)
+        os.environ["META_APP_SECRET"] = "test-meta-secret"
+        os.environ["META_VERIFY_TOKEN"] = "verify-me"
+        os.environ["META_PAGE_ACCESS_TOKEN"] = "test-page-token"
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.original_env)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    @staticmethod
+    def _signature(secret: str, body: bytes) -> str:
+        digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+        return f"sha256={digest}"
+
+    def test_webhook_persists_inbound_instagram_message_once(self):
+        client, app = _make_app_with_db(self.tmp)
+        payload = {
+            "object": "page",
+            "entry": [
+                {
+                    "messaging": [
+                        {
+                            "sender": {"id": "igsid-123"},
+                            "recipient": {"id": "page-456"},
+                            "timestamp": 1760000000000,
+                            "message": {
+                                "mid": "mid.instagram.1",
+                                "text": "Hello from Instagram",
+                            },
+                        }
+                    ]
+                }
+            ],
+        }
+        body = json.dumps(payload).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "X-Hub-Signature-256": self._signature("test-meta-secret", body),
+        }
+
+        first = client.post("/webhook", data=body, headers=headers)
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.get_json()["persisted"], 1)
+        self.assertEqual(first.get_json()["duplicates"], 0)
+
+        second = client.post("/webhook", data=body, headers=headers)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.get_json()["persisted"], 0)
+        self.assertEqual(second.get_json()["duplicates"], 1)
+
+        with app.app_context():
+            with closing(sqlite3.connect(os.environ["RAHMA_SYSTEM_DB_PATH"])) as conn:
+                row = conn.execute(
+                    """
+                    SELECT channel, raw_phone, message_key, agent_notes, action_taken, flow_key, step_key
+                    FROM interactions
+                    WHERE message_key = ?
+                    """,
+                    ("mid.instagram.1",),
+                ).fetchone()
+                self.assertIsNotNone(row)
+                self.assertEqual(row[0], "Instagram")
+                self.assertEqual(row[1], "igsid-123")
+                self.assertEqual(row[2], "mid.instagram.1")
+                self.assertIn("Hello from Instagram", row[3])
+                self.assertEqual(row[4], "webhook_received")
+                self.assertEqual(row[5], "instagram")
+                self.assertEqual(row[6], "inbound_webhook")
+
+    @patch("services.ai_agent.ai_agent_app.server.MetaGraphClient.send_instagram_text_message")
+    def test_webhook_sends_safe_outbound_reply_when_configured(self, mock_send):
+        mock_send.return_value = type(
+            "Result",
+            (),
+            {"ok": True, "status_code": 200, "response_json": {"ok": True}},
+        )()
+        client, _ = _make_app_with_db(self.tmp)
+        payload = {
+            "object": "page",
+            "entry": [
+                {
+                    "messaging": [
+                        {
+                            "sender": {"id": "igsid-999"},
+                            "recipient": {"id": "page-456"},
+                            "timestamp": 1760000000000,
+                            "message": {"mid": "mid.instagram.2", "text": "Hello, I need help"},
+                        }
+                    ]
+                }
+            ],
+        }
+        body = json.dumps(payload).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "X-Hub-Signature-256": self._signature("test-meta-secret", body),
+        }
+        resp = client.post("/webhook", data=body, headers=headers)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["persisted"], 1)
+        self.assertEqual(resp.get_json()["repliesSent"], 1)
+        self.assertEqual(resp.get_json()["repliesFailed"], 0)
+        mock_send.assert_called_once()
 
 
 class TestNumberedReplies(unittest.TestCase):

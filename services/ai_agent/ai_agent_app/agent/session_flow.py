@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from typing import Any
 
 from services.ai_agent.ai_agent_app.logger import agent_logger
@@ -18,8 +19,13 @@ from services.crm.system_services.phone_normalization import normalize_phone_inp
 _ARABIC_PATTERN = re.compile(r"[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]")
 _AI_REWRITABLE_MESSAGE_KEYS = {
     "session.ask_phone_first",
+    "session.ask_phone_first_repeat",
     "session.ask_phone",
     "session.explain_phone_request",
+    "session.explain_phone_request_repeat",
+    "session.privacy_phone_request",
+    "session.phone_negative",
+    "session.phone_offtrack",
     "session.explain_country_code",
     "session.ask_country_code",
     "session.retry_country_code",
@@ -34,6 +40,7 @@ _AI_REWRITABLE_MESSAGE_KEYS = {
     "session.ask_flight",
     "session.ask_currency",
     "session.clarification_retry",
+    "session.choose_trip_retry",
     "session.fallback",
 }
 
@@ -89,6 +96,8 @@ class SessionState:
     passport_attachment_ref: str = ""
     # Internal tracking: which passport field we are currently collecting
     _passport_step: str = field(default="", repr=False)
+    _last_persona_intent: str = field(default="", repr=False)
+    _persona_intent_repeat_count: int = field(default=0, repr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -354,14 +363,17 @@ class SessionFlowManager:
 
         if session.stage == "awaiting_phone":
             if not re.search(r"\d", clean_text):
+                intent = self._classify_customer_message(clean_text)
+                repeat_count = self._register_persona_intent(session, intent)
                 session.messages.append(
                     {
                         "role": "assistant",
                         "text": self._copy_text(
                             gateway,
-                            "session.explain_phone_request",
-                            "I mean your WhatsApp number so I can check whether you already have a traveler profile with us. Please send the number, for example +201012345678.",
+                            self._phone_step_message_key(intent, repeat_count),
+                            self._phone_step_persona_fallback(intent, repeat_count),
                             language=session.language,
+                            agent_name=self.agent_persona_name,
                         ),
                     }
                 )
@@ -563,95 +575,7 @@ class SessionFlowManager:
             return session
 
         if session.stage == "awaiting_confirmation":
-            if self._is_negative_confirmation(clean_text):
-                self._set_stage(session, "cancelled")
-                session.handoff_state = "cancelled"
-                session.messages.append(
-                    {
-                        "role": "assistant",
-                        "text": "No lead was written. The customer can be added to waitlist follow-up in the next automation phase.",
-                    }
-                )
-                return session
-
-            selected_trip = None
-            open_trips = (session.preview.get("trip_result") or {}).get("open_trips", [])
-            date_tbd = (session.preview.get("trip_result") or {}).get("date_tbd_trips", [])
-            all_offered = open_trips + date_tbd
-
-            if self._is_positive_confirmation(clean_text):
-                if len(all_offered) == 1:
-                    selected_trip = all_offered[0]
-                elif len(open_trips) == 1:
-                    selected_trip = open_trips[0]
-
-            # Check if they typed a number (1, 2, 3, ...)
-            if selected_trip is None and re.fullmatch(r"[1-9]", clean_text.strip()):
-                idx = int(clean_text.strip()) - 1
-                if idx < len(all_offered):
-                    selected_trip = all_offered[idx]
-            elif selected_trip is None:
-                for trip in all_offered:
-                    if trip["trip_name"].lower() in clean_text.lower() or clean_text.lower() in trip["trip_name"].lower():
-                        selected_trip = trip
-                        break
-
-            if not selected_trip:
-                self._set_stage(session, "awaiting_clarification")
-                session.messages.append(
-                    {
-                        "role": "assistant",
-                        "text": "Please choose one of the available trips by typing its number (e.g. 1) or name, or reply 'no' to stop.",
-                    }
-                )
-                return session
-
-            session.selected_trip_id = selected_trip["trip_id"]
-            session.selected_trip_name = selected_trip["trip_name"]
-
-            result = gateway.run_sales_cycle(
-                full_name=session.customer_name,
-                raw_phone=session.raw_phone,
-                country_code=session.country_code,
-                trip_type=session.trip_type,
-                preferred_trip_id=session.selected_trip_id,
-                channel="web-demo",
-                source="Web Demo Confirmed Lead",
-                agent_notes=f"Customer confirmed interest in trip: {session.selected_trip_name}",
-                birthday=session.birthday,
-                gender=session.gender,
-                nationality=session.nationality,
-            )
-            session.final_result = result
-            session.lead_status = str(((result.get("write_result") or {}).get("lead_update") or {}).get("lead_stage") or "")
-
-            # For international trips: require passport attachment before room booking
-            if session.trip_type == "international":
-                self._set_stage(session, "awaiting_passport_upload")
-                session._passport_step = "attachment"
-                session.messages.append(
-                    {
-                        "role": "assistant",
-                        "text": self._copy_text(
-                            gateway,
-                            "session.ask_passport_upload",
-                            "For international trips, please send a clear passport photo or PDF using the attachment button. "
-                            "Once it is uploaded, type 'done' and I will continue.",
-                            language=session.language,
-                        ),
-                    }
-                )
-                return session
-
-            # Local trip: go straight to room type
-            self._set_stage(session, "awaiting_room_type")
-            session.messages.append(
-                {
-                    "role": "assistant",
-                    "text": self._room_type_prompt(gateway, session),
-                }
-            )
-            return session
+            return self._handle_trip_confirmation(session, clean_text, gateway)
 
         # -----------------------------------------------------------------------
         # Passport attachment stage (international trips only)
@@ -939,6 +863,8 @@ class SessionFlowManager:
             if resume_stage == "awaiting_clarification":
                 resume_stage = "awaiting_trip_type"
             self._set_stage(session, resume_stage)
+            if self._clarification_reply_can_resume(session, clean_text):
+                return self._continue_after_clarification(session, clean_text, gateway)
             session.messages.append(
                 {
                     "role": "assistant",
@@ -963,6 +889,159 @@ class SessionFlowManager:
             }
         )
         return session
+
+    def _continue_after_clarification(self, session: SessionState, clean_text: str, gateway) -> SessionState:
+        """Process a corrected answer immediately after a clarification prompt."""
+        if session.stage == "awaiting_trip_type":
+            normalized = self._resolve_trip_type(clean_text)
+            if normalized is None:
+                return session
+            session.trip_type = normalized
+            preview = gateway.preview_customer(
+                full_name=session.customer_name,
+                raw_phone=session.raw_phone,
+                country_code=session.country_code,
+                trip_type=session.trip_type,
+            )
+            session.preview = preview
+            self._set_stage(session, "awaiting_confirmation")
+            session.messages.append({"role": "assistant", "text": self._preview_message(preview, gateway, session.language)})
+            return session
+
+        if session.stage == "awaiting_confirmation":
+            return self._handle_trip_confirmation(session, clean_text, gateway)
+
+        session.messages.append(
+            {
+                "role": "assistant",
+                "text": self._copy_text(
+                    gateway,
+                    "session.clarification_retry",
+                    "Thanks. I am back on the previous step now. Please answer with one of the available options.",
+                    language=session.language,
+                ),
+            }
+        )
+        return session
+
+    def _clarification_reply_can_resume(self, session: SessionState, clean_text: str) -> bool:
+        if session.stage == "awaiting_trip_type":
+            return self._resolve_trip_type(clean_text) is not None
+        if session.stage == "awaiting_confirmation":
+            return self._is_negative_confirmation(clean_text) or self._select_offered_trip(session, clean_text) is not None
+        return False
+
+    def _handle_trip_confirmation(self, session: SessionState, clean_text: str, gateway) -> SessionState:
+        if self._is_negative_confirmation(clean_text):
+            self._set_stage(session, "cancelled")
+            session.handoff_state = "cancelled"
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "text": "No lead was written. The customer can be added to waitlist follow-up in the next automation phase.",
+                }
+            )
+            return session
+
+        selected_trip = self._select_offered_trip(session, clean_text)
+        if not selected_trip:
+            self._set_stage(session, "awaiting_clarification")
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "text": self._copy_text(
+                        gateway,
+                        "session.choose_trip_retry",
+                        "Please choose one of the available trips by typing its number, trip name, or a clear confirmation such as 'yes, I want it'. You can also reply 'no' to stop.",
+                        language=session.language,
+                    ),
+                }
+            )
+            return session
+
+        session.selected_trip_id = selected_trip["trip_id"]
+        session.selected_trip_name = selected_trip["trip_name"]
+
+        result = gateway.run_sales_cycle(
+            full_name=session.customer_name,
+            raw_phone=session.raw_phone,
+            country_code=session.country_code,
+            trip_type=session.trip_type,
+            preferred_trip_id=session.selected_trip_id,
+            channel="web-demo",
+            source="Web Demo Confirmed Lead",
+            agent_notes=f"Customer confirmed interest in trip: {session.selected_trip_name}",
+            birthday=session.birthday,
+            gender=session.gender,
+            nationality=session.nationality,
+        )
+        session.final_result = result
+        session.lead_status = str(((result.get("write_result") or {}).get("lead_update") or {}).get("lead_stage") or "")
+
+        if session.trip_type == "international":
+            self._set_stage(session, "awaiting_passport_upload")
+            session._passport_step = "attachment"
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "text": self._copy_text(
+                        gateway,
+                        "session.ask_passport_upload",
+                        "For international trips, please send a clear passport photo or PDF using the attachment button. "
+                        "Once it is uploaded, type 'done' and I will continue.",
+                        language=session.language,
+                    ),
+                }
+            )
+            return session
+
+        self._set_stage(session, "awaiting_room_type")
+        session.messages.append(
+            {
+                "role": "assistant",
+                "text": self._room_type_prompt(gateway, session),
+            }
+        )
+        return session
+
+    def _select_offered_trip(self, session: SessionState, text: str) -> dict[str, Any] | None:
+        open_trips, date_tbd, all_offered = self._offered_trips(session)
+        clean_text = str(text or "").strip()
+        lowered = clean_text.casefold()
+
+        if self._is_positive_confirmation(clean_text):
+            if len(all_offered) == 1:
+                return all_offered[0]
+            if len(open_trips) == 1:
+                return open_trips[0]
+
+        if re.fullmatch(r"[1-9]", clean_text):
+            idx = int(clean_text) - 1
+            if idx < len(all_offered):
+                return all_offered[idx]
+
+        normalized_input = self._normalize_choice_text(clean_text)
+        for trip in all_offered:
+            trip_name = str(trip.get("trip_name") or "")
+            trip_id = str(trip.get("trip_id") or "")
+            normalized_name = self._normalize_choice_text(trip_name)
+            normalized_id = self._normalize_choice_text(trip_id)
+            if not normalized_name and not normalized_id:
+                continue
+            if normalized_name and (normalized_name in normalized_input or normalized_input in normalized_name):
+                return trip
+            if normalized_id and normalized_id in normalized_input:
+                return trip
+            if normalized_name and self._similarity(normalized_input, normalized_name) >= 0.84:
+                return trip
+        return None
+
+    @staticmethod
+    def _offered_trips(session: SessionState) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        trip_result = ((session.preview or {}).get("trip_result") or {}) if isinstance(session.preview, dict) else {}
+        open_trips = list(trip_result.get("open_trips") or [])
+        date_tbd = list(trip_result.get("date_tbd_trips") or [])
+        return open_trips, date_tbd, open_trips + date_tbd
 
     # ---------------------------------------------------------------------------
     # Public helpers
@@ -1372,9 +1451,23 @@ class SessionFlowManager:
         if clean == "2":
             return "international"
         normalized = normalize_trip_type(clean)
-        if normalized is None:
-            return None
-        return normalized.lower()
+        if normalized is not None:
+            return normalized.lower()
+
+        compact = self._normalize_choice_text(clean)
+        if compact in {"loca", "locl", "loacl", "lcoal", "localtrip"}:
+            return "local"
+        if compact.startswith("loc") and len(compact) <= 8:
+            return "local"
+        if compact in {"intl", "int", "inter", "internation", "internationaltrip", "abroad"}:
+            return "international"
+        if compact.startswith("inter") or compact.startswith("intl"):
+            return "international"
+        if self._similarity(compact, "local") >= 0.80:
+            return "local"
+        if self._similarity(compact, "international") >= 0.80:
+            return "international"
+        return None
 
     def _resolve_room_type(self, text: str) -> str | None:
         clean = text.strip().lower()
@@ -1495,8 +1588,15 @@ class SessionFlowManager:
                 user_text=self._active_user_text,
                 required_action=self._required_action_hint(session),
                 session_context={
+                    "session_id": session.id,
                     "stage": session.stage,
+                    "language": session.language,
                     "customer_name": session.customer_name,
+                    "birthday": session.birthday,
+                    "gender": session.gender,
+                    "nationality": session.nationality,
+                    "raw_phone": session.raw_phone,
+                    "country_code": session.country_code,
                     "trip_type": session.trip_type,
                     "selected_trip_name": session.selected_trip_name,
                     "selected_trip_id": session.selected_trip_id,
@@ -1506,6 +1606,9 @@ class SessionFlowManager:
                     "booking_status": session.booking_status,
                     "has_passport_attachment": bool(session.passport_attachment_ref),
                     "passport_required": session.trip_type == "international",
+                    "customer_message_intent": self._classify_customer_message(self._active_user_text),
+                    "persona_intent_repeat_count": session._persona_intent_repeat_count,
+                    "conversation_history": session.messages[-12:],
                 },
             )
         except Exception as exc:
@@ -1542,6 +1645,20 @@ class SessionFlowManager:
 
     def _rewrite_violates_constraints(self, message_key: str, rewritten: str) -> bool:
         lowered = rewritten.lower()
+        if message_key in {
+            "session.ask_phone_first",
+            "session.ask_phone_first_repeat",
+            "session.ask_phone",
+            "session.explain_phone_request",
+            "session.explain_phone_request_repeat",
+            "session.privacy_phone_request",
+            "session.phone_negative",
+            "session.phone_offtrack",
+        }:
+            if "whatsapp" not in lowered or "number" not in lowered:
+                return True
+            if not rewritten.rstrip().endswith((".", "?", "!")):
+                return True
         if message_key in {"session.ask_passport_upload", "session.passport_upload_pending"}:
             forbidden = (
                 "passport number",
@@ -1564,6 +1681,92 @@ class SessionFlowManager:
             if any(bit in lowered for bit in forbidden_payment_prompts):
                 return True
         return False
+
+    def _phone_step_persona_fallback(self, intent: str, repeat_count: int) -> str:
+        if intent == "greeting":
+            if repeat_count > 1:
+                return (
+                    f"I am here with you. I am {self.agent_persona_name} from Rahma Traveler. "
+                    "Please send your WhatsApp number so I can open the right traveler profile."
+                )
+            return (
+                f"Hi, I am {self.agent_persona_name}, Rahma Traveler's sales agent. "
+                "Please share your WhatsApp number so I can check your traveler profile safely."
+            )
+        if intent == "privacy_concern":
+            if repeat_count > 1:
+                return (
+                    "I understand the concern. I only use the number to match the correct Rahma Traveler profile "
+                    "and avoid mixing your details with another traveler. Please send your WhatsApp number when ready."
+                )
+            return (
+                "Your WhatsApp number is used only to check or create your Rahma Traveler profile safely. "
+                "Please send the number so I can continue."
+            )
+        if intent == "clarification":
+            if repeat_count > 1:
+                return (
+                    "Same reason, and I will keep it simple: the number lets me find the correct traveler profile "
+                    "before we talk about trips or reservations. Please send your WhatsApp number."
+                )
+            return (
+                "Of course. I ask for your WhatsApp number so I can find your Rahma Traveler profile safely "
+                "before checking trips or reservations. Please send the number when ready."
+            )
+        if intent == "negative":
+            return (
+                "No problem. I cannot check your traveler profile or continue the reservation flow without a WhatsApp number. "
+                "If you want to continue, please send it."
+            )
+        return (
+            "I can help with the trip details after I find the right traveler profile. "
+            "Please send your WhatsApp number first."
+        )
+
+    @staticmethod
+    def _phone_step_message_key(intent: str, repeat_count: int) -> str:
+        if intent == "greeting":
+            return "session.ask_phone_first_repeat" if repeat_count > 1 else "session.ask_phone_first"
+        if intent == "privacy_concern":
+            return "session.privacy_phone_request"
+        if intent == "clarification":
+            return "session.explain_phone_request_repeat" if repeat_count > 1 else "session.explain_phone_request"
+        if intent == "negative":
+            return "session.phone_negative"
+        return "session.phone_offtrack"
+
+    @staticmethod
+    def _register_persona_intent(session: SessionState, intent: str) -> int:
+        if session._last_persona_intent == intent:
+            session._persona_intent_repeat_count += 1
+        else:
+            session._last_persona_intent = intent
+            session._persona_intent_repeat_count = 1
+        return session._persona_intent_repeat_count
+
+    @staticmethod
+    def _classify_customer_message(text: str) -> str:
+        lowered = (text or "").strip().casefold()
+        compact = re.sub(r"[^\w\s\u0600-\u06ff]+", " ", lowered)
+        words = set(compact.split())
+        if not lowered:
+            return "empty"
+        if SessionFlowManager._is_greeting_intent(text):
+            return "greeting"
+        if any(token in lowered for token in {"why", "what", "mean", "understand", "?", "ليه", "لماذا", "يعني", "مش فاهم"}):
+            return "clarification"
+        if any(token in compact for token in {"privacy", "safe", "secure", "why number", "personal", "خصوصية", "امان", "آمن"}):
+            return "privacy_concern"
+        if words & {"no", "stop", "cancel", "لا", "الغاء"}:
+            return "negative"
+        return "workflow_reply"
+
+    @staticmethod
+    def _is_greeting_intent(text: str) -> bool:
+        compact = re.sub(r"[^\w\s\u0600-\u06ff]+", " ", (text or "").strip().casefold())
+        words = set(compact.split())
+        greetings = {"hi", "hello", "hey", "مرحبا", "اهلا", "أهلا", "السلام", "هاي"}
+        return bool(words & greetings) and len(words) <= 4
 
     def _result_message(self, result: dict[str, Any], gateway, language: str = "en") -> str:
         return self._preview_message(result, gateway, language)
@@ -1628,9 +1831,41 @@ class SessionFlowManager:
         return f"Confirmed. I saved {lead_id} and updated the traveler profile from the intake form."
 
     def _is_positive_confirmation(self, text: str) -> bool:
-        normalized = text.strip().lower()
-        return normalized in {"yes", "y", "confirm", "confirmed", "ok", "okay", "interested", "book", "تمام", "اه", "نعم"}
+        compact = self._normalize_choice_text(text)
+        if compact in {"yes", "y", "confirm", "confirmed", "ok", "okay", "interested", "book", "تمام", "اه", "نعم"}:
+            return True
+        return any(
+            phrase in compact
+            for phrase in {
+                "ineedit",
+                "iwantit",
+                "wantit",
+                "needit",
+                "bookit",
+                "takethis",
+                "thisone",
+                "thatone",
+                "okayineedit",
+                "okiwant",
+                "yesiwant",
+                "yesineed",
+                "iaminterested",
+            }
+        )
 
     def _is_negative_confirmation(self, text: str) -> bool:
-        normalized = text.strip().lower()
-        return normalized in {"no", "n", "later", "not now", "stop", "لا", "لأ", "بعدين"}
+        compact = self._normalize_choice_text(text)
+        if compact in {"no", "n", "later", "notnow", "stop", "لا", "لأ", "بعدين"}:
+            return True
+        return any(phrase in compact for phrase in {"dontwant", "notinterested", "cancel"})
+
+    @staticmethod
+    def _normalize_choice_text(text: str) -> str:
+        lowered = str(text or "").casefold()
+        return re.sub(r"[^0-9a-z\u0600-\u06ff]+", "", lowered)
+
+    @staticmethod
+    def _similarity(left: str, right: str) -> float:
+        if not left or not right:
+            return 0.0
+        return SequenceMatcher(None, left, right).ratio()

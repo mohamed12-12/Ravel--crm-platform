@@ -1367,6 +1367,82 @@ class UnifiedCRMService:
             connection.commit()
         return {"interaction_id": interaction_id}
 
+    def record_inbound_channel_event(
+        self,
+        *,
+        channel: str,
+        message_key: str,
+        sender_id: str,
+        recipient_id: str = "",
+        text: str = "",
+        attachments: list[dict[str, Any]] | None = None,
+        timestamp: datetime | None = None,
+        customer_name: str = "",
+        flow_key: str = "",
+        step_key: str = "",
+        outcome: str = "",
+    ) -> dict[str, Any]:
+        """Persist an inbound channel message as an interaction with idempotency on message_key."""
+        self.ensure_operational_schema()
+        safe_timestamp = (timestamp or _utc_now()).replace(microsecond=0)
+        safe_channel = str(channel or "").strip() or "External"
+        safe_message_key = str(message_key or "").strip()
+        safe_sender_id = str(sender_id or "").strip()
+        safe_recipient_id = str(recipient_id or "").strip()
+        safe_text = str(text or "").strip()
+        serialized_attachments = attachments or []
+
+        with self.connect() as connection:
+            if safe_message_key:
+                existing = connection.execute(
+                    """
+                    SELECT interaction_id
+                    FROM interactions
+                    WHERE channel = ? AND message_key = ?
+                    LIMIT 1
+                    """,
+                    (safe_channel, safe_message_key),
+                ).fetchone()
+                if existing:
+                    return {"interaction_id": str(existing["interaction_id"]), "created": False}
+
+        notes_parts = []
+        if safe_text:
+            notes_parts.append(f"Inbound text: {safe_text}")
+        if safe_recipient_id:
+            notes_parts.append(f"Recipient ID: {safe_recipient_id}")
+        if serialized_attachments:
+            notes_parts.append(
+                "Attachments: "
+                + json.dumps(serialized_attachments, ensure_ascii=False, separators=(",", ":"))
+            )
+
+        interaction = self.create_interaction(
+            timestamp=safe_timestamp,
+            channel=safe_channel,
+            customer_name=customer_name or f"{safe_channel} sender {safe_sender_id}",
+            raw_phone=safe_sender_id,
+            integrated_whatsapp="",
+            phone_lookup_key="",
+            traveler_id="",
+            matched_row=None,
+            status_snapshot="WEBHOOK_RECEIVED",
+            intent="inbound_message",
+            trip_type="",
+            suggested_trips="",
+            action_taken="webhook_received",
+            handoff_required=False,
+            handoff_reason="",
+            agent_notes="\n".join(notes_parts),
+            flow_key=flow_key or safe_channel.lower(),
+            step_key=step_key or "inbound_webhook",
+            message_key=safe_message_key,
+            language="",
+            outcome=outcome or "received",
+        )
+        interaction["created"] = True
+        return interaction
+
     def create_booking_draft(
         self,
         *,

@@ -97,6 +97,23 @@ class MockGateway:
         }
 
 
+class PersonaRewriteStub:
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def rewrite_message(self, **kwargs):
+        self.calls.append(kwargs)
+        intent = (kwargs.get("session_context") or {}).get("customer_message_intent")
+        base = kwargs.get("base_text", "")
+        if intent == "greeting":
+            return "Hi, I am Rahvel Agent. Please share your WhatsApp number so I can check your profile safely."
+        if intent == "clarification":
+            return "I need your WhatsApp number to find your Rahma Traveler profile safely. Please send it when ready."
+        if intent == "privacy_concern":
+            return "I use it only to check your Rahma Traveler profile safely. Please share your WhatsApp number."
+        return base
+
+
 class BlockingGateway(MockGateway):
     def preview_customer(self, **kwargs):
         return {
@@ -187,6 +204,44 @@ class Phase5AgentFlowTests(unittest.TestCase):
         self.assertEqual(self.session.stage, "awaiting_phone")
         self.assertIn("WhatsApp number", self.session.messages[-1]["text"])
 
+    def test_repeated_phone_clarification_uses_different_persona_copy(self):
+        self.manager.handle_message(self.session, "why?", self.gateway)
+        first_reply = self.session.messages[-1]["text"]
+        self.manager.handle_message(self.session, "why?", self.gateway)
+        second_reply = self.session.messages[-1]["text"]
+
+        self.assertEqual(self.session.stage, "awaiting_phone")
+        self.assertIn("WhatsApp number", second_reply)
+        self.assertNotEqual(first_reply, second_reply)
+        self.assertIn("Same reason", second_reply)
+
+    def test_persona_ai_handles_phone_step_greeting_without_advancing(self):
+        ai = PersonaRewriteStub()
+        manager = SessionFlowManager(default_country_code="20", conversation_ai=ai)
+        session = manager.create_session(self.gateway)
+        ai.calls.clear()
+
+        manager.handle_message(session, "hi", self.gateway)
+
+        self.assertEqual(session.stage, "awaiting_phone")
+        self.assertIn("Rahvel Agent", session.messages[-1]["text"])
+        self.assertIn("WhatsApp number", session.messages[-1]["text"])
+        self.assertEqual(ai.calls[-1]["session_context"]["customer_message_intent"], "greeting")
+        self.assertEqual(ai.calls[-1]["required_action"], "Ask for the WhatsApp number.")
+
+    def test_persona_ai_handles_phone_step_clarification_without_advancing(self):
+        ai = PersonaRewriteStub()
+        manager = SessionFlowManager(default_country_code="20", conversation_ai=ai)
+        session = manager.create_session(self.gateway)
+        ai.calls.clear()
+
+        manager.handle_message(session, "why?", self.gateway)
+
+        self.assertEqual(session.stage, "awaiting_phone")
+        self.assertIn("profile safely", session.messages[-1]["text"])
+        self.assertIn("WhatsApp number", session.messages[-1]["text"])
+        self.assertEqual(ai.calls[-1]["session_context"]["customer_message_intent"], "clarification")
+
     def test_awaiting_country_code_clarification_stays_on_same_step(self):
         self.manager.handle_message(self.session, "+999123456789", self.gateway)
         self.assertEqual(self.session.stage, "awaiting_country_code")
@@ -218,7 +273,20 @@ class Phase5AgentFlowTests(unittest.TestCase):
         self.manager.handle_message(self.session, "maybe", self.gateway)
         self.assertEqual(self.session.stage, "awaiting_clarification")
         self.manager.handle_message(self.session, "local", self.gateway)
-        self.assertEqual(self.session.stage, "awaiting_trip_type")
+        self.assertEqual(self.session.stage, "awaiting_confirmation")
+
+    def test_trip_type_typo_local_is_understood(self):
+        self._drive_phone(self.session, self.gateway)
+        self.manager.handle_message(self.session, "loca", self.gateway)
+        self.assertEqual(self.session.stage, "awaiting_confirmation")
+        self.assertEqual(self.session.trip_type, "local")
+
+    def test_natural_single_trip_confirmation_is_understood(self):
+        self._drive_phone(self.session, self.gateway)
+        self.manager.handle_message(self.session, "local", self.gateway)
+        self.manager.handle_message(self.session, "okay i need it", self.gateway)
+        self.assertEqual(self.session.stage, "awaiting_room_type")
+        self.assertEqual(self.session.selected_trip_id, "RT-LOC-26-001")
 
     def test_handoff_path_ends_in_handed_off_state(self):
         gateway = MockGateway(handoff_required=True)

@@ -1,0 +1,102 @@
+project:
+  name: Rahma Traveler
+  type: Flask CRM backend
+  root: apps/api
+  runner: apps/api/run.py
+  default_port: 5000
+
+entrypoints:
+  app_factory: apps/api/app/__init__.py:create_app
+  local_runner: apps/api/run.py
+
+blueprints:
+  travelers:
+    prefix: /travelers
+    file: apps/api/app/routes/travelers.py
+    responsibilities:
+      - list/filter/export travelers
+      - create/update traveler profiles
+      - upload and view traveler documents
+      - passport document handling
+  trips:
+    prefix: /trips
+    file: apps/api/app/routes/trips.py
+    responsibilities:
+      - list/filter trip inventory
+      - create/update trip products
+      - trip detail capacity display
+  bookings:
+    prefix: /bookings
+    file: apps/api/app/routes/bookings.py
+    responsibilities:
+      - list/search bookings
+      - create booking drafts
+      - update booking/payment status
+      - booking event/history display
+  leads:
+    prefix: /leads
+    file: apps/api/app/routes/leads.py
+    responsibilities:
+      - list/search leads
+      - create/update leads
+      - create human handoff from lead
+  interactions:
+    prefix: /interactions
+    file: apps/api/app/routes/interactions.py
+    responsibilities:
+      - search interaction logs
+  handoffs:
+    prefix: /admin/handoffs
+    file: apps/api/app/routes/handoffs.py
+    responsibilities:
+      - handoff kanban board
+      - create/update pending/in-progress/resolved handoffs
+      - pending count endpoint
+  admin:
+    prefix: /admin
+    file: apps/api/app/routes/admin.py
+    responsibilities:
+      - dashboard
+      - import/sync views
+      - duplicate identity review and merge
+      - database health
+  crm_api:
+    prefix: /api/crm
+    file: apps/api/app/routes/crm.py
+    responsibilities:
+      - duplicate identity API
+      - identity merge API
+  copy_api:
+    prefix: /api/copy
+    file: apps/api/app/routes/copy.py
+    responsibilities:
+      - deterministic copy template render
+      - copy template listing
+
+models:
+  Traveler: apps/api/app/models/traveler.py
+  Trip: apps/api/app/models/trip.py
+  TripBooking: apps/api/app/models/booking.py
+  CEBooking: apps/api/app/models/booking.py
+  Lead: apps/api/app/models/lead.py
+  Interaction: apps/api/app/models/interaction.py
+  HandoffQueue: apps/api/app/models/handoff.py
+  TravelerDocument: apps/api/app/models/traveler_document.py
+  BookingEventTrail: apps/api/app/models/booking_event.py
+  BookingStatusHistory: apps/api/app/models/booking_status_history.py
+
+services:
+  UnifiedCRMService: services/crm/system_services/unified_service.py
+  identity: apps/api/app/services/identity.py
+  importer: apps/api/app/services/importer.py
+
+critical_behaviors:
+  - DB-first traveler ID generation
+  - duplicate traveler detection by phone_lookup_key
+  - traveler create/update duplicate phone protection
+  - trip filter persistence through detail navigation
+  - booking search across booking ID, traveler name, trip name, notes, source, and traveler ID
+  - booking draft creation with group size, passport status, and payment status
+  - handoff queue status movement
+  - safe document upload and document view path validation
+  - admin database health diagnostics

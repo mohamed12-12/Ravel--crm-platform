@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -8,10 +9,14 @@ from werkzeug.utils import secure_filename
 
 from flask import Flask, jsonify, redirect, render_template, request, session
 
-from services.ai_agent.ai_agent_app.agent import SessionFlowManager
+from services.ai_agent.ai_agent_app.agent import GeminiAgent, SessionFlowManager
 from services.ai_agent.ai_agent_app.config import Settings, load_settings
 from services.ai_agent.ai_agent_app.conversation_ai import GeminiConversationAI
 from services.ai_agent.ai_agent_app.sheets import ExcelSheetGateway, build_sheet_gateway
+from services.ai_agent.ai_agent_app.system_bridge import get_system_service
+from services.ai_agent.llm import build_llm_provider
+from services.instagram import MetaApiSettings, MetaGraphClient, build_instagram_reply
+from services.instagram.payload_parser import parse_instagram_webhook
 from services.instagram.webhooks import verify_webhook, validate_meta_signature
 from services.ai_agent.ai_agent_app.logger import app_logger, webhook_logger
 
@@ -107,9 +112,14 @@ def create_app(
         static_folder=str((Path(__file__).resolve().parent / "web" / "static")),
     )
     app.config["SETTINGS"] = base_settings
+    app.config["AI_AGENT_MODE"] = base_settings.ai_agent_mode
     app.config["SHEET_GATEWAY"] = build_sheet_gateway(base_settings)
     conversation_ai = None
-    if base_settings.ai_enabled and not using_runtime_overrides:
+    if base_settings.gemini_agent_enabled and not using_runtime_overrides:
+        provider = build_llm_provider(base_settings)
+        if provider is not None:
+            conversation_ai = GeminiAgent.from_settings(base_settings, provider)
+    elif base_settings.ai_enabled and not using_runtime_overrides:
         conversation_ai = GeminiConversationAI(
             api_key=base_settings.gemini_api_key,
             model=base_settings.gemini_model,
@@ -214,6 +224,7 @@ def create_app(
                 "websiteUrl": s.website_url,
                 "postTripHandoffEnabled": s.post_trip_handoff_enabled,
                 "defaultCountryCode": s.default_country_code,
+                "aiAgentMode": s.ai_agent_mode,
             }
         )
     
@@ -233,9 +244,108 @@ def create_app(
         def process_request():
             data = request.get_json(force=True)
             webhook_logger.info(f"Received webhook event")
-            # Note: We just log and return 200 for now to satisfy Meta requirements.
-            # TODO(production): validate event shape, enforce idempotency, and dispatch to an async worker.
-            return jsonify({"status": "received"})
+            events = parse_instagram_webhook(data if isinstance(data, dict) else {})
+            service = get_system_service(settings)
+            persisted = 0
+            duplicates = 0
+            replies_sent = 0
+            replies_failed = 0
+            meta_client = None
+            if settings.meta_page_access_token:
+                meta_client = MetaGraphClient(
+                    MetaApiSettings(
+                        page_access_token=settings.meta_page_access_token,
+                        graph_api_version=settings.meta_graph_api_version or "v23.0",
+                    )
+                )
+
+            if service is not None:
+                for event in events:
+                    attachments = [
+                        {
+                            "type": attachment.attachment_type,
+                            "url": attachment.url,
+                            "payload": attachment.payload,
+                        }
+                        for attachment in event.attachments
+                    ]
+                    result = service.record_inbound_channel_event(
+                        channel="Instagram",
+                        message_key=event.event_id,
+                        sender_id=event.sender_id,
+                        recipient_id=event.recipient_id,
+                        text=event.text,
+                        attachments=attachments,
+                        timestamp=(
+                            datetime.fromtimestamp(event.timestamp / 1000, tz=timezone.utc)
+                            if event.timestamp
+                            else None
+                        ),
+                        flow_key="instagram",
+                        step_key="inbound_webhook",
+                        outcome="received",
+                    )
+                    if result.get("created"):
+                        persisted += 1
+                        if meta_client is not None:
+                            draft = build_instagram_reply(event)
+                            send_result = meta_client.send_instagram_text_message(event.sender_id, draft.text)
+                            if send_result.ok:
+                                replies_sent += 1
+                                try:
+                                    service.create_interaction(
+                                        timestamp=(
+                                            datetime.fromtimestamp(event.timestamp / 1000, tz=timezone.utc)
+                                            if event.timestamp
+                                            else datetime.now(timezone.utc)
+                                        ),
+                                        channel="Instagram",
+                                        customer_name=f"Instagram sender {event.sender_id}",
+                                        raw_phone=event.sender_id,
+                                        integrated_whatsapp="",
+                                        phone_lookup_key="",
+                                        traveler_id="",
+                                        matched_row=None,
+                                        status_snapshot="WEBHOOK_REPLIED",
+                                        intent="outbound_message",
+                                        trip_type="",
+                                        suggested_trips="",
+                                        action_taken="outbound_reply_sent",
+                                        handoff_required=False,
+                                        handoff_reason="",
+                                        agent_notes=(
+                                            f"Outbound reply sent after inbound webhook. "
+                                            f"Reason: {draft.reason}. Reply: {draft.text}"
+                                        ),
+                                        flow_key="instagram",
+                                        step_key="outbound_reply",
+                                        message_key=f"{event.event_id}:reply",
+                                        language="",
+                                        outcome="sent",
+                                    )
+                                except Exception as exc:
+                                    webhook_logger.warning(f"Could not record outbound Instagram reply: {exc}")
+                            else:
+                                replies_failed += 1
+                                webhook_logger.warning(
+                                    "Instagram reply send failed for %s: %s %s",
+                                    event.sender_id,
+                                    send_result.status_code,
+                                    send_result.response_json,
+                                )
+                    else:
+                        duplicates += 1
+
+            return jsonify(
+                {
+                    "status": "received",
+                    "events": len(events),
+                    "persisted": persisted,
+                    "duplicates": duplicates,
+                    "repliesSent": replies_sent,
+                    "repliesFailed": replies_failed,
+                }
+            )
         return process_request()
 
     @app.get("/api/crm/preview")

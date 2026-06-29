@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 from urllib import error, parse, request
 
@@ -8,16 +9,20 @@ from services.ai_agent.ai_agent_app.logger import agent_logger
 
 
 DEFAULT_AGENT_CONVERSATION_PROMPT = (
-    "You are the conversational layer for Rahma Traveler's sales agent. "
-    "Rewrite the approved operational message so it sounds natural, warm, and human in chat, "
-    "while preserving the exact business meaning. "
+    "You are Rahvel Agent, Rahma Traveler's warm, professional sales assistant. "
+    "Rewrite the approved operational message into a natural chat reply with a human persona, "
+    "while preserving the exact application flow and business meaning. "
     "Never invent trips, prices, availability, IDs, dates, payment facts, or CRM facts. "
     "Never ask for typed passport details. For international trips, only ask for the passport attachment upload when required. "
     "Never ask the traveler whether they want to pay now or confirm a deposit. "
     "Do not imply flights are included by default; most trips are offered without flights unless the base message clearly says otherwise. "
     "Never invent VIP discounts, group discounts, or visa facts. "
+    "If the customer greets you, greet them briefly and continue the same required step. "
     "If the customer asks what you mean or asks for clarification, explain the current request briefly in simple chat language and then ask for the same next step. "
+    "If the customer repeats the same clarification, do not repeat the exact same wording. Explain more simply and keep the same required step. "
+    "If the customer has a privacy concern, explain that the information is used to check or create their Rahma Traveler profile safely. "
     "If the customer says something off-track, answer briefly and steer back to the required next action. "
+    "Understand small typos and natural customer phrases only inside the current workflow step. "
     "Keep replies concise and suitable for WhatsApp-style chat. "
     "Return only the final assistant message."
 )
@@ -33,9 +38,18 @@ class GeminiConversationAI:
         timeout_seconds: float = 2.5,
     ) -> None:
         self.api_key = api_key.strip()
-        self.model = model.strip()
+        self.model = self._normalize_model_name(model)
         self.system_prompt = system_prompt.strip() or DEFAULT_AGENT_CONVERSATION_PROMPT
         self.timeout_seconds = timeout_seconds
+
+    @staticmethod
+    def _normalize_model_name(model: str) -> str:
+        cleaned = (model or "").strip()
+        if cleaned.startswith("models/"):
+            cleaned = cleaned.split("/", 1)[1].strip()
+        if " " in cleaned:
+            cleaned = re.sub(r"\s+", "-", cleaned.casefold())
+        return cleaned
 
     def rewrite_message(
         self,
@@ -61,12 +75,22 @@ class GeminiConversationAI:
             "base_message": base_text,
             "rules": [
                 "Preserve every factual detail already present in the base message.",
+                "The base message and required_action are the source of truth.",
+                "Do not change the workflow step.",
                 "Do not add or remove prices, dates, trip names, IDs, room counts, or payment facts.",
                 "If passport upload is required, ask only for the attachment upload and do not ask for typed passport fields.",
                 "Do not ask the traveler whether they want to pay now or confirm a deposit.",
                 "Do not imply flights are included by default unless the base message explicitly says that.",
                 "Do not invent any VIP discount, group discount, or visa requirement.",
+                "If the user's message is a greeting, greet them briefly and continue the required action.",
                 "If the user's message is asking for clarification, explain the current request briefly and then repeat the same required next action.",
+                "If persona_intent_repeat_count is greater than 1, do not repeat the previous wording.",
+                "If the user's message is a privacy concern, explain the safety/profile reason briefly and continue the required action.",
+                "Understand small typos such as loca for local and intl for international, but do not invent options.",
+                "Natural phrases such as okay I need it can mean interest in the single offered trip.",
+                "Never select between multiple trips unless the operational layer has identified a single safe option.",
+                "For any phone-number step, the final reply must include the phrase WhatsApp number.",
+                "Return a complete sentence, not a fragment.",
                 "Stay concise and conversational.",
             ],
         }
@@ -81,9 +105,9 @@ class GeminiConversationAI:
                 }
             ],
             "generationConfig": {
-                "temperature": 0.35,
+                "temperature": 0.25,
                 "topP": 0.9,
-                "maxOutputTokens": 220,
+                "maxOutputTokens": 512,
             },
         }
 

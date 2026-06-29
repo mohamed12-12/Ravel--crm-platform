@@ -9,6 +9,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_AGENT_CONVERSATION_PROMPT_FILE = (
     PROJECT_ROOT / "services" / "ai_agent" / "ai_agent_app" / "prompts" / "agent_conversation.md"
 )
+DEFAULT_GEMINI_AGENT_SYSTEM_PROMPT_FILE = (
+    PROJECT_ROOT / "services" / "ai_agent" / "ai_agent_app" / "prompts" / "gemini_agent_system.md"
+)
 
 
 def _load_env_file(path: Path) -> None:
@@ -69,9 +72,11 @@ class Settings:
     app_secret_key: str
     log_level: str
 
+    ai_agent_mode: str
     ai_provider: str
     gemini_api_key: str
     gemini_model: str
+    ai_agent_system_prompt: str
     openai_api_key: str
     openai_model: str
 
@@ -106,10 +111,16 @@ class Settings:
     def ai_enabled(self) -> bool:
         return self.ai_provider == "gemini" and bool(self.gemini_api_key)
 
+    @property
+    def gemini_agent_enabled(self) -> bool:
+        return self.ai_agent_mode == "gemini" and bool(self.gemini_api_key)
+
     def validate(self) -> list[str]:
         errors: list[str] = []
         if self.app_env == "production" and not self.app_secret_key:
             errors.append("APP_SECRET_KEY is required in production.")
+        if self.ai_agent_mode not in {"deterministic", "gemini"}:
+            errors.append("AI_AGENT_MODE must be either 'deterministic' or 'gemini'.")
         if self.sheet_backend not in {"excel", "google", "google_sheets"}:
             errors.append("SHEET_BACKEND must be either 'excel', 'google', or 'google_sheets'.")
         if self.sheet_backend == "excel" and not self.excel_source_workbook.exists():
@@ -148,9 +159,17 @@ def load_settings() -> Settings:
             or ("rahma-traveler-demo" if app_env != "production" else "")
         ),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
+        ai_agent_mode=os.getenv("AI_AGENT_MODE", "deterministic").strip().lower() or "deterministic",
         ai_provider=os.getenv("AI_PROVIDER", "gemini").strip().lower(),
         gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip(),
+        ai_agent_system_prompt=(
+            os.getenv("AI_AGENT_SYSTEM_PROMPT", "").strip()
+            or _read_text_file(
+                os.getenv("AI_AGENT_SYSTEM_PROMPT_FILE", "").strip(),
+                DEFAULT_GEMINI_AGENT_SYSTEM_PROMPT_FILE,
+            )
+        ),
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         openai_model=os.getenv("OPENAI_MODEL", "").strip(),
         sheet_backend=os.getenv("SHEET_BACKEND", "excel").strip().lower(),
