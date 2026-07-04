@@ -294,7 +294,10 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
             agent, _ = self._build_agent([function_call_response("create_booking", {"trip_id": "RT-LOC-26-001"})])
             result = agent.respond(user_message="book this", session_context={"session_id": "sess-4"})
 
-        self.assertEqual(result["reply"], "Write operations are disabled in Phase 1.")
+        self.assertEqual(
+            result["reply"],
+            "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed.",
+        )
         self.assertIn("Unsupported tool requested", result["error"])
 
     def test_invalid_tool_input_rejected(self) -> None:
@@ -302,7 +305,10 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
             agent, _ = self._build_agent([function_call_response("search_traveler", {"country_code": "20"})])
             result = agent.respond(user_message="find profile", session_context={"session_id": "sess-5"})
 
-        self.assertEqual(result["reply"], "Write operations are disabled in Phase 1.")
+        self.assertEqual(
+            result["reply"],
+            "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed.",
+        )
         self.assertIn("Invalid tool input", result["error"])
 
     def test_write_tool_request_rejected(self) -> None:
@@ -310,8 +316,11 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
             agent, _ = self._build_agent([function_call_response("update_traveler", {"traveler_id": "TR00001"})])
             result = agent.respond(user_message="update this traveler", session_context={"session_id": "sess-6"})
 
-        self.assertEqual(result["reply"], "Write operations are disabled in Phase 1.")
-        self.assertEqual(result["error"], "write_request_rejected")
+        self.assertEqual(
+            result["reply"],
+            "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed.",
+        )
+        self.assertIn("Unsupported tool requested", result["error"])
 
     def test_max_tool_call_limit_enforced(self) -> None:
         with self._patch_service():
@@ -324,7 +333,10 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
             )
             result = agent.respond(user_message="find profile", session_context={"session_id": "sess-7"})
 
-        self.assertEqual(result["reply"], "Write operations are disabled in Phase 1.")
+        self.assertEqual(
+            result["reply"],
+            "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed.",
+        )
         self.assertIn("Maximum Gemini tool-call limit reached", result["error"])
 
     def test_final_answer_uses_tool_result(self) -> None:

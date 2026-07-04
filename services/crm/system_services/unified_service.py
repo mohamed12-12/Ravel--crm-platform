@@ -1899,6 +1899,91 @@ class UnifiedCRMService:
         )
         return True
 
+    def update_lead_stage(
+        self,
+        lead_id: str,
+        *,
+        requested_stage: str,
+        priority: str = "",
+        follow_up_status: str = "",
+        follow_up_due_date: str = "",
+        notes: str = "",
+        channel: str = "",
+        flow_key: str = "",
+        current_step: str = "",
+    ) -> dict[str, Any]:
+        self.ensure_operational_schema()
+        stage = str(requested_stage or "").strip()
+        if not lead_id:
+            raise ValueError("Lead ID is required.")
+        if not stage:
+            raise ValueError("Lead stage is required.")
+
+        timestamp = _utc_now().replace(microsecond=0)
+        with self.connect() as connection:
+            lead = connection.execute(
+                """
+                SELECT lead_id, traveler_id, customer_name, raw_phone, lead_stage, priority,
+                       follow_up_status, follow_up_due_date, interaction_count
+                FROM leads
+                WHERE lead_id = ?
+                """,
+                (lead_id,),
+            ).fetchone()
+            if not lead:
+                raise ValueError(f"Lead was not found: {lead_id}")
+
+            resolved_priority = priority or str(lead["priority"] or "") or "Medium"
+            resolved_follow_up_status = follow_up_status or str(lead["follow_up_status"] or "") or ""
+            resolved_follow_up_due_date = follow_up_due_date or str(lead["follow_up_due_date"] or "") or ""
+            connection.execute(
+                """
+                UPDATE leads
+                SET lead_stage = ?, priority = ?, follow_up_status = ?, follow_up_due_date = ?,
+                    updated_at = ?
+                WHERE lead_id = ?
+                """,
+                (
+                    stage,
+                    resolved_priority,
+                    resolved_follow_up_status or None,
+                    resolved_follow_up_due_date or None,
+                    timestamp.isoformat(timespec="seconds"),
+                    lead_id,
+                ),
+            )
+            connection.commit()
+
+        event = self.create_booking_event(
+            event_type="lead_stage_updated",
+            event_label="Lead stage updated",
+            traveler_id=str(lead["traveler_id"] or ""),
+            lead_id=lead_id,
+            channel=channel,
+            actor="system",
+            notes=notes or f"Lead stage updated to {stage}",
+            metadata={"requested_stage": stage, "flow_key": flow_key, "current_step": current_step},
+            occurred_at=timestamp,
+        )
+        try:
+            self.sync_agent_write_to_sheet(
+                traveler_id=str(lead["traveler_id"] or ""),
+                lead_id=lead_id,
+                event_ids=[event["event_id"]],
+            )
+        except Exception:
+            pass
+        return {
+            "lead_id": lead_id,
+            "lead_stage": stage,
+            "priority": resolved_priority,
+            "follow_up_status": resolved_follow_up_status,
+            "follow_up_due_date": resolved_follow_up_due_date,
+            "traveler_id": str(lead["traveler_id"] or ""),
+            "customer_name": str(lead["customer_name"] or ""),
+            "event_id": event["event_id"],
+        }
+
     def create_booking_event(
         self,
         *,

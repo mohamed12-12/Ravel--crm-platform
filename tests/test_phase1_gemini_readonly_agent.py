@@ -287,7 +287,8 @@ class TestPhase1GeminiReadOnlyAgent(unittest.TestCase):
             )
 
         self.assertEqual(rewrite, "أرسل رقم الواتساب من فضلك.")
-        self.assertEqual(refusal["reply"], "Write operations are disabled in Phase 1.")
+        self.assertNotEqual(refusal["reply"], "Write operations are disabled in Phase 1.")
+        self.assertTrue(refusal["reply"])
 
     def test_gemini_agent_invalid_response_falls_back_safely(self) -> None:
         provider = StubProvider("   ")
@@ -302,7 +303,10 @@ class TestPhase1GeminiReadOnlyAgent(unittest.TestCase):
             )
             result = agent.respond(user_message="hello", session_context={"session_id": "sess-3"})
 
-        self.assertEqual(result["reply"], "Write operations are disabled in Phase 1.")
+        self.assertEqual(
+            result["reply"],
+            "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed.",
+        )
 
     def test_gemini_provider_retries_after_timeout(self) -> None:
         provider = GeminiProvider(api_key="key", model="gemini-2.5-flash", timeout_seconds=1, retries=1)

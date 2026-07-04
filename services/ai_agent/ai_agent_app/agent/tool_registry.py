@@ -18,7 +18,7 @@ class ToolSpec:
 
 
 def build_read_only_tool_registry() -> dict[str, ToolSpec]:
-    return {
+    registry = {
         "search_traveler": ToolSpec(
             name="search_traveler",
             description="Search the CRM for traveler matches using WhatsApp or phone data.",
@@ -93,8 +93,77 @@ def build_read_only_tool_registry() -> dict[str, ToolSpec]:
             },
             output_schema={"type": "object"},
         ),
+        "lookup_lead": ToolSpec(
+            name="lookup_lead",
+            description="Look up one or more CRM leads by lead_id, traveler_id, or WhatsApp number.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "lead_id": {"type": "string"},
+                    "traveler_id": {"type": "string"},
+                    "raw_phone": {"type": "string"},
+                    "country_code": {"type": "string"},
+                },
+            },
+            output_schema={"type": "object"},
+        ),
     }
+    return registry
 
 
-def render_tool_list() -> str:
-    return "\n".join(spec.as_prompt_block() for spec in build_read_only_tool_registry().values())
+def build_agent_tool_registry(*, include_write_tools: bool = False) -> dict[str, ToolSpec]:
+    registry = build_read_only_tool_registry()
+    registry["validate_business_action"] = ToolSpec(
+        name="validate_business_action",
+        description=(
+            "Validate whether a future CRM action would be allowed. "
+            "This tool never writes to CRM and only returns APPROVED, REJECTED, or NEED_MORE_INFORMATION."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "create_traveler",
+                        "update_traveler",
+                        "create_lead",
+                        "update_lead_stage",
+                        "create_booking_draft",
+                        "update_booking",
+                        "upload_passport",
+                        "create_handoff",
+                    ],
+                },
+                "traveler_id": {"type": "string"},
+                "lead_id": {"type": "string"},
+                "booking_id": {"type": "string"},
+                "trip_id": {"type": "string"},
+                "raw_phone": {"type": "string"},
+                "country_code": {"type": "string"},
+                "full_name": {"type": "string"},
+                "room_type": {"type": "string"},
+                "requested_stage": {"type": "string"},
+                "payment_status": {"type": "string"},
+                "flight_option": {"type": "string"},
+                "currency": {"type": "string"},
+                "booking_notes": {"type": "string"},
+                "passport_attachment_ref": {"type": "string"},
+                "user_requested_human": {"type": "boolean"},
+                "ai_confidence": {"type": "number"},
+                "validation_failures": {"type": "integer"},
+                "repeated_validation_failures": {"type": "integer"},
+            },
+            "required": ["action"],
+        },
+        output_schema={"type": "object"},
+    )
+    if include_write_tools:
+        from services.ai_agent.ai_agent_app.agent.write_tool_registry import build_write_tool_registry
+
+        registry.update(build_write_tool_registry())
+    return registry
+
+
+def render_tool_list(*, include_write_tools: bool = False) -> str:
+    return "\n".join(spec.as_prompt_block() for spec in build_agent_tool_registry(include_write_tools=include_write_tools).values())

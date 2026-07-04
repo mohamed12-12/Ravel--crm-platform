@@ -38,8 +38,7 @@ class OperationalDbPromotionTests(unittest.TestCase):
     def tearDown(self) -> None:
         os.environ.clear()
         os.environ.update(self._original_env)
-        if self.tmp_copy.exists():
-            self.tmp_copy.unlink()
+        self.tmp_copy.unlink(missing_ok=True)
 
     def test_promoted_db_has_expected_counts(self) -> None:
         self.assertTrue(self.tmp_copy.exists())

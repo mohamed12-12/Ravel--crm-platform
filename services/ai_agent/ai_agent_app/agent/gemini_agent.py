@@ -8,16 +8,12 @@ from typing import Any
 
 from services.ai_agent.ai_agent_app.agent.prompt_builder import PromptBuilder
 from services.ai_agent.ai_agent_app.agent.read_only_tools import ReadOnlyCRMTools
-from services.ai_agent.ai_agent_app.agent.tool_registry import ToolSpec, build_read_only_tool_registry
+from services.ai_agent.ai_agent_app.agent.tool_registry import ToolSpec, build_agent_tool_registry
+from services.ai_agent.ai_agent_app.agent.write_tool_executor import GeminiWriteToolExecutor
 from services.ai_agent.ai_agent_app.config import Settings
 from services.ai_agent.ai_agent_app.logger import agent_logger
+from services.ai_agent.validation import ActionValidator
 from services.ai_agent.llm.gemini_provider import GeminiProvider, GeminiProviderError
-
-
-_WRITE_INTENT_PATTERN = re.compile(
-    r"\b(create|update|delete|remove|modify|insert|write|draft|handoff|cancel)\b",
-    re.IGNORECASE,
-)
 
 
 def _detect_language(text: str) -> str:
@@ -37,23 +33,37 @@ class GeminiAgent:
         settings: Settings,
         provider: GeminiProvider,
         read_only_tools: ReadOnlyCRMTools | None = None,
+        action_validator: ActionValidator | None = None,
         prompt_builder: PromptBuilder | None = None,
+        write_tools_enabled: bool = False,
         max_tool_calls: int = 4,
     ) -> None:
         self.settings = settings
         self.provider = provider
         self.read_only_tools = read_only_tools or ReadOnlyCRMTools(settings)
-        self.tool_registry = build_read_only_tool_registry()
+        self.action_validator = action_validator or ActionValidator(settings, read_only_tools=self.read_only_tools)
+        self.write_tools_enabled = bool(write_tools_enabled)
+        self.read_only_tool_registry = build_agent_tool_registry(include_write_tools=False)
+        self.tool_registry = build_agent_tool_registry(include_write_tools=self.write_tools_enabled)
         self.prompt_builder = prompt_builder or PromptBuilder(
             system_prompt=settings.ai_agent_system_prompt,
             tool_registry=self.tool_registry,
+        )
+        self.rewrite_prompt_builder = PromptBuilder(
+            system_prompt=settings.ai_agent_system_prompt,
+            tool_registry=self.read_only_tool_registry,
+        )
+        self.write_executor = (
+            GeminiWriteToolExecutor(settings=settings, read_only_tools=self.read_only_tools, action_validator=self.action_validator)
+            if self.write_tools_enabled
+            else None
         )
         self.max_tool_calls = max(1, int(max_tool_calls))
         self._memory: dict[str, list[dict[str, Any]]] = {}
 
     @classmethod
-    def from_settings(cls, settings: Settings, provider: GeminiProvider) -> "GeminiAgent":
-        return cls(settings=settings, provider=provider)
+    def from_settings(cls, settings: Settings, provider: GeminiProvider, *, write_tools_enabled: bool = False) -> "GeminiAgent":
+        return cls(settings=settings, provider=provider, write_tools_enabled=write_tools_enabled)
 
     def _memory_key(self, session_context: dict[str, Any] | None) -> str:
         if not session_context:
@@ -87,13 +97,20 @@ class GeminiAgent:
                 raw_phone=raw_phone,
                 country_code=country_code,
             )
+            crm_context["lead_lookup"] = self.read_only_tools.lookup_lead(
+                raw_phone=raw_phone,
+                country_code=country_code,
+            )
             crm_context["passport_status"] = self.read_only_tools.get_passport_status(
                 raw_phone=raw_phone,
                 country_code=country_code,
             )
         if traveler_id:
             crm_context["traveler_profile"] = self.read_only_tools.get_traveler_profile(traveler_id=traveler_id)
+            crm_context.setdefault("lead_lookup", self.read_only_tools.lookup_lead(traveler_id=traveler_id))
             crm_context.setdefault("passport_status", self.read_only_tools.get_passport_status(traveler_id=traveler_id))
+        if lead_id:
+            crm_context["lead_lookup"] = self.read_only_tools.lookup_lead(lead_id=lead_id, traveler_id=traveler_id)
         if trip_type:
             crm_context["trip_search"] = self.read_only_tools.search_trips(
                 trip_type=trip_type,
@@ -101,19 +118,13 @@ class GeminiAgent:
             )
         if selected_trip_id:
             crm_context["trip_details"] = self.read_only_tools.get_trip_details(trip_id=selected_trip_id)
-        if lead_id:
-            crm_context["lead_lookup"] = self.read_only_tools.lookup_lead(lead_id=lead_id)
         if booking_id:
             crm_context["booking_lookup"] = self.read_only_tools.get_booking_status(booking_id=booking_id)
         return crm_context
 
     @staticmethod
-    def _looks_like_write_request(text: str) -> bool:
-        return bool(_WRITE_INTENT_PATTERN.search(text or ""))
-
-    @staticmethod
     def _safe_refusal() -> str:
-        return "Write operations are disabled in Phase 1."
+        return "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed."
 
     @staticmethod
     def _extract_reply(text: str) -> str:
@@ -191,7 +202,7 @@ class GeminiAgent:
             raise GeminiToolLoopError(f"Invalid tool input for {name}: unsupported field {key}.")
         return spec
 
-    def _execute_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+    def _execute_tool(self, name: str, args: dict[str, Any], session_context: dict[str, Any] | None = None) -> dict[str, Any]:
         if name == "search_traveler":
             return self.read_only_tools.search_traveler(
                 raw_phone=str(args.get("raw_phone") or ""),
@@ -222,6 +233,26 @@ class GeminiAgent:
                 raw_phone=str(args.get("raw_phone") or ""),
                 country_code=str(args.get("country_code") or self.settings.default_country_code or ""),
             )
+        if name == "lookup_lead":
+            return self.read_only_tools.lookup_lead(
+                lead_id=str(args.get("lead_id") or ""),
+                traveler_id=str(args.get("traveler_id") or ""),
+                raw_phone=str(args.get("raw_phone") or ""),
+                country_code=str(args.get("country_code") or self.settings.default_country_code or ""),
+            )
+        if name == "validate_business_action":
+            action = str(args.get("action") or "").strip()
+            return self.action_validator.validate_action(
+                action=action,
+                payload=args,
+                session_context=session_context or {},
+            ).to_dict()
+        if self.write_executor and name in {"create_lead", "update_lead_stage", "create_booking_draft", "create_handoff"}:
+            return self.write_executor.execute(
+                action=name,
+                payload=args,
+                session_context=session_context or {},
+            )
         raise GeminiToolLoopError(f"Unsupported tool requested: {name}")
 
     @staticmethod
@@ -229,7 +260,22 @@ class GeminiAgent:
         summary: dict[str, Any] = {"type": type(result).__name__}
         if isinstance(result, dict):
             summary["keys"] = sorted(result.keys())
-            for key in ("match_status", "handoff_required", "traveler", "trips", "open_trips", "bookings", "documents"):
+            for key in (
+                "match_status",
+                "handoff_required",
+                "traveler",
+                "trips",
+                "open_trips",
+                "bookings",
+                "leads",
+                "documents",
+                "decision",
+                "executed",
+                "result_id",
+                "lead_id",
+                "booking_id",
+                "handoff_id",
+            ):
                 value = result.get(key)
                 if value is None:
                     continue
@@ -278,6 +324,12 @@ class GeminiAgent:
                     reply_text = self._extract_reply(
                         "\n".join(str(part.get("text") or "").strip() for part in parts if isinstance(part, dict) and part.get("text"))
                     )
+                if not reply_text and tool_events:
+                    for event in reversed(tool_events):
+                        reply_candidate = str(event.get("assistant_message") or event.get("reply") or "").strip()
+                        if reply_candidate:
+                            reply_text = reply_candidate
+                            break
                 if not reply_text:
                     reply_text = self._safe_refusal()
                 memory_key = self._memory_key(session_context)
@@ -297,6 +349,7 @@ class GeminiAgent:
                 return {
                     "reply": reply_text,
                     "tool_requests": tool_events,
+                    "write_results": [event for event in tool_events if event.get("write")],
                     "mode": self.settings.ai_agent_mode,
                     "prompt_id": package.prompt_id,
                     "response_id": response.response_id,
@@ -309,8 +362,6 @@ class GeminiAgent:
                 if tool_call_count > self.max_tool_calls:
                     raise GeminiToolLoopError("Maximum Gemini tool-call limit reached.")
                 spec = self._validate_tool_call(call["name"], call.get("args") or {})
-                if self._looks_like_write_request(call["name"]):
-                    raise GeminiToolLoopError("Write-like tool requests are not allowed in Phase 2.")
 
                 tool_input = call.get("args") or {}
                 agent_logger.info(
@@ -319,7 +370,7 @@ class GeminiAgent:
                     spec.name,
                     json.dumps(tool_input, ensure_ascii=False, sort_keys=True),
                 )
-                result = self._execute_tool(spec.name, tool_input)
+                result = self._execute_tool(spec.name, tool_input, session_context)
                 summary = self._tool_result_summary(result)
                 agent_logger.info(
                     "Gemini tool result prompt_id=%s tool=%s summary=%s",
@@ -332,6 +383,10 @@ class GeminiAgent:
                         "name": spec.name,
                         "input": deepcopy(tool_input),
                         "summary": summary,
+                        "write": bool(spec.allowed_write),
+                        "result": deepcopy(result) if spec.allowed_write else None,
+                        "assistant_message": str(result.get("assistant_message") or "").strip(),
+                        "executed": bool(result.get("executed", spec.allowed_write is False)),
                     }
                 )
                 contents.append({"role": "model", "parts": deepcopy(parts)})
@@ -347,15 +402,13 @@ class GeminiAgent:
         user_text: str = "",
         required_action: str = "",
     ) -> str | None:
-        if self._looks_like_write_request(user_text):
-            return self._safe_refusal()
         session_context = session_context or {}
         crm_context = self._collect_crm_context(session_context)
         history = self._conversation_history(
             session_context=session_context,
             provided_history=session_context.get("conversation_history") if isinstance(session_context.get("conversation_history"), list) else None,
         )
-        package = self.prompt_builder.build_rewrite_prompt(
+        package = self.rewrite_prompt_builder.build_rewrite_prompt(
             message_key=message_key,
             base_text=base_text,
             language=language,
@@ -396,14 +449,6 @@ class GeminiAgent:
         conversation_history: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         session_context = session_context or {}
-        if self._looks_like_write_request(user_message):
-            return {
-                "reply": self._safe_refusal(),
-                "tool_requests": [],
-                "mode": self.settings.ai_agent_mode,
-                "error": "write_request_rejected",
-            }
-
         language = session_context.get("language") or _detect_language(user_message)
         crm_context = self._collect_crm_context(session_context)
         history = self._conversation_history(session_context=session_context, provided_history=conversation_history)
@@ -439,6 +484,7 @@ class GeminiAgent:
         final_payload = {
             "reply": reply,
             "tool_requests": result.get("tool_requests", []),
+            "write_results": result.get("write_results", []),
             "mode": self.settings.ai_agent_mode,
             "prompt_id": result.get("prompt_id"),
             "response_id": result.get("response_id"),

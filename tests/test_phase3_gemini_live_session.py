@@ -199,7 +199,7 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
         agent = DummyGeminiSessionAgent(
             responses=[
                 {
-                    "reply": "Write operations are disabled in Phase 1.",
+                    "reply": "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed.",
                     "tool_requests": [],
                     "mode": "gemini",
                     "error": "provider timeout",
@@ -222,7 +222,7 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
         agent = DummyGeminiSessionAgent(
             responses=[
                 {
-                    "reply": "Write operations are disabled in Phase 1.",
+                    "reply": "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed.",
                     "tool_requests": [],
                     "mode": "gemini",
                     "error": "write_request_rejected",
@@ -237,7 +237,10 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
             json={"text": "create lead for me"},
         ).get_json()["session"]
 
-        self.assertEqual(session["messages"][-1]["text"], "Write operations are disabled in Phase 1.")
+        self.assertEqual(
+            session["messages"][-1]["text"],
+            "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed.",
+        )
         self.assertFalse(session["fallbackUsed"])
         self.assertEqual(session["toolsUsed"], [])
 

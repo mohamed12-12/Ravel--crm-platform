@@ -190,6 +190,7 @@ def _route_live_message_with_gemini(session, text: str, gemini_agent: GeminiAgen
     session.fallback_used = fallback_used
     session.messages.append({"role": "user", "text": text})
     session.messages.append({"role": "assistant", "text": reply})
+    _apply_gemini_write_results(session, result)
     app_logger.info(
         "Live Gemini session %s mode=%s tools=%s fallback=%s",
         session.id,
@@ -197,6 +198,30 @@ def _route_live_message_with_gemini(session, text: str, gemini_agent: GeminiAgen
         ",".join(session.tools_used),
         session.fallback_used,
     )
+
+
+def _apply_gemini_write_results(session, result: dict[str, Any]) -> None:
+    write_results = result.get("write_results") if isinstance(result, dict) else []
+    if not isinstance(write_results, list):
+        return
+    for event in write_results:
+        if not isinstance(event, dict) or not event.get("executed"):
+            continue
+        session_update = event.get("session_update")
+        if not isinstance(session_update, dict):
+            continue
+        if "lead_status" in session_update:
+            session.lead_status = str(session_update.get("lead_status") or "")
+        if "booking_status" in session_update:
+            session.booking_status = str(session_update.get("booking_status") or "")
+        if "handoff_state" in session_update:
+            session.handoff_state = str(session_update.get("handoff_state") or session.handoff_state or "")
+        if "stage" in session_update:
+            session.stage = str(session_update.get("stage") or session.stage or "")
+        if "booking_result" in session_update and isinstance(session_update.get("booking_result"), dict):
+            session.booking_result = dict(session_update["booking_result"])
+        if "final_result" in session_update and isinstance(session_update.get("final_result"), dict):
+            session.final_result = dict(session_update["final_result"])
 
 
 def _extract_booking_payload(session) -> tuple[str, str, str]:
@@ -239,7 +264,7 @@ def create_app(
     if base_settings.gemini_agent_enabled and not using_runtime_overrides:
         provider = build_llm_provider(base_settings)
         if provider is not None:
-            conversation_ai = GeminiAgent.from_settings(base_settings, provider)
+            conversation_ai = GeminiAgent.from_settings(base_settings, provider, write_tools_enabled=True)
     elif base_settings.ai_enabled and not using_runtime_overrides:
         conversation_ai = GeminiConversationAI(
             api_key=base_settings.gemini_api_key,
