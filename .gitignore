@@ -67,6 +67,19 @@ scratch/
 *.pdf
 *.xlsx
 
+# Private/internal documentation and audit exports
+docs/
+archive/
+testsprite_tests/
+APPLICATION_CLEANUP_AUDIT.md
+APPLICATION_CLEANUP_IMPLEMENTATION_NOTES.md
+DATABASE_RUNTIME_AUDIT.md
+FINAL_RELEASE_VALIDATION.md
+OPERATIONAL_DB_PROTECTION_REPORT.md
+PRODUCTION_READINESS_REPORT.md
+need review.md
+report1.md
+
 # OS and editor files
 .DS_Store
 Thumbs.db
