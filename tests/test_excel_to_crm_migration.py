@@ -223,7 +223,12 @@ class ExcelToCRMMigrationTests(unittest.TestCase):
         bookings_preview: bool = False,
     ):
         scope = "travelers" if travelers_only else "trips" if trips_only else "bookings" if bookings_only else "bookings_preview" if bookings_preview else "full"
-        migrator = ExcelToCRMMigrator(self.workbook_path, dry_run=dry_run, scope=scope)
+        migrator = ExcelToCRMMigrator(
+            self.workbook_path,
+            dry_run=dry_run,
+            scope=scope,
+            decisions_path=Path("tests/fixtures/migration_decisions.csv"),
+        )
         summary = migrator.run()
         return migrator, summary
 

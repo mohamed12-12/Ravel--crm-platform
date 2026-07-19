@@ -71,6 +71,7 @@ scratch/
 docs/
 archive/
 testsprite_tests/
+tools/local/
 APPLICATION_CLEANUP_AUDIT.md
 APPLICATION_CLEANUP_IMPLEMENTATION_NOTES.md
 DATABASE_RUNTIME_AUDIT.md
@@ -79,6 +80,11 @@ OPERATIONAL_DB_PROTECTION_REPORT.md
 PRODUCTION_READINESS_REPORT.md
 need review.md
 report1.md
+MIGRATION_DECISIONS.csv
+migration_quarantine*.json
+powershell.cmd
+!tests/fixtures/migration_decisions.csv
+!tests/fixtures/operational_source_workbook.xlsx
 
 # OS and editor files
 .DS_Store

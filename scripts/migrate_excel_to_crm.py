@@ -16,6 +16,7 @@ from openpyxl import load_workbook
 from sqlalchemy import or_
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+PRIVATE_MIGRATION_ARTIFACTS = REPO_ROOT / "docs" / "private" / "migration-artifacts"
 API_ROOT = REPO_ROOT / "apps" / "api"
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
@@ -115,7 +116,7 @@ class ExcelToCRMMigrator:
         self.workbook_path = workbook_path
         self.dry_run = dry_run
         self.scope = scope
-        self.decisions_path = decisions_path or (REPO_ROOT / "MIGRATION_DECISIONS.csv")
+        self.decisions_path = decisions_path or (PRIVATE_MIGRATION_ARTIFACTS / "MIGRATION_DECISIONS.csv")
         self.quarantine: list[dict[str, Any]] = []
         self.summary = MigrationSummary(
             dry_run=dry_run,
@@ -1284,7 +1285,7 @@ def apply_database_url_to_app_config() -> None:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Safely migrate Rahma Excel data into the CRM database.")
-    parser.add_argument("--workbook", default=str(REPO_ROOT / "RT - Travelers Database.xlsx"))
+    parser.add_argument("--workbook", default=str(PRIVATE_MIGRATION_ARTIFACTS / "RT - Travelers Database.xlsx"))
     parser.add_argument("--db", dest="db_path", default="")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="Validate and report without committing writes. Default.")
@@ -1293,9 +1294,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--trips-only", action="store_true", help="Import only trip records.")
     parser.add_argument("--bookings-only", action="store_true", help="Import only safe trip bookings.")
     parser.add_argument("--bookings-preview", action="store_true", help="Analyze trip bookings without writing records.")
-    parser.add_argument("--merge-decisions", default=str(REPO_ROOT / "MIGRATION_DECISIONS.csv"))
-    parser.add_argument("--quarantine-output", default=str(REPO_ROOT / "migration_quarantine.json"))
-    parser.add_argument("--report-output", default=str(REPO_ROOT / "migration_report.md"))
+    parser.add_argument("--merge-decisions", default=str(PRIVATE_MIGRATION_ARTIFACTS / "MIGRATION_DECISIONS.csv"))
+    parser.add_argument("--quarantine-output", default=str(PRIVATE_MIGRATION_ARTIFACTS / "migration_quarantine.json"))
+    parser.add_argument("--report-output", default=str(REPO_ROOT / "docs" / "private" / "reports" / "migration_report.md"))
     return parser.parse_args(argv)
 
 

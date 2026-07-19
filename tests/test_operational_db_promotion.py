@@ -13,7 +13,7 @@ from services.crm.system_services.config import get_database_diagnostics, resolv
 
 
 PROMOTED_DB = Path("tests/fixtures/operational_db_fixture.db")
-WORKBOOK = Path("RT - Travelers Database.xlsx")
+WORKBOOK = Path("tests/fixtures/operational_source_workbook.xlsx")
 
 
 def _read_counts(db_path: Path) -> dict[str, int]:
