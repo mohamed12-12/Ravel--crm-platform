@@ -109,6 +109,7 @@ class ExcelToCRMMigrationTests(unittest.TestCase):
 
     def _build_schema(self):
         os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path.resolve().as_posix()}"
+        os.environ["RAHMA_SYSTEM_DB_PATH"] = str(self.db_path.resolve())
         from app.config import DevelopmentConfig, ProductionConfig
 
         if self._original_app_config is None:

@@ -1,5 +1,5 @@
-{% extends "base.html" %}
-{% block title %}Leads — Rahma CRM{% endblock %}
+﻿{% extends "base.html" %}
+{% block title %}Leads - Rahma CRM{% endblock %}
 
 {% block head %}
 <style>
@@ -151,7 +151,7 @@
         border: 1px solid rgba(255, 255, 255, 0.06) !important;
         border-radius: 0.6rem;
         color: var(--text-main);
-        padding: 0.65rem 1rem 0.65rem 2.5rem;
+        padding: 0.65rem 1rem;
         transition: all 0.3s ease;
     }
     .search-input-wrap input:focus {
@@ -311,19 +311,39 @@
 <!-- Search & Filters -->
 <form method="GET" action="{{ url_for('leads.index') }}" class="search-bar">
     <div class="search-input-wrap">
-        <span class="search-icon">🔍</span>
-        <input class="form-input" type="text" name="q" value="{{ q }}" placeholder="Search by name, phone, lead ID…">
+        <input class="form-input" type="text" name="q" value="{{ q }}" placeholder="Search by name, phone, or lead ID">
     </div>
     <input type="hidden" name="stage" value="{{ current_stage }}">
     <select class="form-select-enhanced" name="priority" style="width:160px">
         <option value="">All Priorities</option>
-        <option value="High" {% if current_priority == 'High' %}selected{% endif %}>🔴 High</option>
-        <option value="Medium" {% if current_priority == 'Medium' %}selected{% endif %}>🟡 Medium</option>
-        <option value="Low" {% if current_priority == 'Low' %}selected{% endif %}>🟢 Low</option>
+        <option value="High" {% if current_priority == 'High' %}selected{% endif %}>High</option>
+        <option value="Medium" {% if current_priority == 'Medium' %}selected{% endif %}>Medium</option>
+        <option value="Low" {% if current_priority == 'Low' %}selected{% endif %}>Low</option>
     </select>
+    <select class="form-select-enhanced" name="queue" style="width:200px">
+        <option value="">All Work</option>
+        <option value="assigned_to_me" {% if current_queue == 'assigned_to_me' %}selected{% endif %}>Assigned to me</option>
+        <option value="unassigned" {% if current_queue == 'unassigned' %}selected{% endif %}>Unassigned</option>
+        <option value="inactive_owner" {% if current_queue == 'inactive_owner' %}selected{% endif %}>Inactive owner</option>
+        <option value="overdue" {% if current_queue == 'overdue' %}selected{% endif %}>Overdue follow-up</option>
+        <option value="today" {% if current_queue == 'today' %}selected{% endif %}>Follow-up today</option>
+        <option value="waiting_customer" {% if current_queue == 'waiting_customer' %}selected{% endif %}>Waiting customer</option>
+        <option value="new" {% if current_queue == 'new' %}selected{% endif %}>New leads</option>
+        <option value="high_priority" {% if current_queue == 'high_priority' %}selected{% endif %}>High priority</option>
+        <option value="documents_missing" {% if current_queue == 'documents_missing' %}selected{% endif %}>Documents missing</option>
+        <option value="handoff_required" {% if current_queue == 'handoff_required' %}selected{% endif %}>Handoff required</option>
+    </select>
+    {% if employees %}
+    <select class="form-select-enhanced" name="employee_id" style="width:190px">
+        <option value="">Any employee</option>
+        {% for employee in employees %}
+        <option value="{{ employee.id }}" {% if current_employee_id == employee.id %}selected{% endif %}>{{ employee.display_name }}</option>
+        {% endfor %}
+    </select>
+    {% endif %}
     <button type="submit" class="btn btn-primary" style="padding: 0.6rem 1.25rem;">Filter</button>
-    {% if q or current_priority %}
-    <a href="{{ url_for('leads.index', stage=current_stage) }}" class="btn btn-ghost" style="padding: 0.6rem 1.1rem;">✕ Clear</a>
+    {% if q or current_priority or current_queue or current_employee_id %}
+    <a href="{{ url_for('leads.index', stage=current_stage) }}" class="btn btn-ghost" style="padding: 0.6rem 1.1rem;">Clear</a>
     {% endif %}
 </form>
 
@@ -334,13 +354,14 @@
             <tr>
                 <th style="width:110px">Lead ID</th>
                 <th>Customer</th>
+                <th>Owner</th>
                 <th>Stage & Next Action</th>
                 <th>Priority</th>
                 <th>Source</th>
                 <th>Trip Interest</th>
                 <th>Links</th>
                 <th>Follow-Up</th>
-                <th>Created</th>
+                <th>Last Activity</th>
             </tr>
         </thead>
         <tbody>
@@ -350,31 +371,32 @@
             style="{% if overdue %}background:rgba(239,68,68,0.02) !important;{% endif %}">
             <td class="mono">{{ lead.lead_id }}</td>
             <td>
-                <div style="font-weight:700;color:var(--text-main);font-size:0.92rem">{{ lead.customer_name or '—' }}</div>
+                <div style="font-weight:700;color:var(--text-main);font-size:0.92rem">{{ display_text(lead.customer_name) }}</div>
                 {% if lead.raw_phone %}
                 <div style="font-size:0.75rem;color:var(--text-muted);display:flex;align-items:center;gap:0.25rem;margin-top:0.15rem">
-                    <span style="font-size:0.7rem">📞</span> {{ lead.raw_phone }}
+                    Phone: {{ display_text(lead.raw_phone) }}
                 </div>
                 {% endif %}
                 <div style="margin-top:0.45rem;display:flex;gap:0.35rem;flex-wrap:wrap">
                     {% if lead.match_status == 'single_match' %}
-                        <span class="badge badge-gray" style="font-size:0.64rem;padding:0.15rem 0.45rem;border-radius:4px">👤 Existing Traveler</span>
+                        <span class="badge badge-gray" style="font-size:0.64rem;padding:0.15rem 0.45rem;border-radius:4px">Existing Traveler</span>
                     {% elif lead.match_status == 'not_found' %}
-                        <span class="badge badge-blue" style="font-size:0.64rem;padding:0.15rem 0.45rem;border-radius:4px">✨ New Profile</span>
+                        <span class="badge badge-blue" style="font-size:0.64rem;padding:0.15rem 0.45rem;border-radius:4px">New Profile</span>
                     {% elif lead.match_status == 'multiple_matches' %}
-                        <span class="badge badge-yellow" style="font-size:0.64rem;padding:0.15rem 0.45rem;border-radius:4px">⚠️ Duplicate Conflict</span>
+                        <span class="badge badge-yellow" style="font-size:0.64rem;padding:0.15rem 0.45rem;border-radius:4px">Duplicate Conflict</span>
                     {% endif %}
                     
                     {% if lead.handoff_required %}
-                        <span class="badge badge-red" style="font-size:0.64rem;padding:0.15rem 0.45rem;border-radius:4px">🛑 Handoff Required</span>
+                        <span class="badge badge-red" style="font-size:0.64rem;padding:0.15rem 0.45rem;border-radius:4px">Handoff Required</span>
                         {% if lead.handoff_reason == 'blacklisted_customer' %}
-                            <span class="badge badge-red" style="font-size:0.64rem;padding:0.15rem 0.45rem;border-radius:4px">⛔ Blacklisted</span>
+                            <span class="badge badge-red" style="font-size:0.64rem;padding:0.15rem 0.45rem;border-radius:4px">Blacklisted</span>
                         {% elif lead.handoff_reason == 'phone_name_conflict' %}
-                            <span class="badge badge-red" style="font-size:0.64rem;padding:0.15rem 0.45rem;border-radius:4px">⚠️ Name Conflict</span>
+                            <span class="badge badge-red" style="font-size:0.64rem;padding:0.15rem 0.45rem;border-radius:4px">Name Conflict</span>
                         {% endif %}
                     {% endif %}
                 </div>
             </td>
+            <td>{{ display_text(lead.assigned_user.display_name if lead.assigned_user else lead.assigned_to, 'Unassigned') }}</td>
             <td>
                 <div>
                 {% if lead.lead_stage in ['Qualified','Booking Draft','Won'] %}
@@ -390,31 +412,33 @@
                 {% endif %}
                 </div>
                 
-                {% if lead.current_step or lead.notes %}
+                {% if lead.lead_stage == 'Lost' %}
                 <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.4rem;line-height:1.2">
-                    ↳ {{ lead.current_step or lead.notes }}
+                    Reason: {{ display_text(lead.notes or lead.handoff_reason, 'No loss reason recorded') }}
+                </div>
+                {% elif lead.current_step or lead.notes %}
+                <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.4rem;line-height:1.2">
+                    Next: {{ display_step(lead.current_step) if lead.current_step else display_text(lead.notes) }}
                 </div>
                 {% endif %}
             </td>
             <td>
                 {% if lead.priority == 'High' or lead.priority == 'Critical' %}
-                    <span class="badge badge-red" style="font-weight:800;letter-spacing:0.04em">🔴 {{ lead.priority }}</span>
+                    <span class="badge badge-red" style="font-weight:800;letter-spacing:0.04em">{{ display_text(lead.priority) }}</span>
                 {% elif lead.priority == 'Medium' %}
-                    <span class="badge badge-yellow" style="font-weight:700">🟡 Medium</span>
+                    <span class="badge badge-yellow" style="font-weight:700">Medium</span>
                 {% else %}
-                    <span class="badge badge-gray" style="font-weight:500">🟢 Low</span>
+                    <span class="badge badge-gray" style="font-weight:500">Low</span>
                 {% endif %}
             </td>
             <td style="font-size:0.8rem;color:var(--text-dim)">
-                <div style="display:flex;align-items:center;gap:0.35rem">
-                    <span style="font-size:0.85rem">💬</span> {{ lead.lead_source or lead.channel or '—' }}
-                </div>
+                {{ display_source(lead.lead_source or lead.channel) }}
             </td>
             <td style="font-size:0.8rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--text-main)">
                 {% if lead.interested_trip_ids %}
-                    ✈️ {{ lead.interested_trip_ids }}
+                    {{ display_text(lead.interested_trip_ids) }}
                 {% else %}
-                    —
+                    -
                 {% endif %}
             </td>
             <td>
@@ -431,11 +455,12 @@
             <td>
                 {% if lead.follow_up_due_date %}
                     <span style="font-size:0.8rem;font-weight:700;display:inline-flex;align-items:center;gap:0.25rem;color:{% if overdue %}var(--red){% else %}var(--text-dim){% endif %}">
-                        {% if overdue %}⚠ {% endif %}{{ lead.follow_up_due_date.strftime('%d %b') }}
+                        {% if overdue %}Overdue: {% endif %}{{ lead.follow_up_due_date.strftime('%d %b') }}
                     </span>
-                {% else %}—{% endif %}
+                {% else %}-{% endif %}
             </td>
-            <td style="font-size:0.8rem;color:var(--text-muted)">{{ lead.created_at.strftime('%d %b %Y') if lead.created_at else '—' }}</td>
+            {% set last_activity = lead.updated_at or lead.created_at %}
+            <td style="font-size:0.8rem;color:var(--text-muted)">{{ last_activity.strftime('%d %b %Y') if last_activity else '-' }}</td>
         </tr>
         {% endfor %}
         </tbody>
@@ -446,24 +471,23 @@
 <div class="pagination" style="margin-bottom: 2rem;">
     <span style="font-size:0.78rem;color:var(--text-muted);margin-right:0.5rem">{{ total_count }} total</span>
     {% if pagination.has_prev %}
-    <a href="{{ url_for('leads.index', page=pagination.prev_num, q=q, stage=current_stage, priority=current_priority) }}" class="page-btn">← Prev</a>
+    <a href="{{ url_for('leads.index', page=pagination.prev_num, q=q, stage=current_stage, priority=current_priority, queue=current_queue, employee_id=current_employee_id) }}" class="page-btn">Previous</a>
     {% endif %}
     {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
         {% if p %}
-        <a href="{{ url_for('leads.index', page=p, q=q, stage=current_stage, priority=current_priority) }}"
+        <a href="{{ url_for('leads.index', page=p, q=q, stage=current_stage, priority=current_priority, queue=current_queue, employee_id=current_employee_id) }}"
            class="page-btn {% if p == pagination.page %}active{% endif %}">{{ p }}</a>
         {% else %}
-        <span style="padding:0 0.25rem;color:var(--text-muted)">…</span>
+        <span style="padding:0 0.25rem;color:var(--text-muted)">...</span>
         {% endif %}
     {% endfor %}
     {% if pagination.has_next %}
-    <a href="{{ url_for('leads.index', page=pagination.next_num, q=q, stage=current_stage, priority=current_priority) }}" class="page-btn">Next →</a>
+    <a href="{{ url_for('leads.index', page=pagination.next_num, q=q, stage=current_stage, priority=current_priority, queue=current_queue, employee_id=current_employee_id) }}" class="page-btn">Next</a>
     {% endif %}
 </div>
 
 {% else %}
 <div class="card" style="text-align:center;padding:4rem 2rem; background: rgba(26, 34, 52, 0.2); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 1.25rem;">
-    <div style="font-size:3rem;margin-bottom:1rem">🎯</div>
     <div style="font-weight:800;font-size:1.2rem;color:var(--text-main);margin-bottom:0.5rem">No leads found</div>
     <div style="color:var(--text-muted);font-size:0.88rem;margin-bottom:1.5rem">Try adjusting your filters or search keywords.</div>
     <button onclick="openModal('createLead')" class="btn btn-primary" style="padding: 0.6rem 1.5rem;">+ Create Lead</button>
@@ -474,10 +498,11 @@
 <div id="createLead" class="modal-overlay">
     <div class="modal-box">
         <div class="modal-header">
-            <span class="modal-title" style="font-size: 1.25rem; font-weight: 800; background: linear-gradient(135deg, #6366f1, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">🎯 Create New Lead</span>
-            <button class="modal-close" onclick="closeModal('createLead')">✕</button>
+            <span class="modal-title" style="font-size: 1.25rem; font-weight: 800; background: linear-gradient(135deg, #6366f1, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Create New Lead</span>
+            <button class="modal-close" onclick="closeModal('createLead')">Close</button>
         </div>
         <form action="{{ url_for('leads.create') }}" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="grid-2">
                 <div class="form-group col-span-2">
                     <label class="form-label">Customer Name *</label>
@@ -501,6 +526,17 @@
                         <option value="Low">Low</option>
                     </select>
                 </div>
+                {% if can_assign %}
+                <div class="form-group">
+                    <label class="form-label">Assigned Employee</label>
+                    <select class="form-select" name="assigned_to_user_id">
+                        <option value="">Unassigned</option>
+                        {% for employee in employees %}
+                        <option value="{{ employee.id }}">{{ employee.display_name }} - {{ employee.role }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% endif %}
                 <div class="form-group">
                     <label class="form-label">Source</label>
                     <input class="form-input" type="text" name="lead_source" placeholder="e.g. Instagram, WhatsApp">
@@ -527,7 +563,7 @@
                             data-trip-type="{{ trip.type or '' }}"
                             data-empty-label="{{ trip.trip_name }}"
                         >
-                            {{ trip.trip_name }}{% if trip.start_date %} · {{ trip.start_date.strftime('%d %b %Y') }}{% endif %}
+                            {{ trip.trip_name }}{% if trip.start_date %} - {{ trip.start_date.strftime('%d %b %Y') }}{% endif %}
                         </option>
                         {% endfor %}
                     </select>
@@ -545,7 +581,7 @@
                 </div>
                 <div class="form-group col-span-2">
                     <label class="form-label">Notes</label>
-                    <textarea class="form-textarea" name="notes" placeholder="Any relevant inquiry context or notes…" style="min-height: 90px;"></textarea>
+                    <textarea class="form-textarea" name="notes" placeholder="Any relevant inquiry context or notes" style="min-height: 90px;"></textarea>
                 </div>
                 <div class="form-group col-span-2">
                     <label class="form-label">Next Action</label>
@@ -607,3 +643,4 @@ createLeadTripType?.addEventListener('change', syncCreateLeadTripOptions);
 syncCreateLeadTripOptions();
 </script>
 {% endblock %}
+

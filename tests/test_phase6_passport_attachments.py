@@ -148,7 +148,7 @@ class PassportAttachmentTests(unittest.TestCase):
             content_type='multipart/form-data',
             follow_redirects=False,
         )
-        self.assertEqual(huge.status_code, 302)
+        self.assertEqual(huge.status_code, 413)
         with sqlite3.connect(db_path) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM traveler_documents").fetchone()[0], 0)
 

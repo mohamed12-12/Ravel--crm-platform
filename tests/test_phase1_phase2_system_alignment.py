@@ -165,20 +165,25 @@ class Phase1Phase2SystemAlignmentTests(unittest.TestCase):
             excel_runtime_workbook=runtime,
             google_sheet_id="",
             google_application_credentials=None,
+            sheet_export_enabled=True,
+            allow_source_workbook_writes=False,
         )
         service = UnifiedCRMService(settings)
         sync_result = service.sync_trip_to_sheet("TR-SYNC-1")
         self.assertEqual(sync_result["status"], "ok")
 
-        for workbook_path in (source, runtime):
-            synced = load_workbook(workbook_path, data_only=True)
-            ws = synced["Trips"]
-            self.assertEqual(ws["A3"].value, "TR-SYNC-1")
-            self.assertEqual(ws["B3"].value, "Sheet Sync Trip")
-            self.assertEqual(ws["C3"].value, "International")
-            self.assertEqual(ws["F3"].value, "2026-11-01")
-            self.assertEqual(ws["Z3"].value, "Open")
-            synced.close()
+        untouched_source = load_workbook(source, data_only=True)
+        self.assertIsNone(untouched_source["Trips"]["A3"].value)
+        untouched_source.close()
+
+        synced = load_workbook(runtime, data_only=True)
+        ws = synced["Trips"]
+        self.assertEqual(ws["A3"].value, "TR-SYNC-1")
+        self.assertEqual(ws["B3"].value, "Sheet Sync Trip")
+        self.assertEqual(ws["C3"].value, "International")
+        self.assertEqual(ws["F3"].value, "2026-11-01")
+        self.assertEqual(ws["Z3"].value, "Open")
+        synced.close()
 
     def test_demo_agent_uses_system_trip_catalog_over_stale_workbook_trips(self) -> None:
         db_path = self.tmp_path / "system.db"
@@ -211,6 +216,7 @@ class Phase1Phase2SystemAlignmentTests(unittest.TestCase):
             connection.commit()
 
         os.environ["RAHMA_SYSTEM_DB_PATH"] = str(db_path)
+        os.environ["AI_AGENT_MODE"] = "deterministic"
 
         source_workbook = self.tmp_path / "source.xlsx"
         runtime_workbook = self.tmp_path / "runtime.xlsx"

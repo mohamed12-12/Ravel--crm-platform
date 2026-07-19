@@ -162,6 +162,8 @@ class Phase10FullLogicLockTests(unittest.TestCase):
             sheet_backend="excel",
             excel_source_workbook=str(self.workbook),
             excel_runtime_workbook=str(self.workbook),
+            sheet_export_enabled=True,
+            allow_source_workbook_writes=False,
         )
         self.svc = UnifiedCRMService(settings)
         self.svc.ensure_operational_schema()

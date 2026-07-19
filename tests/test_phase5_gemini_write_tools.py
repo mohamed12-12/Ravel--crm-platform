@@ -485,6 +485,38 @@ class TestPhase5GeminiWriteTools(unittest.TestCase):
         self.assertTrue(result["write_results"][0]["executed"])
         self.assertIn("Booking draft", result["reply"])
 
+    def test_booking_draft_without_lead_creates_and_links_current_lead(self) -> None:
+        with self._patched_service():
+            agent = self._build_agent(
+                [
+                    function_call_response(
+                        "create_booking_draft",
+                        {
+                            "traveler_id": "TR00002",
+                            "trip_id": "RT-LOC-26-001",
+                            "room_type": "Single",
+                            "flight_option": "Without Flight",
+                        },
+                    ),
+                    text_response("Booking draft created."),
+                ]
+            )
+            result = agent.respond(
+                user_message="create booking draft",
+                session_context={
+                    "session_id": "sess-book-with-lead",
+                    "traveler_id": "TR00002",
+                    "trip_id": "RT-LOC-26-001",
+                    "room_type": "Single",
+                    "flight_option": "Without Flight",
+                },
+            )
+
+        self.assertTrue(result["write_results"][0]["executed"])
+        self.assertEqual(len(self.service.created_leads), 1)
+        self.assertEqual(len(self.service.created_bookings), 1)
+        self.assertEqual(self.service.created_bookings[0]["lead_id"], self.service.created_leads[0]["lead_id"])
+
     def test_missing_room_blocks_booking_draft(self) -> None:
         with self._patched_service():
             agent = self._build_agent(

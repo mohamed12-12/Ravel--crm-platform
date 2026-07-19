@@ -5,6 +5,8 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from services.data_authority import load_data_authority
+
 
 def _load_env_file(path: Path) -> None:
     if not path.exists():
@@ -50,6 +52,9 @@ class SystemServiceSettings:
     excel_runtime_workbook: Path | None
     google_sheet_id: str = ""
     google_application_credentials: Path | None = None
+    data_authority: str = "crm"
+    sheet_export_enabled: bool = False
+    allow_source_workbook_writes: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "repo_root", Path(self.repo_root))
@@ -82,6 +87,7 @@ def load_system_settings() -> SystemServiceSettings:
     source_workbook = _optional_path(repo_root, os.getenv("EXCEL_SOURCE_WORKBOOK"))
     runtime_workbook = _optional_path(repo_root, os.getenv("EXCEL_RUNTIME_WORKBOOK"))
     creds = _optional_path(repo_root, os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+    authority = load_data_authority()
 
     return SystemServiceSettings(
         repo_root=repo_root,
@@ -92,6 +98,9 @@ def load_system_settings() -> SystemServiceSettings:
         excel_runtime_workbook=runtime_workbook,
         google_sheet_id=_extract_sheet_id(os.getenv("GOOGLE_SHEET_ID", "")),
         google_application_credentials=creds,
+        data_authority=authority.authority,
+        sheet_export_enabled=authority.export_enabled_for(backend),
+        allow_source_workbook_writes=False,
     )
 
 

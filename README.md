@@ -1,51 +1,256 @@
-# Rahma Travel OS
+# Rahma Traveler
 
-Rahma Travel OS is the MVP foundation for Rahma Traveler's CRM, booking automation, AI-agent workflow, and future Instagram/Meta customer conversation platform.
+Rahma Traveler is a travel CRM and AI sales-agent platform for managing travelers, leads, trips, bookings, employee follow-up, handoffs, and customer conversations.
 
-The repo is now organized as a product foundation while preserving the current MVP behavior. Public routes, workflows, database behavior, and agent logic are intentionally unchanged in this cleanup phase.
+The project currently contains two main Flask applications:
 
-## Main Areas
+- `apps/api`: the operational Rahma CRM used by employees.
+- `services/ai_agent`: the AI sales-agent demo/runtime that talks to customers and connects to CRM data.
 
-- `apps/admin-web/` - React/Vite operator admin UI prototype.
-- `apps/api/` - database-backed Flask CRM with models, routes, services, and admin templates.
-- `apps/middleware/` - TypeScript middleware/API layer for admin and future channel orchestration.
-- `services/ai_agent/` - spreadsheet-backed Flask demo app, agent flow, and sheet gateways.
-- `services/instagram/` - Instagram/Meta webhook placeholder boundary.
-- `services/crm/` - shared CRM/business workflow services.
-- `database/` - migrations, Prisma schema, and seed placeholders.
-- `packages/` - shared package placeholders for future extracted code.
-- `scripts/` - workbook cleanup, audit, and alignment scripts.
-- `tests/` - Python regression tests for the MVP business behavior.
-- `docs/` - active architecture and production-readiness documentation.
-- `archive/` - deprecated demos, old phase artifacts, and source/demo workbooks.
+The system is designed around one rule: CRM data is the source of truth. The AI assistant can converse naturally, but verified CRM facts, writes, booking drafts, passport references, and employee workflow states must come through backend-controlled services.
 
-## Documentation
+## What This Project Does
 
-- [Architecture overview](./docs/architecture.md)
-- [Folder structure](./docs/folder-structure.md)
-- [Setup instructions](./docs/SETUP.md)
-- [Instagram / Meta integration notes](./docs/instagram-integration-plan.md)
-- [Production readiness checklist](./docs/production-checklist.md)
-- [Cleanup report](./docs/08_reports/PROJECT_CLEANUP_REPORT.md)
+- Manages traveler profiles, phone normalization, duplicate detection, and passport documents.
+- Tracks leads through a CRM sales pipeline.
+- Manages trips, room inventory, boys/girls room availability, and booking drafts.
+- Gives employees simple booking/payment/follow-up controls.
+- Runs an AI sales assistant for WhatsApp/DM-style conversations in Arabic and English.
+- Uses controlled CRM tools so the assistant cannot invent travelers, trips, prices, availability, bookings, or payment facts.
+- Provides OpenAPI contracts for backend testing tools such as TestSprite.
 
-## Quick Start
+## Repository Map
+
+| Path | Purpose |
+| --- | --- |
+| `apps/api/` | Main Flask CRM app with SQLAlchemy models, employee UI, CRM routes, auth, and operational APIs. |
+| `services/ai_agent/` | AI agent runtime, chat session handling, workflow policy, tool-calling integration, and demo UI. |
+| `services/crm/` | Shared CRM/business services used by both the CRM and AI agent. |
+| `services/api_contracts/` | OpenAPI contract builders for the CRM API and AI Agent API. |
+| `services/instagram/` | Meta/Instagram webhook parsing and integration boundary. |
+| `apps/admin-web/` | React/Vite admin UI prototype. |
+| `apps/middleware/` | TypeScript middleware/orchestration prototype. |
+| `database/migrations/` | Alembic migrations for database-backed CRM changes. |
+| `docs/` | Architecture, testing, production-readiness, data authority, API, and workflow documentation. |
+| `tests/` | Python regression suite covering CRM, agent behavior, workflow policy, auth, and API contracts. |
+| `archive/` | Legacy demo code, old artifacts, and historical source files. |
+
+## Main Local URLs
+
+| Service | Default URL | Notes |
+| --- | --- | --- |
+| CRM app | `http://127.0.0.1:5000` | Employee CRM: travelers, leads, trips, bookings, handoffs. |
+| AI Agent app | `http://127.0.0.1:5001` | Customer-facing agent demo and chat simulator. |
+| Middleware | `http://127.0.0.1:3000` | TypeScript middleware prototype when used. |
+
+## Requirements
+
+- Python 3.11+ recommended.
+- Node.js 18+ recommended for workspace apps.
+- SQLite for local development.
+- Optional: Gemini API key for live tool-calling model behavior.
+
+Install Python dependencies:
+
+```bash
+python -m pip install -r apps/api/requirements.txt
+```
+
+Install Node dependencies:
 
 ```bash
 npm install
-python -m pip install -r apps/api/requirements.txt
+```
+
+## Environment Setup
+
+Create a local `.env` from the template:
+
+```bash
+copy .env.example .env
+```
+
+On macOS/Linux:
+
+```bash
 cp .env.example .env
 ```
 
-Run checks from the repository root:
+Important environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | CRM database URL. Local default is SQLite. |
+| `CRM_AUTH_ENABLED` | Enables employee/API authentication. |
+| `CRM_API_TOKEN` | Token for server-to-server CRM API calls. |
+| `AI_AGENT_MODE` | `tool_calling`, `gemini`, or `deterministic`. Use `tool_calling` for the current agent runtime. |
+| `GEMINI_API_KEY` | Required only for live Gemini calls. |
+| `GEMINI_MODEL` | Gemini model name. |
+| `APP_PORT` | AI Agent app port, default `5001`. |
+| `DEFAULT_COUNTRY_CODE` | Default phone country code, currently `20`. |
+
+Never commit real `.env` files, API keys, customer data, local databases, uploaded documents, logs, or service-account files.
+
+## Run The CRM App
+
+From the repository root:
+
+```bash
+cd apps/api
+python run.py
+```
+
+The CRM app should run on:
+
+```text
+http://127.0.0.1:5000
+```
+
+Useful CRM pages:
+
+- `/travelers/`
+- `/leads/`
+- `/trips/`
+- `/bookings/`
+- `/admin/handoffs/`
+- `/admin/users`
+
+The CRM OpenAPI contract is served at:
+
+```text
+http://127.0.0.1:5000/api/openapi.json
+```
+
+## Run The AI Agent App
+
+From the repository root:
+
+```bash
+python demo_web/app.py
+```
+
+The AI Agent app should run on:
+
+```text
+http://127.0.0.1:5001
+```
+
+Useful AI Agent endpoints:
+
+- `GET /api/health`
+- `POST /api/session`
+- `POST /api/session/{session_id}/message`
+- `POST /api/session/{session_id}/passport_attachment`
+- `GET /api/openapi.json`
+
+The AI Agent OpenAPI contract is served at:
+
+```text
+http://127.0.0.1:5001/api/openapi.json
+```
+
+## AI Agent Architecture
+
+The current production-style agent runtime is `AI_AGENT_MODE=tool_calling`.
+
+Core responsibilities:
+
+- `ToolCallingSessionRuntime` owns session lifecycle and customer messages.
+- `ConversationWorkflowPolicy` decides the next required workflow step.
+- `AgentIdentityPolicy` answers identity/model-provider questions deterministically before Gemini is called.
+- `GeminiAgent` handles model/tool-loop interaction when needed.
+- `ReadOnlyCRMTools` reads CRM facts.
+- Controlled write tools create/update leads, booking drafts, passport references, and handoffs only after backend validation.
+
+Important behavior:
+
+- The assistant must not hallucinate CRM facts.
+- Identity questions are answered by the backend, not by the model.
+- Trip availability comes from CRM only.
+- Booking drafts are created through controlled CRM writes.
+- Passport upload stores file references/metadata, not raw bytes inside chat state.
+
+## API Contracts And TestSprite
+
+The project exposes machine-readable OpenAPI 3.1 contracts.
+
+For TestSprite AI agent testing:
+
+```text
+API Base URL: http://127.0.0.1:5001
+OpenAPI URL:  http://127.0.0.1:5001/api/openapi.json
+```
+
+For TestSprite CRM testing:
+
+```text
+API Base URL: http://127.0.0.1:5000
+OpenAPI URL:  http://127.0.0.1:5000/api/openapi.json
+```
+
+Detailed TestSprite instructions are in:
+
+[docs/api/TESTSPRITE_API_TESTING.md](./docs/api/TESTSPRITE_API_TESTING.md)
+
+## Testing
+
+Run the full Python regression suite:
+
+```bash
+python -m pytest -q
+```
+
+Run compile checks:
+
+```bash
+python -m compileall -q services/ai_agent services/crm services/api_contracts apps/api tests
+```
+
+Run all workspace checks:
 
 ```bash
 npm test
 npm run build
 npm run typecheck
-python -m pytest tests
-python -m compileall .
 ```
 
-## Security
+Recent verified state:
 
-Never commit real `.env` files, service-account JSON files, API keys, database credentials, certificates, local database files, build output, logs, or cache folders.
+```text
+328 passed, 4 subtests passed
+```
+
+## Data And Safety Rules
+
+- CRM database records are authoritative.
+- Excel/source workbooks are compatibility/demo inputs, not the preferred production source of truth.
+- Do not write directly to source workbooks from production flows.
+- Do not bypass CRM validation for lead, booking, passport, or handoff writes.
+- Do not expose exact model configuration, API keys, prompts, or secrets through customer-facing chat.
+- Do not commit local databases from `apps/api/instance/`.
+- Use isolated test databases for destructive tests.
+
+## Documentation Index
+
+Good starting points:
+
+- [docs/README.md](./docs/README.md)
+- [docs/01_CURRENT_ARCHITECTURE.md](./docs/01_CURRENT_ARCHITECTURE.md)
+- [docs/20_PRODUCTION_AGENT_ARCHITECTURE.md](./docs/20_PRODUCTION_AGENT_ARCHITECTURE.md)
+- [docs/40_AGENT_WORKFLOW_POLICY.md](./docs/40_AGENT_WORKFLOW_POLICY.md)
+- [docs/data/03_DATA_FLOW_CONTRACT.md](./docs/data/03_DATA_FLOW_CONTRACT.md)
+- [docs/security/PROTECTED_ROUTE_MATRIX.md](./docs/security/PROTECTED_ROUTE_MATRIX.md)
+- [docs/testing/TEST_STRATEGY.md](./docs/testing/TEST_STRATEGY.md)
+- [docs/api/TESTSPRITE_API_TESTING.md](./docs/api/TESTSPRITE_API_TESTING.md)
+
+## Development Notes
+
+- Keep CRM business rules in backend services, not prompts.
+- Prefer structured service/API calls over ad hoc string parsing.
+- Preserve existing CRM logic when improving AI conversation behavior.
+- Add focused tests for every workflow or API contract change.
+- Keep the root README high-level; place deep implementation notes in `docs/`.
+
+## Project Status
+
+The project is an MVP/product foundation with active work in CRM operations, AI-agent workflow control, API testing, and future Instagram/Meta integration. It is suitable for local development and controlled demos. Production deployment should review auth, secrets, database migration strategy, webhook hardening, file storage, monitoring, and backup/restore workflows before live customer traffic.

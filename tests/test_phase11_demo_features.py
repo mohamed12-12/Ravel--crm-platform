@@ -165,6 +165,7 @@ def _make_app_with_db(tmp_path: Path, *, post_trip_handoff_enabled: bool = False
     os.environ["DATABASE_URL"] = f"sqlite:///{db_path.resolve().as_posix()}"
     os.environ["RAHMA_SYSTEM_DB_PATH"] = str(db_path)
     os.environ["AI_AGENT_UPLOAD_ROOT"] = str(tmp_path / "uploads")
+    os.environ["AI_AGENT_MODE"] = "deterministic"
     if post_trip_handoff_enabled:
         os.environ["POST_TRIP_HANDOFF_ENABLED"] = "true"
     else:

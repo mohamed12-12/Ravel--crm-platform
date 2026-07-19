@@ -59,7 +59,7 @@ async function api(path, options = {}) {
   });
   if (!response.ok) {
     const errData = await response.json().catch(() => ({}));
-    throw new Error(errData.error || `Request failed: ${response.status}`);
+    throw new Error(errData.message || errData.error || `Request failed: ${response.status}`);
   }
   return await response.json();
 }
@@ -69,6 +69,19 @@ function escapeHtml(text) {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+function safeMediaUrl(url) {
+  const value = String(url || "").trim();
+  if (!value) return "";
+  if (value.startsWith("/") && !value.startsWith("//")) return value;
+  try {
+    const parsed = new URL(value, window.location.origin);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") return parsed.href;
+  } catch (_err) {
+    return "";
+  }
+  return "";
 }
 
 function renderStats(stats) {
@@ -116,7 +129,34 @@ function renderMessages(messages) {
   (messages || []).forEach((message) => {
     const div = document.createElement("div");
     div.className = `chat-bubble ${message.role}`;
-    div.innerHTML = `<p>${escapeHtml(message.text)}</p>`;
+    const formattedText = escapeHtml(message.text).replaceAll("\n", "<br>");
+    div.innerHTML = `<p>${formattedText}</p>`;
+    const mediaItems = Array.isArray(message.media) ? message.media : [];
+    const safeMedia = mediaItems
+      .map((item) => ({
+        url: safeMediaUrl(item.public_url || item.url),
+        alt: String(item.alt_text || "Official trip image"),
+        label: String(item.image_type || "image"),
+      }))
+      .filter((item) => item.url);
+    if (safeMedia.length) {
+      const grid = document.createElement("div");
+      grid.className = "chat-media-grid";
+      safeMedia.forEach((item) => {
+        const frame = document.createElement("div");
+        frame.className = "chat-media";
+        const img = document.createElement("img");
+        img.src = item.url;
+        img.alt = item.alt;
+        img.loading = "lazy";
+        const caption = document.createElement("span");
+        caption.textContent = item.label === "cover" ? "Official cover image" : "Official gallery image";
+        frame.appendChild(img);
+        frame.appendChild(caption);
+        grid.appendChild(frame);
+      });
+      div.appendChild(grid);
+    }
     els.chatLog.appendChild(div);
   });
   els.chatLog.scrollTop = els.chatLog.scrollHeight;
@@ -126,12 +166,17 @@ function renderSession(session) {
   if (!session) return;
   state.session = session;
   state.sessionId = session.id;
-  els.sessionChip.textContent = `Session ${session.id.slice(0, 8)} - ${session.stage}`;
+  const runtimeMode = session.runtimeMode || session.agentMode || "deterministic";
+  const chatEnabled = Boolean(session.chatEnabled ?? session.chat_enabled ?? (runtimeMode !== "deterministic"));
+  const requiresIntake = Boolean(session.requiresIntake ?? session.requires_intake ?? (runtimeMode === "deterministic" && session.stage === "awaiting_intake"));
+  els.sessionChip.textContent = `Session ${session.id.slice(0, 8)} - ${session.customerStatus || session.uiStatus || session.stage}`;
   renderMessages(session.messages);
   renderStats(session.stats);
 
-  const canIntake = session.stage === "awaiting_intake";
-  const canChat = [
+  const isGeminiMode = runtimeMode === "gemini";
+  const isToolCallingMode = runtimeMode === "tool_calling";
+  const canIntake = requiresIntake;
+  const canChat = chatEnabled || [
     "awaiting_phone",
     "awaiting_country_code",
     "awaiting_trip_type",
@@ -152,9 +197,9 @@ function renderSession(session) {
   if (!els.phoneInput.value && phoneNormalization.normalized_e164) {
     els.phoneInput.value = phoneNormalization.normalized_e164;
   }
-  els.intakeForm.hidden = !canIntake;
+  els.intakeForm.hidden = isGeminiMode || isToolCallingMode || !canIntake;
   els.messageInput.disabled = !canChat || isCompleted;
-  els.messageInput.placeholder = messagePlaceholder(session.stage, session.passportAttachmentRef);
+  els.messageInput.placeholder = messagePlaceholder(session, runtimeMode);
   els.sendBtn.disabled = !canChat || isCompleted;
   renderQuickActions(session);
   renderPassportUpload(session);
@@ -167,8 +212,20 @@ function renderSession(session) {
   renderBookingResult(session);
 }
 
-function messagePlaceholder(stage, passportAttachmentRef = "") {
+function messagePlaceholder(session, runtimeMode = "deterministic") {
+  const stage = session?.stage || "";
+  const passportAttachmentRef = session?.passportAttachmentRef || "";
+  const isGeminiMode = runtimeMode === "gemini";
+  const isToolCallingMode = runtimeMode === "tool_calling";
   if (["completed", "handed_off", "cancelled"].includes(stage)) return "Session finished.";
+  if (isGeminiMode || isToolCallingMode) {
+    if (stage === "awaiting_passport_upload") {
+      return passportAttachmentRef
+        ? "Passport attached. You can continue chatting..."
+        : "Attach the passport if needed, or continue chatting...";
+    }
+    return "Ask naturally in Arabic or English...";
+  }
   if (stage === "awaiting_phone") return "Enter WhatsApp number first...";
   if (stage === "awaiting_trip_type") return "Type local or international...";
   if (stage === "awaiting_confirmation") return "Type the trip number/name, or no...";
@@ -201,6 +258,11 @@ function renderPassportUpload(session) {
 
 function renderQuickActions(session) {
   const stage = session.stage;
+  const runtimeMode = session.runtimeMode || session.agentMode;
+  if (runtimeMode === "gemini" || runtimeMode === "tool_calling") {
+    els.quickActions.hidden = true;
+    return;
+  }
   const availableRoomReplies = getAvailableRoomReplies(session);
   const roomChoices = getAvailableRoomChoices(session);
   const visible = ["awaiting_trip_type", "awaiting_confirmation", "awaiting_room_type", "awaiting_flight", "awaiting_currency", "awaiting_clarification"].includes(stage);
@@ -349,17 +411,34 @@ function getAvailableRoomChoices(session) {
 }
 
 function renderCrmSnapshot(session) {
-  const traveler = session.finalResult?.traveler || session.preview?.traveler;
+  const workflow = session.preview?.workflow || {};
+  const verifiedTraveler = workflow.verified_traveler || {};
+  const hasVerifiedPreview = Boolean(
+    workflow.identity_verified && (verifiedTraveler.traveler_id || session.preview?.traveler?.traveler_id)
+  );
+  const traveler = session.finalResult?.traveler || (hasVerifiedPreview ? session.preview?.traveler : null);
   if (!traveler) {
-    els.crmSnapshot.innerHTML = `<p class="muted">No session data yet.</p>`;
+    els.crmSnapshot.innerHTML = `<p class="muted">${escapeHtml(session.customerStatus || "Waiting for verified CRM lookup.")}</p>`;
     return;
   }
   const t = Array.isArray(traveler) ? traveler[0] : traveler;
+  const fullName = String(t.full_name || "").trim();
+  const travelerId = String(t.traveler_id || "").trim();
+  const status = String(t.status || "").trim();
+  if (!fullName || !travelerId || !status) {
+    els.crmSnapshot.innerHTML = `
+      <div class="detail-card">
+        <h3>Profile Incomplete</h3>
+        <p class="muted">The CRM record is missing required fields, so the agent will ask for a safe follow-up instead of showing a partial profile.</p>
+      </div>
+    `;
+    return;
+  }
   els.crmSnapshot.innerHTML = `
     <div class="detail-card">
-      <h3>${escapeHtml(t.full_name)}</h3>
-      <div class="meta-item"><span>Status</span><strong>${escapeHtml(t.status || "Active")}</strong></div>
-      <div class="meta-item"><span>ID</span><strong>${escapeHtml(t.traveler_id)}</strong></div>
+      <h3>${escapeHtml(fullName)}</h3>
+      <div class="meta-item"><span>Status</span><strong>${escapeHtml(status || "Active")}</strong></div>
+      <div class="meta-item"><span>ID</span><strong>${escapeHtml(travelerId)}</strong></div>
       ${session.roomChoiceLabel ? `<div class="meta-item"><span>Room Choice</span><strong>${escapeHtml(session.roomChoiceLabel)}</strong></div>` : ""}
     </div>
   `;
@@ -367,6 +446,11 @@ function renderCrmSnapshot(session) {
 
 function renderTripResult(session) {
   const result = session.finalResult || session.preview;
+  const workflow = session.preview?.workflow || {};
+  if (!workflow.identity_verified && !session.finalResult?.trip_result) {
+    els.tripResult.innerHTML = `<p class="muted">Trip preferences are saved. Verified matches appear after CRM identity is confirmed.</p>`;
+    return;
+  }
   const tripResult = result?.trip_result;
   if (!tripResult) {
     els.tripResult.innerHTML = `<p class="muted">Trip suggestions will appear here after the customer shares trip type.</p>`;

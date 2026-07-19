@@ -121,7 +121,10 @@ def function_call_response(name: str, args: dict[str, object], response_id: str 
                 {
                     "content": {
                         "parts": [
-                            {"functionCall": {"name": name, "args": args}},
+                            {
+                                "functionCall": {"name": name, "args": args, "id": f"call-{response_id}"},
+                                "thoughtSignature": "test-thought-signature",
+                            },
                         ]
                     }
                 }

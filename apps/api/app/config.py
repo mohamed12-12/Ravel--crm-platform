@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 
+from services.data_authority import load_data_authority
+
 
 def _load_env_file(path):
     if not path.exists():
@@ -22,6 +24,11 @@ _load_env_file(REPO_ROOT / ".env")
 _load_env_file(SYSTEM_ROOT / ".env")
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    return default if value is None else value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _default_sqlite_uri() -> str:
     db_path = (SYSTEM_ROOT / "instance" / "rahma_traveler_dev.db").resolve()
     return f"sqlite:///{db_path.as_posix()}"
@@ -34,7 +41,7 @@ class Config:
     GOOGLE_CREDS_PATH = os.environ.get('GOOGLE_CREDS_PATH', 'rahma-496108-a27c767efdaf.json')
 
 class DevelopmentConfig(Config):
-    DEBUG = True
+    DEBUG = _env_flag("FLASK_DEBUG", default=False)
     # TODO(production): migrate demo SQLite data to PostgreSQL and require DATABASE_URL in deploy environments.
     # NOTE: Evaluated as a class property so that tests can override DATABASE_URL
     # via os.environ *before* calling create_app() and get the correct path.
@@ -59,9 +66,17 @@ config = {
 def validate_config(config_name: str) -> list[str]:
     errors: list[str] = []
     resolved_config = config.get(config_name, DevelopmentConfig)
-    if config_name == "production" or getattr(resolved_config, "DEBUG", False) is False:
+    if config_name == "production":
         if not os.environ.get("SECRET_KEY", "").strip():
             errors.append("SECRET_KEY is required in production.")
-        if not os.environ.get("GOOGLE_SHEET_ID", "").strip():
-            errors.append("GOOGLE_SHEET_ID is required in production.")
+    authority = load_data_authority(environment=config_name)
+    errors.extend(
+        authority.validate(
+            environment=config_name,
+            database_url=(resolved_config.get_sqlalchemy_uri() if hasattr(resolved_config, "get_sqlalchemy_uri") else ""),
+            system_db_path=os.environ.get("RAHMA_SYSTEM_DB_PATH", ""),
+            excel_source_workbook=os.environ.get("EXCEL_SOURCE_WORKBOOK", ""),
+            excel_runtime_workbook=os.environ.get("EXCEL_RUNTIME_WORKBOOK", ""),
+        )
+    )
     return errors

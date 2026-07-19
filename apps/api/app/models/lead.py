@@ -40,6 +40,19 @@ class Lead(db.Model):
     priority = db.Column(db.String(50))
     follow_up_status = db.Column(db.String(100))
     follow_up_due_date = db.Column(db.Date)
+    assigned_to = db.Column(db.String(100))
+    assigned_to_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), index=True)
+    assigned_at = db.Column(db.DateTime)
+    assigned_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), index=True)
+    last_contact_at = db.Column(db.DateTime)
+    customer_response_status = db.Column(db.String(100))
+
+    assigned_user = db.relationship(
+        'User',
+        foreign_keys=[assigned_to_user_id],
+        back_populates='assigned_leads',
+    )
+    assigned_by_user = db.relationship('User', foreign_keys=[assigned_by_user_id])
     
     # Operational Info
     last_interaction_id = db.Column(db.String(50))
@@ -47,6 +60,8 @@ class Lead(db.Model):
     handoff_required = db.Column(db.Boolean, default=False)
     handoff_reason = db.Column(db.Text)
     notes = db.Column(db.Text)
+    passport_attachment_ref = db.Column(db.Text)
+    passport_status = db.Column(db.String(50))
     
     # Automation Flow Info
     flow_key = db.Column(db.String(100))
@@ -130,11 +145,19 @@ class Lead(db.Model):
             priority=clean(row.get("Priority")),
             follow_up_status=clean(row.get("Follow Up Status")),
             follow_up_due_date=to_date(row.get("Follow Up Due Date")),
+            assigned_to=clean(row.get("Assigned To")),
+            assigned_to_user_id=None,
+            assigned_at=None,
+            assigned_by_user_id=None,
+            last_contact_at=to_datetime(row.get("Last Contact At")),
+            customer_response_status=clean(row.get("Customer Response Status")),
             last_interaction_id=clean(row.get("Last Interaction ID")),
             interaction_count=to_int(row.get("Interaction Count")),
             handoff_required=to_bool(row.get("Handoff Required")),
             handoff_reason=clean(row.get("Handoff Reason")),
             notes=clean(row.get("Notes")),
+            passport_attachment_ref=clean(row.get("Passport Attachment Ref")),
+            passport_status=clean(row.get("Passport Status")),
             flow_key=clean(row.get("Flow Key")),
             current_step=clean(row.get("Current Step")),
             language=clean(row.get("Language")),
@@ -170,11 +193,20 @@ class Lead(db.Model):
             "priority": self.priority,
             "follow_up_status": self.follow_up_status,
             "follow_up_due_date": self.follow_up_due_date.isoformat() if self.follow_up_due_date else None,
+            "assigned_to": self.assigned_to,
+            "assigned_to_user_id": self.assigned_to_user_id,
+            "assigned_user": self.assigned_user.display_name if self.assigned_user else None,
+            "assigned_at": self.assigned_at.isoformat() if self.assigned_at else None,
+            "assigned_by_user_id": self.assigned_by_user_id,
+            "last_contact_at": self.last_contact_at.isoformat() if self.last_contact_at else None,
+            "customer_response_status": self.customer_response_status,
             "last_interaction_id": self.last_interaction_id,
             "interaction_count": self.interaction_count,
             "handoff_required": self.handoff_required,
             "handoff_reason": self.handoff_reason,
             "notes": self.notes,
+            "passport_attachment_ref": self.passport_attachment_ref,
+            "passport_status": self.passport_status,
             "flow_key": self.flow_key,
             "current_step": self.current_step,
             "language": self.language,

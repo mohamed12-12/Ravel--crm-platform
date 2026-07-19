@@ -60,6 +60,8 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         os.environ["SHEET_BACKEND"] = "excel"
         os.environ["EXCEL_RUNTIME_WORKBOOK"] = str(workbook_path)
         os.environ["EXCEL_SOURCE_WORKBOOK"] = str(workbook_path)
+        os.environ["CRM_SHEET_MIRROR_ENABLED"] = "true"
+        os.environ["EXCEL_EXPORT_ENABLED"] = "true"
 
         for module_name in list(sys.modules):
             if module_name == "app" or module_name.startswith("app."):

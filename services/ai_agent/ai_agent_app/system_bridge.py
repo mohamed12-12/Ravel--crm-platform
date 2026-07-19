@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from services.ai_agent.ai_agent_app.config import Settings
+from services.data_authority import load_data_authority
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -50,6 +51,7 @@ def _service_settings(settings: Settings | None = None):
     # The Drive-xlsx gateway downloads to the runtime workbook and uploads after
     # the superclass returns, so system sync should edit the local workbook.
     sheet_backend = "excel" if settings.sheet_backend == "google" else settings.sheet_backend
+    authority = load_data_authority(environment=settings.app_env)
     return SystemServiceSettings(
         repo_root=REPO_ROOT,
         system_root=SYSTEM_ROOT,
@@ -59,6 +61,9 @@ def _service_settings(settings: Settings | None = None):
         excel_runtime_workbook=settings.excel_runtime_workbook,
         google_sheet_id=settings.google_sheet_id,
         google_application_credentials=_google_credentials_path(settings),
+        data_authority=settings.data_authority,
+        sheet_export_enabled=authority.export_enabled_for(settings.sheet_backend),
+        allow_source_workbook_writes=False,
     )
 
 
@@ -151,10 +156,28 @@ def save_system_traveler_passport(
     traveler_id: str,
     **payload: Any,
 ) -> dict[str, Any]:
+    if settings.crm_access_mode == "api":
+        from services.ai_agent.ai_agent_app.agent.crm_api_client import CRMApiClient
+
+        return CRMApiClient(
+            base_url=settings.crm_api_base_url,
+            token=settings.crm_api_token,
+        ).save_passport(traveler_id, payload)
     service = get_system_service(settings)
     if service is None:
         raise RuntimeError("System DB write-through is unavailable; refusing passport profile save.")
     return service.save_traveler_passport(traveler_id, **payload)
+
+
+def sync_system_live_agent_lead(
+    settings: Settings,
+    lead_id: str,
+    **payload: Any,
+) -> dict[str, Any]:
+    service = get_system_service(settings)
+    if service is None:
+        raise RuntimeError("System DB write-through is unavailable; refusing live lead sync.")
+    return service.sync_live_agent_lead(lead_id, **payload)
 
 
 def create_system_handoff(settings: Settings, **payload: Any) -> dict[str, Any]:

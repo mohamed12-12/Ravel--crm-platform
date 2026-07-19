@@ -8,7 +8,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from services.ai_agent.ai_agent_app.agent.gemini_agent import GeminiAgent
+from services.ai_agent.ai_agent_app.agent.tool_calling_runtime import ToolCallingSessionRuntime
+from services.ai_agent.ai_agent_app.server import _extract_gemini_message_hints
 from services.ai_agent.llm.gemini_provider import GeminiProviderResponse
+from services.ai_agent.validation.validation_rules import normalize_flight_option, normalize_trip_type
 
 
 class FakeCRMService:
@@ -91,7 +94,14 @@ class LoopProviderStub:
         return self.responses[index]
 
 
-def function_call_response(name: str, args: dict[str, object], response_id: str = "resp-fn") -> GeminiProviderResponse:
+def function_call_response(
+    name: str,
+    args: dict[str, object],
+    response_id: str = "resp-fn",
+    *,
+    call_id: str = "call-1",
+    thought_signature: str = "sig-1",
+) -> GeminiProviderResponse:
     return GeminiProviderResponse(
         text="",
         response_id=response_id,
@@ -101,7 +111,7 @@ def function_call_response(name: str, args: dict[str, object], response_id: str 
                 {
                     "content": {
                         "parts": [
-                            {"functionCall": {"name": name, "args": args}},
+                            {"functionCall": {"name": name, "args": args, "id": call_id}, "thoughtSignature": thought_signature},
                         ]
                     }
                 }
@@ -262,6 +272,59 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
         self.assertEqual(result["tool_requests"][0]["name"], "search_traveler")
         self.assertIn("Mona Ali", result["reply"])
         self.assertGreaterEqual(len(provider.calls), 2)
+        first_parts = provider.calls[1]["messages"][-1]["parts"]
+        self.assertEqual(first_parts[0]["functionResponse"]["id"], "call-1")
+
+    def test_thought_signature_is_preserved_in_followup_turn(self) -> None:
+        with self._patch_service():
+            agent, provider = self._build_agent(
+                [
+                    function_call_response(
+                        "search_traveler",
+                        {"raw_phone": "1112223333", "country_code": "20"},
+                        call_id="call-42",
+                        thought_signature="sig-42",
+                    ),
+                    text_response("I found Mona Ali in the CRM."),
+                ]
+            )
+            agent.respond(user_message="find my profile", session_context={"session_id": "sess-sig", "raw_phone": "1112223333"})
+
+        model_turn = provider.calls[1]["messages"][-2]
+        self.assertEqual(model_turn["role"], "model")
+        self.assertIn("thoughtSignature", model_turn["parts"][0])
+        self.assertEqual(model_turn["parts"][0]["thoughtSignature"], "sig-42")
+        self.assertEqual(provider.calls[1]["messages"][-1]["parts"][0]["functionResponse"]["id"], "call-42")
+
+    def test_missing_thought_signature_fails_safely(self) -> None:
+        with self._patch_service():
+            agent, _ = self._build_agent(
+                [
+                    GeminiProviderResponse(
+                        text="",
+                        response_id="resp-no-sig",
+                        raw={
+                            "responseId": "resp-no-sig",
+                            "candidates": [
+                                {
+                                    "content": {
+                                        "parts": [
+                                            {"functionCall": {"name": "search_traveler", "args": {"raw_phone": "1112223333", "country_code": "20"}, "id": "call-missing"}},
+                                        ]
+                                    }
+                                }
+                            ],
+                        },
+                    )
+                ]
+            )
+            result = agent.respond(user_message="find my profile", session_context={"session_id": "sess-missing"})
+
+        self.assertEqual(
+            result["reply"],
+            "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed.",
+        )
+        self.assertIn("Missing thought signature", result["error"])
 
     def test_gemini_requests_trip_search(self) -> None:
         with self._patch_service():
@@ -339,6 +402,29 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
         )
         self.assertIn("Maximum Gemini tool-call limit reached", result["error"])
 
+    def test_max_tool_call_limit_uses_workflow_message_when_available(self) -> None:
+        with self._patch_service():
+            agent, _ = self._build_agent(
+                [
+                    function_call_response("search_traveler", {"raw_phone": "1112223333", "country_code": "20"}),
+                    function_call_response("search_traveler", {"raw_phone": "1112223333", "country_code": "20"}),
+                ],
+                max_tool_calls=1,
+            )
+            result = agent.respond(
+                user_message="find profile",
+                session_context={
+                    "session_id": "sess-7b",
+                    "workflow_policy": {
+                        "assistant_message": "Do you want this trip with flights or without flights?",
+                    },
+                },
+            )
+
+        self.assertEqual(result["reply"], "Do you want this trip with flights or without flights?")
+        self.assertFalse(result.get("error"))
+        self.assertIn("Maximum Gemini tool-call limit reached", result.get("warning", ""))
+
     def test_final_answer_uses_tool_result(self) -> None:
         with self._patch_service():
             agent, _ = self._build_agent(
@@ -365,6 +451,79 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
             result = agent.respond(user_message="hello", session_context={"session_id": "sess-10", "language": "en"})
 
         self.assertIn("WhatsApp number", result["reply"])
+
+    def test_blank_final_turn_uses_workflow_message(self) -> None:
+        with self._patch_service():
+            agent, _ = self._build_agent(
+                [
+                    function_call_response("search_available_trips", {"trip_type": "international", "query": "Turkey"}),
+                    text_response(""),
+                ]
+            )
+            result = agent.respond(
+                user_message="Show me trips to Turkey",
+                session_context={
+                    "session_id": "sess-11",
+                    "language": "en",
+                    "trip_type": "international",
+                    "workflow_policy": {
+                        "identity_verified": True,
+                        "allowed_tools": ["search_available_trips"],
+                        "assistant_message": "Please choose your room option. Current inventory: Single: 3 available.",
+                    },
+                },
+            )
+
+        self.assertEqual(result["reply"], "Please choose your room option. Current inventory: Single: 3 available.")
+        self.assertNotIn("disabled", result["reply"].lower())
+
+    def test_flight_preference_normalization_is_shared_across_runtime_layers(self) -> None:
+        message = "لا اريد طيران"
+
+        self.assertEqual(normalize_flight_option(message), "Without Flight")
+        self.assertEqual(
+            ToolCallingSessionRuntime._extract_hints(message)["candidate_flight_option"],
+            "Without Flight",
+        )
+        self.assertEqual(
+            _extract_gemini_message_hints(message, default_country_code="20")["candidate_flight_option"],
+            "Without Flight",
+        )
+
+    def test_trip_type_normalization_is_shared_across_runtime_layers(self) -> None:
+        cases = {
+            "\u0645\u062d\u0644\u064a\u0647": "local",
+            "\u0631\u062d\u0644\u0629 \u0645\u062d\u0644\u064a\u0629": "local",
+            "int": "international",
+            "intl trip": "international",
+        }
+
+        for message, expected in cases.items():
+            with self.subTest(message=message):
+                self.assertEqual(normalize_trip_type(message), expected)
+                self.assertEqual(ToolCallingSessionRuntime._extract_hints(message)["candidate_trip_type"], expected)
+                self.assertEqual(
+                    _extract_gemini_message_hints(message, default_country_code="20")["candidate_trip_type"],
+                    expected,
+                )
+
+    def test_internal_instruction_leak_uses_backend_customer_message(self) -> None:
+        with self._patch_service():
+            agent, _ = self._build_agent(
+                [text_response('assistant_message and do not improvise around the policy. Let\'s look at the request.')]
+            )
+            result = agent.respond(
+                user_message="\u0645\u062d\u0644\u064a\u0629",
+                session_context={
+                    "session_id": "sess-internal-leak",
+                    "workflow_policy": {
+                        "assistant_message": "Are you looking for a local trip or an international trip?",
+                    },
+                },
+            )
+
+        self.assertEqual(result["reply"], "Are you looking for a local trip or an international trip?")
+        self.assertNotIn("assistant_message", result["reply"])
 
 
 if __name__ == "__main__":

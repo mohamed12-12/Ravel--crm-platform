@@ -69,6 +69,16 @@ class GeminiWriteToolExecutor:
                 "write_result": None,
             }
 
+        if self.read_only_tools.api_client is not None:
+            result = self.read_only_tools.api_client.write(action, payload, session_context)
+            audit["executed"] = bool(result.get("executed", True))
+            audit["result_id"] = str(result.get("result_id") or "")
+            audit["reason"] = str(result.get("assistant_message") or "CRM API write executed")
+            result.setdefault("audit", audit)
+            result.setdefault("validation", validation_payload)
+            self._log_audit(audit)
+            return result
+
         handler = getattr(self, f"_execute_{action}", None)
         if handler is None:
             audit["reason"] = f"Unsupported controlled write action: {action}"
@@ -105,7 +115,6 @@ class GeminiWriteToolExecutor:
         trip_type = self._value(payload, session_context, "preferred_trip_type", "trip_type")
         lead_source = self._value(payload, session_context, "lead_source") or "Gemini Agent"
         channel = self._value(payload, session_context, "channel") or "web"
-        priority = self._value(payload, session_context, "priority") or "Medium"
         group_size = self._as_int(self._value(payload, session_context, "group_size"), default=1) or 1
         traveler_id = str((traveler or {}).get("traveler_id") or validation.traveler_id or "").strip()
         if not raw_phone and traveler:
@@ -116,14 +125,64 @@ class GeminiWriteToolExecutor:
                 or traveler.get("normalized_whatsapp")
                 or ""
             ).strip()
+        notes = self._value(payload, session_context, "notes") or "Created through controlled Gemini write tool."
+        flow_key = self._value(payload, session_context, "flow_key") or "gemini_write"
+        current_step = self._value(payload, session_context, "current_step") or "create_lead"
+        language = self._value(payload, session_context, "language") or str(session_context.get("language") or "")
+        preferred_trip_id = self._value(payload, session_context, "preferred_trip_id", "selected_trip_id", "trip_id")
+
+        record_agent_outcome = getattr(self.service, "record_agent_outcome", None)
+        if callable(record_agent_outcome):
+            result = record_agent_outcome(
+                full_name=customer_name or "",
+                raw_phone=raw_phone or "",
+                country_code=country_code,
+                trip_type=trip_type or None,
+                channel=channel,
+                source=lead_source,
+                agent_notes=notes,
+                birthday=self._value(payload, session_context, "birthday") or "",
+                gender=self._value(payload, session_context, "gender") or "",
+                nationality=self._value(payload, session_context, "nationality") or "",
+                preferred_trip_id=preferred_trip_id or "",
+                language=language,
+                force_create_new_lead=True,
+                group_size=group_size,
+            )
+            write_result = result.get("write_result") if isinstance(result.get("write_result"), dict) else {}
+            lead_update = write_result.get("lead_update") if isinstance(write_result.get("lead_update"), dict) else {}
+            created_traveler = write_result.get("created_traveler") if isinstance(write_result.get("created_traveler"), dict) else None
+            final_result = {
+                "traveler": result.get("traveler") if isinstance(result.get("traveler"), dict) else traveler,
+                "lead_id": lead_update.get("lead_id", ""),
+                "handoff_id": "",
+                "handoff_required": bool(result.get("handoff_required")),
+                "handoff_reason": str(result.get("handoff_reason") or ""),
+                "write_result": {
+                    "created_traveler": created_traveler,
+                    "lead_update": lead_update,
+                },
+            }
+            return {
+                "result_id": str(lead_update.get("lead_id") or ""),
+                "assistant_message": self._lead_message(lead_update, customer_name),
+                "lead_update": lead_update,
+                "write_result": {
+                    "created_traveler": created_traveler,
+                    "lead_update": lead_update,
+                },
+                "traveler": result.get("traveler") if isinstance(result.get("traveler"), dict) else traveler,
+                "session_update": {
+                    "lead_status": lead_update.get("lead_stage", ""),
+                    "final_result": final_result,
+                },
+            }
+
         traveler_status = str((traveler or {}).get("status") or "").strip()
         customer_tier = "VIP" if traveler_status.upper() == "VIP" else ("Repeat" if traveler_status.upper() == "REPEAT" else "")
         match_status = "single_match" if traveler_id else "not_found"
         interested_trip_ids = self._value(payload, session_context, "interested_trip_ids", "selected_trip_id")
         suggested_trip_ids = self._value(payload, session_context, "suggested_trip_ids", "selected_trip_id")
-        notes = self._value(payload, session_context, "notes") or "Created through controlled Gemini write tool."
-        flow_key = self._value(payload, session_context, "flow_key") or "gemini_write"
-        current_step = self._value(payload, session_context, "current_step") or "create_lead"
         handoff_required = self._as_bool(self._value(payload, session_context, "handoff_required"))
         handoff_reason = self._value(payload, session_context, "handoff_reason")
         lead_stage = self._value(payload, session_context, "lead_stage")
@@ -145,7 +204,7 @@ class GeminiWriteToolExecutor:
             preferred_trip_type=trip_type or "",
             interested_trip_ids=interested_trip_ids or "",
             suggested_trip_ids=suggested_trip_ids or "",
-            priority=priority,
+            priority=self._value(payload, session_context, "priority") or "Medium",
             follow_up_status=self._value(payload, session_context, "follow_up_status") or "",
             follow_up_due_date=self._value(payload, session_context, "follow_up_due_date") or "",
             notes=notes,
@@ -157,7 +216,7 @@ class GeminiWriteToolExecutor:
             current_step=current_step,
             handoff_required=handoff_required,
             handoff_reason=handoff_reason,
-            language=self._value(payload, session_context, "language") or str(session_context.get("language") or ""),
+            language=language,
             country_code=country_code,
             group_size=group_size,
             force_create_new=True,
@@ -250,13 +309,21 @@ class GeminiWriteToolExecutor:
         passport_attachment_ref = self._value(payload, session_context, "passport_attachment_ref")
         passport_required = bool(trip and str(trip.get("type") or trip.get("trip_type") or "").strip().lower() == "international")
         passport_status = "provided" if passport_required and passport_attachment_ref else ("pending" if passport_required else "")
+        lead_id = self._ensure_booking_lead(
+            payload=payload,
+            session_context=session_context,
+            validation=validation,
+            traveler=traveler,
+            trip=trip if isinstance(trip, dict) else {},
+            trip_id=trip_id,
+        )
         result = self.service.create_booking_draft(
             trip_id=trip_id,
             traveler_id=str((traveler or {}).get("traveler_id") or validation.traveler_id or ""),
             traveler_name=traveler_name or str((traveler or {}).get("full_name") or "").strip() or self._value(payload, session_context, "customer_name", "full_name") or "Traveler",
             room_type=room_type,
             channel=self._value(payload, session_context, "channel") or "web",
-            lead_id=self._value(payload, session_context, "lead_id") or "",
+            lead_id=lead_id,
             flight_option=flight_option,
             date_option=self._value(payload, session_context, "date_option") or "",
             currency=self._value(payload, session_context, "currency") or "",
@@ -288,6 +355,54 @@ class GeminiWriteToolExecutor:
             },
         }
 
+    def _ensure_booking_lead(
+        self,
+        *,
+        payload: dict[str, Any],
+        session_context: dict[str, Any],
+        validation,
+        traveler: dict[str, Any] | None,
+        trip: dict[str, Any],
+        trip_id: str,
+    ) -> str:
+        traveler_id = str((traveler or {}).get("traveler_id") or validation.traveler_id or "").strip()
+        requested_lead_id = str(self._value(payload, session_context, "lead_id") or "").strip()
+        if requested_lead_id:
+            lead_result = self.read_only_tools.lookup_lead(lead_id=requested_lead_id)
+            leads = lead_result.get("leads") if isinstance(lead_result, dict) else []
+            for lead in leads or []:
+                if str(lead.get("lead_id") or "").strip() != requested_lead_id:
+                    continue
+                linked_traveler_id = str(lead.get("traveler_id") or "").strip()
+                if not traveler_id or not linked_traveler_id or linked_traveler_id == traveler_id:
+                    return requested_lead_id
+
+        lead_payload = dict(payload)
+        lead_payload.pop("lead_id", None)
+        lead_payload.update(
+            {
+                "customer_name": str((traveler or {}).get("full_name") or self._value(payload, session_context, "customer_name", "full_name") or "Traveler").strip(),
+                "raw_phone": str(
+                    (traveler or {}).get("raw_phone")
+                    or (traveler or {}).get("whatsapp_raw")
+                    or self._value(payload, session_context, "raw_phone", "pending_raw_phone")
+                    or ""
+                ).strip(),
+                "preferred_trip_type": str(trip.get("trip_type") or trip.get("type") or self._value(payload, session_context, "trip_type") or "").strip(),
+                "preferred_trip_id": trip_id,
+                "lead_source": self._value(payload, session_context, "source") or "Gemini Agent",
+                "channel": self._value(payload, session_context, "channel") or "web",
+                "current_step": "booking_draft",
+                "notes": self._value(payload, session_context, "booking_notes", "agent_notes") or "Lead created for an AI-assisted booking draft.",
+            }
+        )
+        lead_result = self._execute_create_lead(lead_payload, session_context, validation)
+        lead_update = lead_result.get("lead_update") if isinstance(lead_result.get("lead_update"), dict) else {}
+        lead_id = str(lead_update.get("lead_id") or lead_result.get("result_id") or "").strip()
+        if not lead_id:
+            raise RuntimeError("Booking draft was not created because a CRM lead could not be linked.")
+        return lead_id
+
     def _execute_create_handoff(
         self,
         payload: dict[str, Any],
@@ -318,6 +433,7 @@ class GeminiWriteToolExecutor:
             notes=self._value(payload, session_context, "notes") or "",
             metadata={"validation": validation.to_dict(), "session_id": session_context.get("session_id", "")},
             update_lead=self._as_bool(self._value(payload, session_context, "update_lead", "handoff_required"), default=True),
+            deduplicate_open=self._as_bool(self._value(payload, session_context, "deduplicate_open"), default=False),
         )
         return {
             "result_id": result.get("handoff_id", ""),
@@ -385,7 +501,19 @@ class GeminiWriteToolExecutor:
 
     @staticmethod
     def _humanize_token(value: Any) -> str:
-        return " ".join(str(value or "").strip().replace("_", " ").split())
+        raw = str(value or "").strip()
+        labels = {
+            "traveler_id_or_raw_phone": "WhatsApp number or traveler ID",
+            "raw_phone": "WhatsApp number",
+            "pending_raw_phone": "WhatsApp number",
+            "trip_id": "trip",
+            "room_type": "room type",
+            "flight_option": "flight preference",
+            "selected_trip_id": "selected trip",
+        }
+        if raw in labels:
+            return labels[raw]
+        return " ".join(raw.replace("_", " ").split())
 
     @staticmethod
     def _human_message_for_blocked_action(action: str, validation_payload: dict[str, Any], session_context: dict[str, Any]) -> str:

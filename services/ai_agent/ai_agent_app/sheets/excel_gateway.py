@@ -14,7 +14,7 @@ from openpyxl import load_workbook
 
 from services.ai_agent.ai_agent_app.config import Settings
 from services.ai_agent.ai_agent_app.logger import sheet_logger
-from services.ai_agent.ai_agent_app.system_bridge import check_traveler_completed_trips, create_system_booking, create_system_handoff, get_system_preview_result, get_system_trip_result, qualify_system_lead, run_system_sales_cycle, save_system_traveler_passport
+from services.ai_agent.ai_agent_app.system_bridge import check_traveler_completed_trips, create_system_booking, create_system_handoff, get_system_preview_result, get_system_trip_result, qualify_system_lead, run_system_sales_cycle, save_system_traveler_passport, sync_system_live_agent_lead
 from services.crm.system_services.config import resolve_system_db_path
 from scripts.phase1_readonly_agent import build_agent_response
 
@@ -247,6 +247,10 @@ class ExcelSheetGateway:
                     exc,
                 )
                 return {}
+
+    def sync_live_agent_lead(self, lead_id: str, **payload: Any) -> dict[str, Any]:
+        with self._lock:
+            return sync_system_live_agent_lead(self.settings, lead_id, **payload)
 
     def create_handoff_case(self, **payload: Any) -> dict[str, Any]:
         with self._lock:

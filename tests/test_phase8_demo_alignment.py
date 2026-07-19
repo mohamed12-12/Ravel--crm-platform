@@ -125,6 +125,7 @@ class Phase8DemoAlignmentTests(unittest.TestCase):
 
         os.environ["DATABASE_URL"] = f"sqlite:///{db_path.resolve().as_posix()}"
         os.environ["RAHMA_SYSTEM_DB_PATH"] = str(db_path)
+        os.environ["AI_AGENT_MODE"] = "deterministic"
         os.environ["SHEET_BACKEND"] = "excel"
         os.environ["EXCEL_RUNTIME_WORKBOOK"] = str(runtime_workbook)
         os.environ["EXCEL_SOURCE_WORKBOOK"] = str(source_workbook)

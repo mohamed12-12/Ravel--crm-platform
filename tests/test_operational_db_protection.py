@@ -90,6 +90,7 @@ class OperationalDbProtectionTest(unittest.TestCase):
         # Override DATABASE_URL *before* create_app() so the runtime
         # injection in __init__.py picks up the temp path
         os.environ["DATABASE_URL"] = f"sqlite:///{self._tmp_db.resolve().as_posix()}"
+        os.environ["RAHMA_SYSTEM_DB_PATH"] = str(self._tmp_db.resolve())
 
     def tearDown(self) -> None:
         # Restore env

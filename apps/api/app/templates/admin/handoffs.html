@@ -914,7 +914,8 @@
     function submitResolution(handoffId, notes) {
         fetch(`/admin/handoffs/${handoffId}`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN },
             body: JSON.stringify({ status: 'Resolved', notes: notes })
         })
         .then(r => r.json())
@@ -939,7 +940,8 @@
         event.stopPropagation();
         fetch(`/admin/handoffs/${handoffId}`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN },
             body: JSON.stringify({ status: 'In Progress', assigned_to: 'Administrator' })
         })
         .then(r => r.json())
@@ -1015,7 +1017,8 @@
                 
                 fetch(`/admin/handoffs/${handoffId}`, {
                     method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN },
                     body: JSON.stringify({ status: newStatus })
                 })
                 .then(r => r.json())

@@ -48,6 +48,13 @@ class Trip(db.Model):
 
     # Relationships
     bookings = db.relationship('TripBooking', backref='trip', lazy=True)
+    media = db.relationship(
+        'TripMedia',
+        back_populates='trip',
+        cascade='all, delete-orphan',
+        lazy=True,
+        order_by='TripMedia.display_order',
+    )
 
     def __repr__(self):
         return f'<Trip {self.trip_id} - {self.trip_name}>'

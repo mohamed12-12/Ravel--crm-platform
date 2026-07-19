@@ -19,15 +19,21 @@ from app.models.traveler import Traveler
 from app.models.traveler_document import TravelerDocument
 from services.crm.system_services import UnifiedCRMService
 from services.crm.system_services.phone_normalization import normalize_phone_input
+from services.data_authority import load_data_authority
 
 travelers_bp = Blueprint('travelers', __name__, url_prefix='/travelers')
 ARCHIVE_LIKE_STATUSES = {"inactive", "archived", "blacklisted", "blocked"}
 _ALLOWED_DOC_EXTENSIONS = {"jpg", "jpeg", "png", "pdf"}
+_ALLOWED_DOC_MIME_TYPES = {"image/jpeg", "image/png", "application/pdf"}
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
-def _allowed_document(filename: str) -> bool:
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in _ALLOWED_DOC_EXTENSIONS
+def _allowed_document(filename: str, mimetype: str = "") -> bool:
+    return (
+        "." in filename
+        and filename.rsplit('.', 1)[1].lower() in _ALLOWED_DOC_EXTENSIONS
+        and (not mimetype or mimetype.lower() in _ALLOWED_DOC_MIME_TYPES)
+    )
 
 
 def _documents_root() -> Path:
@@ -188,17 +194,6 @@ def _sync_traveler_sheet(traveler_id: str) -> None:
         pass
 
 
-def _refresh_traveler_sheet_stats(traveler_ids) -> None:
-    ids = [str(traveler_id or "").strip() for traveler_id in traveler_ids if str(traveler_id or "").strip()]
-    if not ids:
-        return
-    try:
-        refreshed = UnifiedCRMService().refresh_travelers_sheet_stats(ids)
-        if refreshed:
-            db.session.expire_all()
-    except Exception:
-        pass
-
 @travelers_bp.route('/')
 def index():
     q = request.args.get('q', '').strip()
@@ -211,13 +206,6 @@ def index():
 
     pagination = query.order_by(Traveler.created_at.desc()).paginate(page=page, per_page=per_page, error_out=False)
     travelers = pagination.items
-    traveler_ids = [traveler.traveler_id for traveler in travelers]
-    _refresh_traveler_sheet_stats(traveler_ids)
-    if traveler_ids:
-        fresh_travelers = Traveler.query.filter(Traveler.traveler_id.in_(traveler_ids)).all()
-        fresh_by_id = {traveler.traveler_id: traveler for traveler in fresh_travelers}
-        travelers = [fresh_by_id.get(traveler_id) for traveler_id in traveler_ids if fresh_by_id.get(traveler_id)]
-
     # Filter options for the UI
     statuses = db.session.query(Traveler.status).distinct().all()
     nationalities = db.session.query(Traveler.nationality).distinct().all()
@@ -235,7 +223,7 @@ def index():
 @travelers_bp.route('/<traveler_id>')
 def detail(traveler_id):
     try:
-        UnifiedCRMService().refresh_traveler_sheet_stats(traveler_id)
+        UnifiedCRMService().recalculate_traveler_stats(traveler_id)
     except Exception:
         pass
     traveler = db.get_or_404(Traveler, traveler_id)
@@ -475,7 +463,7 @@ def upload_document(traveler_id):
         flash('Please choose a valid file.', 'danger')
         return redirect(url_for('travelers.detail', traveler_id=traveler_id))
 
-    if not _allowed_document(f.filename):
+    if not _allowed_document(f.filename, f.mimetype or ""):
         flash('Unsupported file type. Please upload JPG, JPEG, PNG, or PDF only.', 'danger')
         return redirect(url_for('travelers.detail', traveler_id=traveler_id))
 
@@ -580,18 +568,16 @@ def export():
     query = _apply_traveler_filters(Traveler.query, q, status, nationality)
 
     travelers = query.all()
-    _refresh_traveler_sheet_stats([traveler.traveler_id for traveler in travelers])
-    if travelers:
-        traveler_ids = [traveler.traveler_id for traveler in travelers]
-        fresh_travelers = Traveler.query.filter(Traveler.traveler_id.in_(traveler_ids)).all()
-        fresh_by_id = {traveler.traveler_id: traveler for traveler in fresh_travelers}
-        travelers = [fresh_by_id.get(traveler_id) for traveler_id in traveler_ids if fresh_by_id.get(traveler_id)]
+
+    def csv_safe(value):
+        text = "" if value is None else str(value)
+        return f"'{text}" if text.startswith(("=", "+", "-", "@")) else value
 
     si = io.StringIO()
     cw = csv.writer(si)
     cw.writerow(['ID', 'Name', 'Phone', 'Email', 'Status', 'Nationality', 'Residence', 'Lead Source', 'Total Trips', 'Revenue', 'Rating'])
     for t in travelers:
-        cw.writerow([
+        cw.writerow([csv_safe(value) for value in [
             t.traveler_id,
             t.full_name,
             t.whatsapp_raw or t.normalized_whatsapp,
@@ -603,11 +589,17 @@ def export():
             t.total_trips,
             t.lifetime_revenue,
             t.rating,
-        ])
+        ]])
 
     output = si.getvalue()
+    authority = load_data_authority()
     return Response(
         output,
         mimetype="text/csv",
-        headers={"Content-disposition": "attachment; filename=travelers_export.csv"}
+        headers={
+            "Content-disposition": "attachment; filename=travelers_export.csv",
+            "X-Data-Authority": authority.authority,
+            "X-Data-Schema-Version": authority.schema_version,
+            "X-Generated-At": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        },
     )

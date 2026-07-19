@@ -7,8 +7,12 @@ from copy import deepcopy
 from typing import Any
 
 from services.ai_agent.ai_agent_app.agent.prompt_builder import PromptBuilder
+from services.ai_agent.ai_agent_app.agent.response_format import format_agent_reply
+from services.ai_agent.ai_agent_app.agent.privacy_policy import AgentPrivacyPolicy
 from services.ai_agent.ai_agent_app.agent.read_only_tools import ReadOnlyCRMTools
+from services.ai_agent.ai_agent_app.agent.safety import AgentSafetyLayer
 from services.ai_agent.ai_agent_app.agent.tool_registry import ToolSpec, build_agent_tool_registry
+from services.ai_agent.ai_agent_app.agent.workflow_policy import ConversationWorkflowPolicy
 from services.ai_agent.ai_agent_app.agent.write_tool_executor import GeminiWriteToolExecutor
 from services.ai_agent.ai_agent_app.config import Settings
 from services.ai_agent.ai_agent_app.logger import agent_logger
@@ -35,20 +39,28 @@ class GeminiAgent:
         read_only_tools: ReadOnlyCRMTools | None = None,
         action_validator: ActionValidator | None = None,
         prompt_builder: PromptBuilder | None = None,
+        tool_registry: dict[str, ToolSpec] | None = None,
         write_tools_enabled: bool = False,
         max_tool_calls: int = 4,
+        safety_layer: AgentSafetyLayer | None = None,
     ) -> None:
         self.settings = settings
         self.provider = provider
         self.read_only_tools = read_only_tools or ReadOnlyCRMTools(settings)
         self.action_validator = action_validator or ActionValidator(settings, read_only_tools=self.read_only_tools)
         self.write_tools_enabled = bool(write_tools_enabled)
-        self.read_only_tool_registry = build_agent_tool_registry(include_write_tools=False)
-        self.tool_registry = build_agent_tool_registry(include_write_tools=self.write_tools_enabled)
+        self.read_only_tool_registry = build_agent_tool_registry(
+            include_write_tools=False,
+            include_validation_tool=False,
+        )
+        self.tool_registry = tool_registry or build_agent_tool_registry(include_write_tools=self.write_tools_enabled)
         self.prompt_builder = prompt_builder or PromptBuilder(
             system_prompt=settings.ai_agent_system_prompt,
             tool_registry=self.tool_registry,
         )
+        self.safety_layer = safety_layer or AgentSafetyLayer()
+        self.workflow_policy = ConversationWorkflowPolicy()
+        self.privacy_policy = AgentPrivacyPolicy()
         self.rewrite_prompt_builder = PromptBuilder(
             system_prompt=settings.ai_agent_system_prompt,
             tool_registry=self.read_only_tool_registry,
@@ -111,7 +123,8 @@ class GeminiAgent:
             crm_context.setdefault("passport_status", self.read_only_tools.get_passport_status(traveler_id=traveler_id))
         if lead_id:
             crm_context["lead_lookup"] = self.read_only_tools.lookup_lead(lead_id=lead_id, traveler_id=traveler_id)
-        if trip_type:
+        workflow_policy = session_context.get("workflow_policy") if isinstance(session_context.get("workflow_policy"), dict) else {}
+        if trip_type and bool(workflow_policy.get("trip_search_allowed")):
             crm_context["trip_search"] = self.read_only_tools.search_trips(
                 trip_type=trip_type,
                 query=str(session_context.get("trip_query") or "").strip(),
@@ -120,11 +133,129 @@ class GeminiAgent:
             crm_context["trip_details"] = self.read_only_tools.get_trip_details(trip_id=selected_trip_id)
         if booking_id:
             crm_context["booking_lookup"] = self.read_only_tools.get_booking_status(booking_id=booking_id)
+        traveler_record = {}
+        for key in ("traveler_profile", "traveler_lookup"):
+            payload = crm_context.get(key)
+            if isinstance(payload, dict) and isinstance(payload.get("traveler"), dict):
+                traveler_record = dict(payload.get("traveler") or {})
+                if traveler_record:
+                    break
+        if not traveler_record and isinstance(session_context.get("known_traveler"), dict):
+            traveler_record = dict(session_context.get("known_traveler") or {})
+        if traveler_record:
+            status = str(traveler_record.get("status") or "Active").strip() or "Active"
+            local_trips = int(traveler_record.get("local_trips_count") or traveler_record.get("local_trips") or 0)
+            international_trips = int(traveler_record.get("international_trips_count") or traveler_record.get("international_trips") or 0)
+            total_trips = int(traveler_record.get("total_trips") or (local_trips + international_trips))
+            crm_context["traveler_summary"] = {
+                "full_name": str(traveler_record.get("full_name") or "").strip(),
+                "traveler_id": str(traveler_record.get("traveler_id") or "").strip(),
+                "status": status,
+                "local_trips": local_trips,
+                "international_trips": international_trips,
+                "total_trips": total_trips,
+                "vip_status": status.upper() == "VIP",
+            }
         return crm_context
 
     @staticmethod
     def _safe_refusal() -> str:
         return "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed."
+
+    def _workflow_fallback_reply(self, session_context: dict[str, Any] | None) -> str:
+        workflow = (session_context or {}).get("workflow_policy")
+        workflow = workflow if isinstance(workflow, dict) else {}
+        return self.sanitize_reply(str(workflow.get("assistant_message") or "").strip())
+
+    def _workflow_block_result(self, tool_name: str, session_context: dict[str, Any] | None) -> dict[str, Any] | None:
+        context_policy = (session_context or {}).get("workflow_policy")
+        context_policy = context_policy if isinstance(context_policy, dict) else {}
+        allowed_tools = set(context_policy.get("allowed_tools") or [])
+        if not allowed_tools or tool_name in allowed_tools:
+            return None
+        decision = self.workflow_policy.evaluate(session_context or {})
+        return self.workflow_policy.block_tool_result(tool_name, decision)
+
+    @staticmethod
+    def _tool_events_contain_verified_crm_fact(tool_events: list[dict[str, Any]]) -> bool:
+        for event in tool_events:
+            result = event.get("result") if isinstance(event, dict) else {}
+            if not isinstance(result, dict):
+                continue
+            traveler = result.get("traveler") if isinstance(result.get("traveler"), dict) else {}
+            if traveler.get("traveler_id") and traveler.get("status"):
+                return True
+            if result.get("trip") or result.get("trips") or result.get("open_trips") or result.get("bookings"):
+                return True
+        return False
+
+    @staticmethod
+    def _contains_unverified_crm_claim(reply: str) -> bool:
+        text = str(reply or "").casefold()
+        patterns = (
+            r"\bvip\b",
+            r"\bactive\b",
+            r"\bblocked\b",
+            r"\bfound\b",
+            r"\bconfirmed\b",
+            r"\bavailable\b",
+            r"\bbooking\b",
+            r"\btraveler id\b",
+            r"\bstatus\b",
+            r"\bprice\b",
+            r"\bplaces?\b",
+            r"\btr\d{3,}\b",
+            r"\brt-[a-z0-9-]+\b",
+            r"\$",
+        )
+        return any(re.search(pattern, text) for pattern in patterns)
+
+    def _ground_reply(
+        self,
+        *,
+        reply: str,
+        session_context: dict[str, Any],
+        tool_events: list[dict[str, Any]],
+    ) -> str:
+        for event in tool_events:
+            result = event.get("result") if isinstance(event, dict) else {}
+            if isinstance(result, dict) and result.get("status") == "privacy_blocked":
+                return str(result.get("assistant_message") or AgentPrivacyPolicy.EN_RESPONSE).strip()
+        workflow = session_context.get("workflow_policy") if isinstance(session_context.get("workflow_policy"), dict) else {}
+        if not workflow or workflow.get("identity_verified"):
+            return reply
+        if self._tool_events_contain_verified_crm_fact(tool_events):
+            return reply
+        if not self._contains_unverified_crm_claim(reply):
+            return reply
+        return str(
+            workflow.get("assistant_message")
+            or "Please share your WhatsApp number first so I can check your Rahma Traveler profile safely."
+        ).strip()
+
+    @staticmethod
+    def sanitize_reply(text: str) -> str:
+        cleaned = re.sub(r"\{[a-zA-Z0-9_]+\}", "", str(text or ""))
+        return format_agent_reply(cleaned)
+
+    @staticmethod
+    def _contains_internal_instruction_leak(reply: str) -> bool:
+        """Reject backend/prompt fragments before they reach a customer."""
+
+        normalized = str(reply or "").casefold()
+        markers = (
+            "assistant_message",
+            "workflow_policy",
+            "required_step",
+            "customer_message_key",
+            "allowed_tools",
+            "workflow_blocked",
+            "tool_result",
+            "validator reasons",
+            "do not improvise around",
+            "let's look at the",
+        )
+        return any(marker in normalized for marker in markers)
 
     @staticmethod
     def _extract_reply(text: str) -> str:
@@ -176,7 +307,11 @@ class GeminiAgent:
             "name": name,
             "args": args,
             "id": str(call.get("id") or call.get("callId") or "").strip(),
+            "call_id": str(call.get("id") or call.get("callId") or "").strip(),
+            "thought_signature_present": bool(part.get("thoughtSignature") or part.get("thought_signature")),
+            "thought_signature_preserved": bool(part.get("thoughtSignature") or part.get("thought_signature")),
             "raw": call,
+            "raw_part": deepcopy(part),
         }
 
     def _validate_tool_call(self, name: str, args: dict[str, Any]) -> ToolSpec:
@@ -203,13 +338,27 @@ class GeminiAgent:
         return spec
 
     def _execute_tool(self, name: str, args: dict[str, Any], session_context: dict[str, Any] | None = None) -> dict[str, Any]:
+        privacy_block = self.privacy_policy.guard_tool_call(name, args, session_context or {})
+        if privacy_block is not None:
+            return privacy_block
         if name == "search_traveler":
             return self.read_only_tools.search_traveler(
                 raw_phone=str(args.get("raw_phone") or ""),
                 country_code=str(args.get("country_code") or self.settings.default_country_code or ""),
             )
+        if name == "find_traveler_by_phone":
+            return self.read_only_tools.find_traveler_by_phone(
+                raw_phone=str(args.get("raw_phone") or ""),
+                country_code=str(args.get("country_code") or self.settings.default_country_code or ""),
+            )
         if name == "get_traveler_profile":
-            return self.read_only_tools.get_traveler_profile(
+            return self.read_only_tools.get_traveler_profile_safe(
+                traveler_id=str(args.get("traveler_id") or ""),
+                raw_phone=str(args.get("raw_phone") or ""),
+                country_code=str(args.get("country_code") or self.settings.default_country_code or ""),
+            )
+        if name == "get_traveler_trip_history":
+            return self.read_only_tools.get_traveler_trip_history(
                 traveler_id=str(args.get("traveler_id") or ""),
                 raw_phone=str(args.get("raw_phone") or ""),
                 country_code=str(args.get("country_code") or self.settings.default_country_code or ""),
@@ -219,8 +368,20 @@ class GeminiAgent:
                 trip_type=str(args.get("trip_type") or ""),
                 query=str(args.get("query") or ""),
             )
+        if name == "search_available_trips":
+            return self.read_only_tools.search_available_trips(
+                trip_type=str(args.get("trip_type") or ""),
+                destination=str(args.get("destination") or ""),
+                query=str(args.get("query") or ""),
+                preferred_date=str(args.get("preferred_date") or ""),
+                travelers=str(args.get("travelers") or args.get("group_size") or ""),
+                flight_option=str(args.get("flight_option") or ""),
+                room_type=str(args.get("room_type") or ""),
+            )
         if name == "get_trip_details":
             return self.read_only_tools.get_trip_details(trip_id=str(args.get("trip_id") or ""))
+        if name == "get_trip_media":
+            return self.read_only_tools.get_trip_media(trip_id=str(args.get("trip_id") or ""))
         if name == "get_booking_status":
             return self.read_only_tools.get_booking_status(
                 booking_id=str(args.get("booking_id") or ""),
@@ -263,6 +424,9 @@ class GeminiAgent:
             for key in (
                 "match_status",
                 "handoff_required",
+                "status",
+                "workflow_state",
+                "required_step",
                 "traveler",
                 "trips",
                 "open_trips",
@@ -288,8 +452,11 @@ class GeminiAgent:
         return summary
 
     @staticmethod
-    def _tool_response_part(name: str, result: dict[str, Any]) -> dict[str, Any]:
-        return {"functionResponse": {"name": name, "response": result}}
+    def _tool_response_part(name: str, result: dict[str, Any], call_id: str = "") -> dict[str, Any]:
+        response: dict[str, Any] = {"name": name, "response": result}
+        if call_id:
+            response["id"] = call_id
+        return {"functionResponse": response}
 
     def _run_tool_loop(
         self,
@@ -331,6 +498,12 @@ class GeminiAgent:
                             reply_text = reply_candidate
                             break
                 if not reply_text:
+                    workflow = session_context.get("workflow_policy") if isinstance(session_context.get("workflow_policy"), dict) else {}
+                    reply_text = str(workflow.get("assistant_message") or "").strip()
+                reply_text = self.sanitize_reply(reply_text)
+                if self._contains_internal_instruction_leak(reply_text):
+                    reply_text = self._workflow_fallback_reply(session_context)
+                if not reply_text:
                     reply_text = self._safe_refusal()
                 memory_key = self._memory_key(session_context)
                 self._memory.setdefault(memory_key, []).extend(
@@ -340,11 +513,11 @@ class GeminiAgent:
                     ]
                 )
                 agent_logger.info(
-                    "Gemini final answer prompt_id=%s response_id=%s tool_calls=%s final_answer=%s",
+                    "Gemini final answer prompt_id=%s response_id=%s tool_calls=%s final_answer_len=%s",
                     package.prompt_id,
                     response.response_id,
                     tool_call_count,
-                    reply_text,
+                    len(reply_text),
                 )
                 return {
                     "reply": reply_text,
@@ -361,21 +534,42 @@ class GeminiAgent:
                 tool_call_count += 1
                 if tool_call_count > self.max_tool_calls:
                     raise GeminiToolLoopError("Maximum Gemini tool-call limit reached.")
+                safety_ok, safety_error = self.safety_layer.validate_tool_args(
+                    call["name"],
+                    call.get("args") or {},
+                    allowed_tools=set(self.tool_registry.keys()),
+                )
+                if not safety_ok:
+                    raise GeminiToolLoopError(safety_error)
                 spec = self._validate_tool_call(call["name"], call.get("args") or {})
+                if not bool(call.get("thought_signature_present")):
+                    raise GeminiToolLoopError(f"Missing thought signature for function call: {spec.name}")
 
                 tool_input = call.get("args") or {}
+                thought_signature_present = bool(call.get("thought_signature_present"))
+                call_id = str(call.get("call_id") or "").strip()
                 agent_logger.info(
-                    "Gemini tool requested prompt_id=%s tool=%s input=%s",
+                    "Gemini tool requested prompt_id=%s model=%s round=%s tool=%s call_id_present=%s thought_signature_present=%s input=%s",
                     package.prompt_id,
+                    getattr(self.settings, "gemini_model", ""),
+                    tool_call_count,
                     spec.name,
+                    bool(call_id),
+                    thought_signature_present,
                     json.dumps(tool_input, ensure_ascii=False, sort_keys=True),
                 )
-                result = self._execute_tool(spec.name, tool_input, session_context)
+                result = self._workflow_block_result(spec.name, session_context)
+                if result is None:
+                    result = self._execute_tool(spec.name, tool_input, session_context)
                 summary = self._tool_result_summary(result)
                 agent_logger.info(
-                    "Gemini tool result prompt_id=%s tool=%s summary=%s",
+                    "Gemini tool result prompt_id=%s model=%s round=%s tool=%s call_id_present=%s thought_signature_preserved=%s summary=%s",
                     package.prompt_id,
+                    getattr(self.settings, "gemini_model", ""),
+                    tool_call_count,
                     spec.name,
+                    bool(call_id),
+                    thought_signature_present,
                     json.dumps(summary, ensure_ascii=False, sort_keys=True),
                 )
                 tool_events.append(
@@ -384,13 +578,18 @@ class GeminiAgent:
                         "input": deepcopy(tool_input),
                         "summary": summary,
                         "write": bool(spec.allowed_write),
-                        "result": deepcopy(result) if spec.allowed_write else None,
+                        "result": deepcopy(result),
                         "assistant_message": str(result.get("assistant_message") or "").strip(),
                         "executed": bool(result.get("executed", spec.allowed_write is False)),
+                        "session_update": deepcopy(result.get("session_update")) if isinstance(result.get("session_update"), dict) else None,
+                        "thought_signature_present": thought_signature_present,
+                        "thought_signature_preserved": thought_signature_present,
+                        "call_id": call_id,
+                        "raw_model_part": deepcopy(call.get("raw_part") or {}),
                     }
                 )
                 contents.append({"role": "model", "parts": deepcopy(parts)})
-                contents.append({"role": "user", "parts": [self._tool_response_part(spec.name, result)]})
+                contents.append({"role": "user", "parts": [self._tool_response_part(spec.name, result, call_id=call_id)]})
 
     def rewrite_message(
         self,
@@ -428,7 +627,7 @@ class GeminiAgent:
             agent_logger.warning("Gemini rewrite unavailable prompt_id=%s error=%s", package.prompt_id, exc)
             return None
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        reply = str(result.get("reply") or "").strip()
+        reply = self.sanitize_reply(str(result.get("reply") or "").strip())
         if not reply:
             return None
         agent_logger.info(
@@ -464,11 +663,15 @@ class GeminiAgent:
             result = self._run_tool_loop(package=package, session_context=session_context, user_message=user_message)
         except GeminiToolLoopError as exc:
             agent_logger.warning("Gemini chat rejected prompt_id=%s error=%s", package.prompt_id, exc)
+            fallback_reply = ""
+            if "Maximum Gemini tool-call limit reached" in str(exc):
+                fallback_reply = self._workflow_fallback_reply(session_context)
             return {
-                "reply": self._safe_refusal(),
+                "reply": fallback_reply or self._safe_refusal(),
                 "tool_requests": [],
                 "mode": self.settings.ai_agent_mode,
-                "error": str(exc),
+                "error": "" if fallback_reply else str(exc),
+                "warning": str(exc) if fallback_reply else "",
             }
         except GeminiProviderError as exc:
             agent_logger.warning("Gemini chat unavailable prompt_id=%s error=%s", package.prompt_id, exc)
@@ -480,7 +683,12 @@ class GeminiAgent:
             }
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        reply = str(result.get("reply") or "").strip() or self._safe_refusal()
+        reply = self.sanitize_reply(str(result.get("reply") or "").strip()) or self._safe_refusal()
+        reply = self._ground_reply(
+            reply=reply,
+            session_context=session_context,
+            tool_events=list(result.get("tool_requests", []) or []),
+        )
         final_payload = {
             "reply": reply,
             "tool_requests": result.get("tool_requests", []),
@@ -492,10 +700,10 @@ class GeminiAgent:
             "usage_metadata": result.get("usage_metadata") or {},
         }
         agent_logger.info(
-            "Gemini chat final prompt_id=%s response_id=%s elapsed_ms=%s final_answer=%s",
+            "Gemini chat final prompt_id=%s response_id=%s elapsed_ms=%s final_answer_len=%s",
             result.get("prompt_id") or "",
             result.get("response_id") or "",
             elapsed_ms,
-            reply,
+            len(reply),
         )
         return final_payload

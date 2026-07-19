@@ -37,6 +37,22 @@ class TripBooking(db.Model):
     passport_required = db.Column(db.Boolean, default=False)
     passport_status = db.Column(db.String(50))
     booking_notes = db.Column(db.Text)
+    assigned_to = db.Column(db.String(100))
+    assigned_to_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), index=True)
+    assigned_at = db.Column(db.DateTime)
+    assigned_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), index=True)
+    priority = db.Column(db.String(50))
+    next_follow_up_at = db.Column(db.DateTime)
+    next_action = db.Column(db.String(200))
+    last_contact_at = db.Column(db.DateTime)
+    customer_response_status = db.Column(db.String(100))
+
+    assigned_user = db.relationship(
+        'User',
+        foreign_keys=[assigned_to_user_id],
+        back_populates='assigned_bookings',
+    )
+    assigned_by_user = db.relationship('User', foreign_keys=[assigned_by_user_id])
 
     def __repr__(self):
         return f'<TripBooking {self.booking_id} - {self.traveler_name}>'
@@ -78,7 +94,16 @@ class TripBooking(db.Model):
             payment_status=clean(row.get("Payment Status")),
             passport_required=bool(clean(row.get("Passport Required"))) if clean(row.get("Passport Required")) is not None else False,
             passport_status=clean(row.get("Passport Status")),
-            booking_notes=clean(row.get("Booking Notes"))
+            booking_notes=clean(row.get("Booking Notes")),
+            assigned_to=clean(row.get("Assigned To")),
+            assigned_to_user_id=None,
+            assigned_at=None,
+            assigned_by_user_id=None,
+            priority=clean(row.get("Priority")),
+            next_follow_up_at=to_datetime(row.get("Next Follow Up At")),
+            next_action=clean(row.get("Next Action")),
+            last_contact_at=to_datetime(row.get("Last Contact At")),
+            customer_response_status=clean(row.get("Customer Response Status")),
         )
 
     def to_dict(self):
@@ -103,7 +128,17 @@ class TripBooking(db.Model):
             "payment_status": self.payment_status,
             "passport_required": bool(self.passport_required),
             "passport_status": self.passport_status,
-            "booking_notes": self.booking_notes
+            "booking_notes": self.booking_notes,
+            "assigned_to": self.assigned_to,
+            "assigned_to_user_id": self.assigned_to_user_id,
+            "assigned_user": self.assigned_user.display_name if self.assigned_user else None,
+            "assigned_at": self.assigned_at.isoformat() if self.assigned_at else None,
+            "assigned_by_user_id": self.assigned_by_user_id,
+            "priority": self.priority,
+            "next_follow_up_at": self.next_follow_up_at.isoformat() if self.next_follow_up_at else None,
+            "next_action": self.next_action,
+            "last_contact_at": self.last_contact_at.isoformat() if self.last_contact_at else None,
+            "customer_response_status": self.customer_response_status,
         }
 
 class CEBooking(db.Model):

@@ -8,6 +8,7 @@ from typing import Any
 
 from services.ai_agent.ai_agent_app.logger import agent_logger
 from scripts.phase1_readonly_agent import normalize_trip_type
+from services.ai_agent.ai_agent_app.agent.gemini_agent import GeminiAgent
 from services.crm.system_services import UnifiedCRMService
 from services.crm.system_services.phone_normalization import normalize_phone_input
 
@@ -77,7 +78,7 @@ class SessionState:
     phone_normalization: dict[str, Any] = field(default_factory=dict)
     pending_raw_phone: str = ""
     trip_type: str = ""
-    messages: list[dict[str, str]] = field(default_factory=list)
+    messages: list[dict[str, Any]] = field(default_factory=list)
     preview: dict[str, Any] | None = None
     final_result: dict[str, Any] | None = None
     booking_result: dict[str, Any] | None = None
@@ -86,11 +87,14 @@ class SessionState:
     room_type: str = ""
     room_group: str = ""
     group_size: int = 1
+    preferred_date: str = ""
     flight_option: str = ""
     currency: str = ""
     lead_status: str = ""
     booking_status: str = ""
     handoff_state: str = ""
+    booking_confirmation_requested: bool = False
+    booking_confirmed: bool = False
     # Passport fields (populated for international trips)
     passport_name: str = ""
     passport_number: str = ""
@@ -1572,6 +1576,8 @@ class SessionFlowManager:
                     pass
         except Exception as e:
             agent_logger.error(f"Error resolving copy {message_key}: {e}")
+        text = re.sub(r"\{[a-zA-Z0-9_]+\}", "", text or "")
+        text = " ".join(str(text or "").split())
         text = self._maybe_rewrite_with_ai(message_key, text, language)
         agent_logger.debug(f"Resolved copy: {message_key} [{language}] -> {text}")
         agent_logger.info(f"OUTGOING: {text}")
@@ -1579,6 +1585,8 @@ class SessionFlowManager:
 
     def _maybe_rewrite_with_ai(self, message_key: str, text: str, language: str) -> str:
         if not text or not self.conversation_ai or message_key not in _AI_REWRITABLE_MESSAGE_KEYS:
+            return text
+        if isinstance(self.conversation_ai, GeminiAgent):
             return text
         session = self._active_session
         if session is None:

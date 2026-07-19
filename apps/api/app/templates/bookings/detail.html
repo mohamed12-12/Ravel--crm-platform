@@ -33,6 +33,25 @@
             </div>
         </div>
 
+        <!-- Follow-up workspace -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Employee Follow-up</span>
+                {% if booking.next_follow_up_at and is_overdue(booking.next_follow_up_at) %}
+                <span class="badge badge-red">Overdue</span>
+                {% endif %}
+            </div>
+            <div class="work-summary">
+                <div class="work-item"><div class="work-label">Next Action</div><div class="work-value">{{ booking.next_action or 'Review customer response' }}</div></div>
+                <div class="work-item"><div class="work-label">Next Follow-up</div><div class="work-value">{{ booking.next_follow_up_at.strftime('%d %b %Y %H:%M') if booking.next_follow_up_at else 'Not scheduled' }}</div></div>
+                <div class="work-item"><div class="work-label">Owner</div><div class="work-value">{{ assigned_user.display_name if assigned_user else (booking.assigned_to or 'Unassigned') }}</div></div>
+                <div class="work-item"><div class="work-label">Customer Reply</div><div class="work-value">{{ booking.customer_response_status or 'Open' }}</div></div>
+                {% if booking.passport_required and booking.passport_status != 'provided' %}
+                <div class="work-item"><div class="work-label">Required Now</div><div class="work-value">Passport pending</div></div>
+                {% endif %}
+            </div>
+        </div>
+
         <!-- Details -->
         <div class="card">
             <div class="card-title" style="margin-bottom:1rem">📋 Booking Details</div>
@@ -85,12 +104,12 @@
 
         <div class="card">
             <div class="card-header">
-                <span class="card-title">Booking Event Trail</span>
+                <span class="card-title">Activity Timeline</span>
             </div>
             {% if event_trail %}
             <div style="display:flex;flex-direction:column;gap:0.7rem">
                 {% for event in event_trail %}
-                <div style="display:grid;grid-template-columns:9rem 1fr;gap:0.75rem;background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:0.75rem 0.9rem">
+                <div class="timeline-entry">
                     <div style="font-size:0.72rem;color:var(--text-muted)">
                         {{ event.occurred_at.strftime('%d %b %Y %H:%M') if event.occurred_at else 'Pending time' }}
                     </div>
@@ -157,17 +176,22 @@
     <!-- Right: Actions -->
     <div style="display:flex;flex-direction:column;gap:1rem">
         <div class="card">
-            <div class="card-title" style="margin-bottom:1rem">⚡ Update Status</div>
+            <div class="card-title" style="margin-bottom:0.4rem">Update Booking</div>
+            <p style="color:var(--text-muted);font-size:0.78rem;margin:0 0 1rem">Choose the next confirmed change, then save it.</p>
             <form action="{{ url_for('bookings.update_status', booking_id=booking.booking_id) }}" method="POST">
-                <div class="form-group">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="expected_history_count" value="{{ history_count }}">
+                <input type="hidden" name="employee_correction" value="1">
+                <div class="form-group" style="margin-bottom:0.75rem">
                     <label class="form-label">Booking Status</label>
                     <select class="form-select" name="booking_status">
                         {% for s in booking_statuses %}
                         <option value="{{ s }}" {% if booking.booking_status == s %}selected{% endif %}>{{ s }}</option>
                         {% endfor %}
                     </select>
+                    <div style="color:var(--text-muted);font-size:0.72rem;margin-top:0.35rem">All statuses are available for employee corrections. A reason is required when reopening, reversing, or skipping a normal step.</div>
                 </div>
-                <div class="form-group">
+                <div class="form-group" style="margin-bottom:0.75rem">
                     <label class="form-label">Payment Status</label>
                     <select class="form-select" name="payment_status">
                         {% for s in payment_statuses %}
@@ -175,11 +199,56 @@
                         {% endfor %}
                     </select>
                 </div>
-                <div class="form-group">
-                    <label class="form-label">Add Note</label>
-                    <textarea class="form-textarea" name="booking_notes" placeholder="Add a note…">{{ booking.booking_notes or '' }}</textarea>
+                <div class="form-group" style="margin-bottom:0.75rem">
+                    <label class="form-label">Status Change Note</label>
+                    <textarea class="form-textarea" name="booking_notes" rows="2" placeholder="Required only for a non-standard status change"></textarea>
                 </div>
-                <button type="submit" class="btn btn-primary" style="width:100%">Save Changes</button>
+                <label style="display:flex;align-items:center;gap:0.5rem;color:var(--text-dim);font-size:0.8rem;margin:0.25rem 0 0.9rem">
+                    <input type="checkbox" name="mark_contacted" value="1"> Mark customer contacted now
+                </label>
+                <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center">Save Booking Update</button>
+
+                <details style="margin-top:1rem;border-top:1px solid var(--border);padding-top:0.9rem">
+                    <summary style="cursor:pointer;color:var(--text-dim);font-size:0.82rem;font-weight:600">More follow-up details</summary>
+                    <div style="padding-top:1rem">
+                        {% if can_assign %}
+                        <div class="form-group">
+                            <label class="form-label">Assigned Employee</label>
+                            <select class="form-select" name="assigned_to_user_id">
+                                <option value="">Unassigned</option>
+                                {% for employee in employees %}
+                                <option value="{{ employee.id }}" {% if booking.assigned_to_user_id == employee.id %}selected{% endif %}>{{ employee.display_name }} · {{ employee.role }}</option>
+                                {% endfor %}
+                            </select>
+                            {% if booking.assigned_to and not assigned_user %}<div style="color:var(--text-muted);font-size:0.72rem;margin-top:0.35rem">Legacy owner text: {{ booking.assigned_to }}. Choose an employee to link it.</div>{% endif %}
+                        </div>
+                        {% endif %}
+                        <div class="form-group">
+                            <label class="form-label">Priority</label>
+                            <select class="form-select" name="priority">
+                                {% for p in ['High','Medium','Low'] %}
+                                <option value="{{ p }}" {% if (booking.priority or 'Medium') == p %}selected{% endif %}>{{ p }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Next Action</label>
+                            <input class="form-input" type="text" name="next_action" value="{{ booking.next_action or '' }}" placeholder="Call customer, verify payment, request passport">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Next Follow-up</label>
+                            <input class="form-input" type="datetime-local" name="next_follow_up_at" value="{{ booking.next_follow_up_at.strftime('%Y-%m-%dT%H:%M') if booking.next_follow_up_at else '' }}">
+                        </div>
+                        <div class="form-group" style="margin-bottom:0">
+                            <label class="form-label">Customer Response</label>
+                            <select class="form-select" name="customer_response_status">
+                                {% for s in ['Open','Contacted','Waiting Customer','No Answer','Resolved'] %}
+                                <option value="{{ s }}" {% if (booking.customer_response_status or 'Open') == s %}selected{% endif %}>{{ s }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                </details>
             </form>
         </div>
 
@@ -197,6 +266,27 @@
                 {% endif %}
             </div>
         </div>
+
+        {% if assigned_history %}
+        <div class="card">
+            <div class="card-header"><span class="card-title">Assignment History</span></div>
+            <div style="display:flex;flex-direction:column;gap:0.5rem">
+                {% for item in assigned_history %}
+                <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;padding:0.65rem 0.75rem;font-size:0.78rem">
+                    <div style="color:var(--text-main);font-weight:700">
+                        {{ item.new_user.display_name if item.new_user else 'Unassigned' }}
+                        <span style="color:var(--text-muted);font-weight:400">from {{ item.previous_user.display_name if item.previous_user else 'Unassigned' }}</span>
+                    </div>
+                    <div style="color:var(--text-muted);margin-top:0.2rem">
+                        {{ item.assigned_by_user.display_name if item.assigned_by_user else 'System' }}
+                        · {{ item.created_at.strftime('%d %b %Y %H:%M') if item.created_at else 'Unknown time' }}
+                        {% if item.reason %} · {{ item.reason }}{% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

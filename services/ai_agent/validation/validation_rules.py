@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from services.crm.system_services.unified_service import (
     ARCHIVED_TRAVELER_STATUSES,
     BLOCKED_STATUSES,
@@ -31,13 +33,58 @@ VALID_FLIGHT_OPTION_MAP = {
     "with flights": "With Flight",
     "flight included": "With Flight",
     "include flights": "With Flight",
+    "include flight": "With Flight",
+    "with": "With Flight",
     "yes": "With Flight",
+    "مع طيران": "With Flight",
+    "شامل طيران": "With Flight",
+    "اريد طيران": "With Flight",
+    "اريد الرحلة شاملة الطيران": "With Flight",
+    "أريد طيران": "With Flight",
+    "أريد الرحلة شاملة الطيران": "With Flight",
     "without flight": "Without Flight",
     "without flights": "Without Flight",
+    "without": "Without Flight",
+    "witout": "Without Flight",
     "no flight": "Without Flight",
     "no flights": "Without Flight",
     "no": "Without Flight",
+    "لا": "Without Flight",
     "exclude flights": "Without Flight",
+    "بدون طيران": "Without Flight",
+    "من غير طيران": "Without Flight",
+    "لا اريد طيران": "Without Flight",
+    "لا اريد الرحلة شاملة الطيران": "Without Flight",
+    "لا أريد طيران": "Without Flight",
+    "لا أريد الرحلة شاملة الطيران": "Without Flight",
+    "مش عايز طيران": "Without Flight",
+    "مش عايزة طيران": "Without Flight",
+}
+TRIP_TYPE_ALIASES = {
+    "1": "local",
+    "local": "local",
+    "loc": "local",
+    "loca": "local",
+    "domestic": "local",
+    "\u0645\u062d\u0644\u064a": "local",
+    "\u0645\u062d\u0644\u064a\u0647": "local",
+    "\u062f\u0627\u062e\u0644\u064a": "local",
+    "\u062f\u0627\u062e\u0644\u064a\u0647": "local",
+    "2": "international",
+    "int": "international",
+    "intl": "international",
+    "international": "international",
+    "inter": "international",
+    "abroad": "international",
+    "overseas": "international",
+    "umrah": "international",
+    "hajj": "international",
+    "\u062f\u0648\u0644\u064a": "international",
+    "\u062f\u0648\u0644\u064a\u0647": "international",
+    "\u062e\u0627\u0631\u062c\u064a": "international",
+    "\u062e\u0627\u0631\u062c\u064a\u0647": "international",
+    "\u0639\u0645\u0631\u0647": "international",
+    "\u062d\u062c": "international",
 }
 HANDOFF_CONFIDENCE_THRESHOLD = 0.5
 HANDOFF_VALIDATION_FAILURE_THRESHOLD = 2
@@ -62,9 +109,28 @@ VALID_BOOKING_STATUSES = set(BOOKING_LIFECYCLE_STATUSES)
 
 
 def normalize_flight_option(value: str | None) -> str:
-    lowered = str(value or "").strip().casefold()
+    lowered = re.sub(r"\s+", " ", str(value or "").strip().casefold())
     if not lowered:
         return ""
     if lowered in VALID_FLIGHT_OPTION_MAP:
         return VALID_FLIGHT_OPTION_MAP[lowered]
+    return ""
+
+
+def normalize_trip_type(value: str | None) -> str:
+    """Map clear Arabic/English trip-type intent to the CRM values."""
+
+    normalized = re.sub(r"[\u064b-\u065f\u0670]", "", str(value or "").casefold())
+    normalized = normalized.translate(str.maketrans({"\u0623": "\u0627", "\u0625": "\u0627", "\u0622": "\u0627", "\u0649": "\u064a", "\u0629": "\u0647"}))
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized:
+        return ""
+    if normalized in TRIP_TYPE_ALIASES:
+        return TRIP_TYPE_ALIASES[normalized]
+
+    for alias, trip_type in TRIP_TYPE_ALIASES.items():
+        if len(alias) < 3:
+            continue
+        if re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", normalized):
+            return trip_type
     return ""

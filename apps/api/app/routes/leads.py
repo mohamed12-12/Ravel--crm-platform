@@ -1,5 +1,6 @@
 # app/routes/leads.py
 import re
+from pathlib import Path
 
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash
 from app.models.lead import Lead
@@ -8,12 +9,21 @@ from app.models.traveler import Traveler
 from app.models.interaction import Interaction
 from app.models.booking_event import BookingEventTrail
 from app.models.handoff import HandoffQueue
+from app.models.user import User
+from app.services.assignments import (
+    active_assignees,
+    apply_assignment,
+    assignment_history,
+    exact_legacy_user,
+    resolve_user_id,
+)
 from app.extensions import db, socketio
 from sqlalchemy import or_
 from datetime import datetime, date, timezone
 import uuid
 from services.crm.system_services import UnifiedCRMService
 from services.crm.system_services.phone_normalization import normalize_phone_input
+from app.security import current_actor, current_role, current_user, current_user_id, has_permission
 
 leads_bp = Blueprint('leads', __name__, url_prefix='/leads')
 
@@ -59,6 +69,7 @@ PIPELINE_TRANSITIONS = {
     'Lost': set(),
     'Handoff Needed': {'Contacted', 'Qualified', 'Waiting Customer Reply', 'Proposal Sent', 'Booking Draft', 'Won', 'Lost'},
 }
+EMPLOYEE_LEAD_STAGES = set(PIPELINE_STAGES)
 
 PIPELINE_GROUPS = {
     'New Lead': ['New Lead', 'New', 'New Inquiry', 'Existing Traveler'],
@@ -71,6 +82,52 @@ PIPELINE_GROUPS = {
     'Lost': ['Lost'],
     'Handoff Needed': ['Handoff Needed', 'Needs Review', 'Blocked'],
 }
+
+
+STEP_LABELS = {
+    'booking_ready': 'Ready to create booking draft',
+    'traveler_not_found': 'Collect new traveler details',
+    'lead_qualification': 'Qualify travel request',
+    'create_lead': 'Create lead record',
+    'collect_trip_type': 'Confirm trip type',
+    'select_trip': 'Select a trip',
+    'collect_traveler_gender': 'Confirm traveler group',
+    'collect_room_type': 'Select room type',
+    'collect_group_size': 'Confirm group size',
+    'collect_flight_preference': 'Confirm flight preference',
+    'collect_passport_attachment': 'Request passport attachment',
+    'create_capacity_handoff': 'Arrange capacity review',
+}
+
+
+def _display_text(value: object, fallback: str = '-') -> str:
+    """Repair legacy UTF-8-as-Latin-1 text for display without altering CRM data."""
+    text = str(value or '').strip()
+    if not text:
+        return fallback
+    try:
+        repaired = text.encode('latin-1').decode('utf-8')
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+    return repaired if repaired else text
+
+
+def _display_step(value: object) -> str:
+    raw = _display_text(value, fallback='')
+    if not raw:
+        return 'No next action recorded'
+    if raw in STEP_LABELS:
+        return STEP_LABELS[raw]
+    if re.fullmatch(r'[a-z0-9_]+', raw):
+        return raw.replace('_', ' ').title()
+    return raw
+
+
+def _display_source(value: object) -> str:
+    """Render legacy source labels as plain text for the lead list."""
+    source = _display_text(value, fallback="")
+    source = re.sub(r"^[^\w]+[-:\s]*", "", source).strip()
+    return source or "Unknown"
 
 
 def _phone_match_filter(service: UnifiedCRMService, phone_info: dict[str, str]):
@@ -95,14 +152,44 @@ def _allowed_transitions(stage: str) -> set[str]:
     return PIPELINE_TRANSITIONS.get(stage, set())
 
 
-def _validate_lead_transition(current_stage: str | None, new_stage: str | None) -> None:
+def _validate_lead_transition(
+    current_stage: str | None,
+    new_stage: str | None,
+    *,
+    allow_employee_correction: bool = False,
+    correction_note: str = '',
+) -> None:
     current = _canonical_stage(current_stage)
     target = _canonical_stage(new_stage)
     if target == current:
         return
     allowed = _allowed_transitions(current)
     if target not in allowed:
+        if allow_employee_correction and target in EMPLOYEE_LEAD_STAGES:
+            if not correction_note.strip():
+                raise ValueError(
+                    'Add a reason before reopening or correcting a lead stage.'
+                )
+            return
         raise ValueError(f"Invalid lead stage transition: {current} -> {target}")
+
+
+def _parse_date(v):
+    if not v:
+        return None
+    try:
+        return datetime.strptime(v, '%Y-%m-%d').date()
+    except Exception:
+        return None
+
+
+def _append_note(existing: str | None, note: str, actor: str) -> str | None:
+    clean_note = (note or '').strip()
+    if not clean_note:
+        return existing
+    stamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat(sep=' ')
+    entry = f"[{stamp} by {actor}] {clean_note}"
+    return f"{existing.rstrip()}\n{entry}" if existing else entry
 
 
 @leads_bp.route('/')
@@ -110,6 +197,8 @@ def index():
     q = request.args.get('q', '')
     stage = request.args.get('stage', '')
     priority = request.args.get('priority', '')
+    queue = request.args.get('queue', '')
+    employee_id = request.args.get('employee_id', type=int)
     page = request.args.get('page', 1, type=int)
     per_page = 25
 
@@ -126,13 +215,38 @@ def index():
         query = query.filter(Lead.lead_stage.in_(PIPELINE_GROUPS[stage]))
     if priority:
         query = query.filter(Lead.priority == priority)
+    today = date.today()
+    if queue == 'assigned_to_me':
+        query = query.filter(Lead.assigned_to_user_id == current_user_id())
+    elif employee_id and has_permission('view_all'):
+        query = query.filter(Lead.assigned_to_user_id == employee_id)
+    elif queue == 'unassigned':
+        query = query.filter(Lead.assigned_to_user_id.is_(None))
+    elif queue == 'inactive_owner':
+        query = query.filter(Lead.assigned_user.has(User.is_active.is_(False)))
+    elif queue == 'overdue':
+        query = query.filter(Lead.follow_up_due_date < today)
+    elif queue == 'today':
+        query = query.filter(Lead.follow_up_due_date == today)
+    elif queue == 'waiting_customer':
+        query = query.filter(Lead.lead_stage.in_(PIPELINE_GROUPS['Waiting Customer Reply']))
+    elif queue == 'new':
+        query = query.filter(Lead.lead_stage.in_(PIPELINE_GROUPS['New Lead']))
+    elif queue == 'high_priority':
+        query = query.filter(Lead.priority.in_(['High', 'Critical']))
+    elif queue == 'documents_missing':
+        query = query.filter(Lead.passport_status == 'pending')
+    elif queue == 'handoff_required':
+        query = query.filter(Lead.handoff_required == True)
 
-    pagination = query.order_by(Lead.created_at.desc()).paginate(
+    pagination = query.order_by(
+        db.func.coalesce(Lead.updated_at, Lead.created_at).desc(),
+        Lead.created_at.desc(),
+    ).paginate(
         page=page, per_page=per_page, error_out=False)
     leads = pagination.items
 
     # Compute new clear analytics counters
-    today = date.today()
     total_count = Lead.query.count()
     new_today_count = Lead.query.filter(db.func.date(Lead.created_at) == today).count()
     qualified_count = Lead.query.filter(Lead.lead_stage.in_(PIPELINE_GROUPS['Qualified'])).count()
@@ -164,9 +278,16 @@ def index():
                            q=q,
                            current_stage=stage,
                            current_priority=priority,
+                           current_queue=queue,
+                           current_employee_id=employee_id,
+                           employees=active_assignees() if has_permission('view_all') else [],
+                           can_assign=has_permission('assign_work'),
                            available_trips=available_trips,
                            stages=PIPELINE_STAGES,
                            stage_aliases=PIPELINE_ALIASES,
+                           display_text=_display_text,
+                           display_step=_display_step,
+                           display_source=_display_source,
                            today=today)
 
 
@@ -174,6 +295,7 @@ def index():
 def detail(lead_id):
     lead = db.get_or_404(Lead, lead_id)
     traveler = db.session.get(Traveler, lead.traveler_id) if lead.traveler_id else None
+    passport_file_name = Path(lead.passport_attachment_ref).name if lead.passport_attachment_ref else ""
     commercial_context = UnifiedCRMService.resolve_commercial_context(
         traveler=traveler.to_dict() if traveler else None,
         trip_type=lead.preferred_trip_type,
@@ -194,13 +316,20 @@ def detail(lead_id):
             BookingEventTrail.traveler_id == lead.traveler_id,
         )
     ).order_by(BookingEventTrail.occurred_at.asc()).all()
+    assigned_history = assignment_history('lead', lead.lead_id)
     return render_template('leads/detail.html',
                            lead=lead,
                            traveler=traveler,
+                           passport_file_name=passport_file_name,
                            commercial_context=commercial_context,
                            interactions=interactions,
                            event_trail=event_trail,
-                           stages=PIPELINE_STAGES)
+                           assigned_history=assigned_history,
+                           employees=active_assignees(),
+                           can_assign=has_permission('assign_work'),
+                           assigned_user=lead.assigned_user,
+                           stages=PIPELINE_STAGES,
+                           today=date.today())
 
 
 @leads_bp.route('/', methods=['POST'])
@@ -257,6 +386,23 @@ def create():
     # 4. Synchronize Flask-SQLAlchemy session cache to ensure the SQLite inserts (done via direct SQL) are fully loaded
     db.session.commit()
     db.session.expire_all()
+    created_lead = db.session.get(Lead, lead_id)
+    if created_lead:
+        if data.get('current_step'):
+            created_lead.current_step = data.get('current_step')
+        if data.get('assigned_to_user_id') and not has_permission('assign_work'):
+            flash('You do not have permission to assign leads.', 'error')
+            return redirect(url_for('leads.index'))
+        if data.get('assigned_to_user_id'):
+            apply_assignment(
+                created_lead,
+                resource_type='lead',
+                resource_id=created_lead.lead_id,
+                new_user_id=resolve_user_id(data.get('assigned_to_user_id'), allow_blank=False),
+                actor=current_user(),
+                reason=data.get('assignment_reason', ''),
+            )
+        db.session.commit()
 
     if preview.get("handoff_required"):
         traveler_dict = preview.get("traveler") or {}
@@ -315,14 +461,34 @@ def update(lead_id):
 
     lead = db.get_or_404(Lead, lead_id)
     data = request.form.to_dict()
-
-    def to_date(v):
-        if not v:
-            return None
+    expected_updated_at = (data.get('expected_updated_at') or '').strip()
+    current_updated_at = lead.updated_at.isoformat() if lead.updated_at else ''
+    if expected_updated_at and expected_updated_at != current_updated_at:
+        flash('Booking was updated by another employee', 'error')
+        return redirect(url_for('leads.detail', lead_id=lead_id))
+    actor = current_actor()
+    previous_stage = _canonical_stage(lead.lead_stage)
+    stage_change_reason = (data.get('stage_change_reason') or '').strip()
+    employee_correction = (
+        str(data.get('employee_correction') or '').strip().lower() in {'1', 'true', 'yes'}
+    )
+    assignment_requested = 'assigned_to_user_id' in data or 'assigned_to' in data
+    requested_user_id = lead.assigned_to_user_id
+    if assignment_requested:
+        if not has_permission('assign_work'):
+            flash('You do not have permission', 'error')
+            return redirect(url_for('leads.detail', lead_id=lead_id))
         try:
-            return datetime.strptime(v, '%Y-%m-%d').date()
-        except Exception:
-            return None
+            if 'assigned_to_user_id' in data:
+                requested_user_id = resolve_user_id(data.get('assigned_to_user_id'))
+            else:
+                legacy_user = exact_legacy_user(data.get('assigned_to'), include_inactive=False)
+                if data.get('assigned_to', '').strip() and not legacy_user:
+                    raise ValueError('Choose an active employee from the list')
+                requested_user_id = legacy_user.id if legacy_user else None
+        except ValueError as exc:
+            flash(str(exc), 'error')
+            return redirect(url_for('leads.detail', lead_id=lead_id))
 
     lead.customer_name = data.get('customer_name', lead.customer_name)
     
@@ -358,7 +524,12 @@ def update(lead_id):
     if data.get('lead_stage'):
         next_stage = _canonical_stage(data.get('lead_stage'))
         try:
-            _validate_lead_transition(lead.lead_stage, next_stage)
+            _validate_lead_transition(
+                lead.lead_stage,
+                next_stage,
+                allow_employee_correction=employee_correction,
+                correction_note=stage_change_reason,
+            )
         except ValueError as exc:
             flash(str(exc), 'error')
             return redirect(url_for('leads.detail', lead_id=lead_id))
@@ -372,13 +543,54 @@ def update(lead_id):
     if data.get('current_step'):
         lead.current_step = data.get('current_step')
     lead.follow_up_status = data.get('follow_up_status', lead.follow_up_status)
-    lead.follow_up_due_date = to_date(data.get('follow_up_due_date')) or lead.follow_up_due_date
+    lead.follow_up_due_date = _parse_date(data.get('follow_up_due_date')) or lead.follow_up_due_date
+    if assignment_requested:
+        apply_assignment(
+            lead,
+            resource_type='lead',
+            resource_id=lead.lead_id,
+            new_user_id=requested_user_id,
+            actor=current_user(),
+            reason=data.get('assignment_reason', ''),
+        )
+    if data.get('customer_response_status'):
+        lead.customer_response_status = data.get('customer_response_status')
+    if data.get('mark_contacted') == '1':
+        lead.last_contact_at = datetime.now(timezone.utc).replace(microsecond=0)
+        lead.customer_response_status = lead.customer_response_status or 'Contacted'
     lead.updated_at = datetime.now(timezone.utc)
     if data.get('booking_id'):
         lead.booking_id = data.get('booking_id')
 
     db.session.commit()
-    flash('Lead updated.', 'success')
+    try:
+        stage_changed = previous_stage != _canonical_stage(lead.lead_stage)
+        event_notes = data.get('notes', '') or lead.current_step or 'Lead updated from CRM'
+        if stage_changed:
+            event_notes = f"Lead stage changed: {previous_stage} -> {lead.lead_stage}."
+            if stage_change_reason:
+                event_notes = f"{event_notes} Reason: {stage_change_reason}"
+        UnifiedCRMService().create_booking_event(
+            event_type="lead_follow_up_updated",
+            event_label="Lead follow-up updated",
+            traveler_id=lead.traveler_id or '',
+            lead_id=lead.lead_id,
+            trip_id=(lead.interested_trip_ids or lead.suggested_trip_ids or '').split(',')[0].strip(),
+            channel=lead.channel or 'crm-ui',
+            actor=actor,
+            notes=event_notes,
+            metadata={
+                "previous_lead_stage": previous_stage,
+                "lead_stage": lead.lead_stage,
+                "stage_change_reason": stage_change_reason,
+                "follow_up_status": lead.follow_up_status,
+                "follow_up_due_date": lead.follow_up_due_date.isoformat() if lead.follow_up_due_date else "",
+                "assigned_to": lead.assigned_to or "",
+            },
+        )
+    except Exception:
+        pass
+    flash('Changes saved', 'success')
     return redirect(url_for('leads.detail', lead_id=lead_id))
 
 
@@ -408,6 +620,87 @@ def advance_stage(lead_id):
         lead.updated_at = datetime.now(timezone.utc)
         db.session.commit()
     return jsonify({'status': 'ok', 'new_stage': lead.lead_stage})
+
+
+@leads_bp.route('/<string:lead_id>/quick-action', methods=['POST'])
+def quick_action(lead_id):
+    lead = db.get_or_404(Lead, lead_id)
+    data = request.get_json(silent=True) or request.form.to_dict()
+    action = (data.get('action') or '').strip()
+    note = (data.get('note') or '').strip()
+    actor = current_actor()
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+
+    action_map = {
+        'mark_contacted': {
+            'stage': 'Contacted',
+            'follow_up_status': 'Contacted',
+            'current_step': 'Send trip details',
+            'customer_response_status': 'Contacted',
+            'last_contact_at': now,
+        },
+        'waiting_customer': {
+            'stage': 'Waiting Customer Reply',
+            'follow_up_status': 'Awaiting customer reply',
+            'current_step': 'Wait for customer response',
+            'customer_response_status': 'Waiting Customer',
+        },
+        'request_documents': {
+            'stage': _canonical_stage(lead.lead_stage),
+            'follow_up_status': 'Documents requested',
+            'current_step': 'Request passport or missing documents',
+            'customer_response_status': 'Waiting Customer',
+            'passport_status': lead.passport_status or 'pending',
+        },
+        'request_deposit': {
+            'stage': 'Proposal Sent',
+            'follow_up_status': 'Awaiting Deposit',
+            'current_step': 'Request deposit',
+            'customer_response_status': 'Waiting Customer',
+        },
+        'escalate_handoff': {
+            'stage': 'Handoff Needed',
+            'follow_up_status': 'Needs human review',
+            'current_step': 'Escalate to human support',
+            'handoff_required': True,
+        },
+    }
+    if action not in action_map:
+        return jsonify({'error': 'Invalid quick action'}), 400
+
+    patch = action_map[action]
+    target_stage = patch.get('stage')
+    try:
+        _validate_lead_transition(lead.lead_stage, target_stage)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    lead.lead_stage = target_stage
+    lead.follow_up_status = patch.get('follow_up_status', lead.follow_up_status)
+    lead.current_step = patch.get('current_step', lead.current_step)
+    lead.customer_response_status = patch.get('customer_response_status', lead.customer_response_status)
+    lead.last_contact_at = patch.get('last_contact_at', lead.last_contact_at)
+    lead.passport_status = patch.get('passport_status', lead.passport_status)
+    lead.handoff_required = patch.get('handoff_required', lead.handoff_required)
+    if data.get('follow_up_due_date'):
+        lead.follow_up_due_date = _parse_date(data.get('follow_up_due_date'))
+    lead.notes = _append_note(lead.notes, note, actor) if note else lead.notes
+    lead.updated_at = now
+    db.session.commit()
+
+    event = UnifiedCRMService().create_booking_event(
+        event_type="lead_quick_action",
+        event_label="Lead quick action",
+        traveler_id=lead.traveler_id or '',
+        lead_id=lead.lead_id,
+        trip_id=(lead.interested_trip_ids or lead.suggested_trip_ids or '').split(',')[0].strip(),
+        channel=lead.channel or 'crm-ui',
+        actor=actor,
+        notes=note or patch.get('current_step', ''),
+        metadata={"action": action, "lead_stage": lead.lead_stage},
+        occurred_at=now,
+    )
+    return jsonify({'status': 'ok', 'lead_stage': lead.lead_stage, 'event_id': event['event_id']})
 
 
 @leads_bp.route('/<string:lead_id>/handoff', methods=['POST'])

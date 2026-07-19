@@ -103,8 +103,11 @@ async function retrySync(mapping_name, record_id, event) {
     try {
         const res = await fetch("{{ url_for('admin.retry_sync') }}", {
             method: "POST",
+            credentials: "same-origin",
             headers: {
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "X-CSRF-Token": window.CRM_CSRF_TOKEN
             },
             body: JSON.stringify({ mapping_name, record_id })
         });

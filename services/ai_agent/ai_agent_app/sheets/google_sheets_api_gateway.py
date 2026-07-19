@@ -209,13 +209,11 @@ class GoogleSheetsApiGateway(ExcelSheetGateway):
 
     def get_demo_stats(self) -> dict[str, Any]:
         with self._lock:
-            wb = self._make_wb("Travelers", "Interactions", "Leads", "Trips")
-            return get_demo_stats_from_wb(wb)
+            return super().get_demo_stats()
 
     def crm_preview(self, limit: int = 15) -> list[dict[str, Any]]:
         with self._lock:
-            wb = self._make_wb("Travelers")
-            return crm_preview_from_wb(wb, limit=limit)
+            return super().crm_preview(limit=limit)
 
     def run_sales_cycle(
         self,
@@ -320,4 +318,11 @@ class GoogleSheetsApiGateway(ExcelSheetGateway):
             )
             if result:
                 self._invalidate("Travelers")
+            return result
+
+    def sync_live_agent_lead(self, lead_id: str, **payload: Any) -> dict[str, Any]:
+        with self._lock:
+            result = super().sync_live_agent_lead(lead_id, **payload)
+            if result:
+                self._invalidate("Leads", "Booking Event Trail")
             return result

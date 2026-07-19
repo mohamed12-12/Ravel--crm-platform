@@ -32,6 +32,20 @@ def build_read_only_tool_registry() -> dict[str, ToolSpec]:
             },
             output_schema={"type": "object"},
         ),
+        "find_traveler_by_phone": ToolSpec(
+            name="find_traveler_by_phone",
+            description="Normalize a phone number, search the CRM, and return a safe traveler match result.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "raw_phone": {"type": "string"},
+                    "country_code": {"type": "string"},
+                },
+                "required": ["raw_phone"],
+            },
+            output_schema={"type": "object"},
+            metadata={"workflow_prerequisites": ["valid_phone"]},
+        ),
         "get_traveler_profile": ToolSpec(
             name="get_traveler_profile",
             description="Return a traveler profile by traveler_id or phone.",
@@ -44,6 +58,21 @@ def build_read_only_tool_registry() -> dict[str, ToolSpec]:
                 },
             },
             output_schema={"type": "object"},
+            metadata={"workflow_prerequisites": ["traveler_verified"]},
+        ),
+        "get_traveler_trip_history": ToolSpec(
+            name="get_traveler_trip_history",
+            description="Return a safe summary of a traveler's trip history from CRM and booking data.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "traveler_id": {"type": "string"},
+                    "raw_phone": {"type": "string"},
+                    "country_code": {"type": "string"},
+                },
+            },
+            output_schema={"type": "object"},
+            metadata={"workflow_prerequisites": ["traveler_verified"]},
         ),
         "search_trips": ToolSpec(
             name="search_trips",
@@ -57,6 +86,24 @@ def build_read_only_tool_registry() -> dict[str, ToolSpec]:
             },
             output_schema={"type": "object"},
         ),
+        "search_available_trips": ToolSpec(
+            name="search_available_trips",
+            description="Search available trips with CRM rules and common trip filters.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "trip_type": {"type": "string"},
+                    "destination": {"type": "string"},
+                    "query": {"type": "string"},
+                    "preferred_date": {"type": "string"},
+                    "travelers": {"type": "string"},
+                    "flight_option": {"type": "string"},
+                    "room_type": {"type": "string"},
+                },
+            },
+            output_schema={"type": "object"},
+            metadata={"workflow_prerequisites": ["traveler_verified"]},
+        ),
         "get_trip_details": ToolSpec(
             name="get_trip_details",
             description="Return the CRM details for one trip.",
@@ -66,6 +113,18 @@ def build_read_only_tool_registry() -> dict[str, ToolSpec]:
                 "required": ["trip_id"],
             },
             output_schema={"type": "object"},
+            metadata={"workflow_prerequisites": ["traveler_verified"]},
+        ),
+        "get_trip_media": ToolSpec(
+            name="get_trip_media",
+            description="Return verified official CRM trip images for one selected trip. This tool is read-only and never uploads or modifies media.",
+            input_schema={
+                "type": "object",
+                "properties": {"trip_id": {"type": "string"}},
+                "required": ["trip_id"],
+            },
+            output_schema={"type": "object"},
+            metadata={"workflow_prerequisites": ["traveler_verified", "selected_trip"]},
         ),
         "get_booking_status": ToolSpec(
             name="get_booking_status",
@@ -111,53 +170,67 @@ def build_read_only_tool_registry() -> dict[str, ToolSpec]:
     return registry
 
 
-def build_agent_tool_registry(*, include_write_tools: bool = False) -> dict[str, ToolSpec]:
+def build_tool_calling_registry() -> dict[str, ToolSpec]:
     registry = build_read_only_tool_registry()
-    registry["validate_business_action"] = ToolSpec(
-        name="validate_business_action",
-        description=(
-            "Validate whether a future CRM action would be allowed. "
-            "This tool never writes to CRM and only returns APPROVED, REJECTED, or NEED_MORE_INFORMATION."
-        ),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": [
-                        "create_traveler",
-                        "update_traveler",
-                        "create_lead",
-                        "update_lead_stage",
-                        "create_booking_draft",
-                        "update_booking",
-                        "upload_passport",
-                        "create_handoff",
-                    ],
+    allowed = {
+        "find_traveler_by_phone",
+        "get_traveler_profile",
+        "get_traveler_trip_history",
+        "search_available_trips",
+        "get_trip_details",
+        "get_trip_media",
+    }
+    return {name: spec for name, spec in registry.items() if name in allowed}
+
+
+def build_agent_tool_registry(*, include_write_tools: bool = False, include_validation_tool: bool = True) -> dict[str, ToolSpec]:
+    registry = build_read_only_tool_registry()
+    if include_validation_tool:
+        registry["validate_business_action"] = ToolSpec(
+            name="validate_business_action",
+            description=(
+                "Validate whether a future CRM action would be allowed. "
+                "This tool never writes to CRM and only returns APPROVED, REJECTED, or NEED_MORE_INFORMATION."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "create_traveler",
+                            "update_traveler",
+                            "create_lead",
+                            "update_lead_stage",
+                            "create_booking_draft",
+                            "update_booking",
+                            "upload_passport",
+                            "create_handoff",
+                        ],
+                    },
+                    "traveler_id": {"type": "string"},
+                    "lead_id": {"type": "string"},
+                    "booking_id": {"type": "string"},
+                    "trip_id": {"type": "string"},
+                    "raw_phone": {"type": "string"},
+                    "country_code": {"type": "string"},
+                    "full_name": {"type": "string"},
+                    "room_type": {"type": "string"},
+                    "requested_stage": {"type": "string"},
+                    "payment_status": {"type": "string"},
+                    "flight_option": {"type": "string"},
+                    "currency": {"type": "string"},
+                    "booking_notes": {"type": "string"},
+                    "passport_attachment_ref": {"type": "string"},
+                    "user_requested_human": {"type": "boolean"},
+                    "ai_confidence": {"type": "number"},
+                    "validation_failures": {"type": "integer"},
+                    "repeated_validation_failures": {"type": "integer"},
                 },
-                "traveler_id": {"type": "string"},
-                "lead_id": {"type": "string"},
-                "booking_id": {"type": "string"},
-                "trip_id": {"type": "string"},
-                "raw_phone": {"type": "string"},
-                "country_code": {"type": "string"},
-                "full_name": {"type": "string"},
-                "room_type": {"type": "string"},
-                "requested_stage": {"type": "string"},
-                "payment_status": {"type": "string"},
-                "flight_option": {"type": "string"},
-                "currency": {"type": "string"},
-                "booking_notes": {"type": "string"},
-                "passport_attachment_ref": {"type": "string"},
-                "user_requested_human": {"type": "boolean"},
-                "ai_confidence": {"type": "number"},
-                "validation_failures": {"type": "integer"},
-                "repeated_validation_failures": {"type": "integer"},
+                "required": ["action"],
             },
-            "required": ["action"],
-        },
-        output_schema={"type": "object"},
-    )
+            output_schema={"type": "object"},
+        )
     if include_write_tools:
         from services.ai_agent.ai_agent_app.agent.write_tool_registry import build_write_tool_registry
 

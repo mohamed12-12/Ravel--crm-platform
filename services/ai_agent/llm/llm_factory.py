@@ -16,6 +16,6 @@ def build_llm_provider(settings: Settings | dict[str, Any]) -> GeminiProvider | 
         api_key = settings.gemini_api_key
         model = settings.gemini_model
 
-    if mode != "gemini" or not api_key:
+    if mode not in {"gemini", "tool_calling"} or not api_key:
         return None
     return GeminiProvider(api_key=api_key, model=model, timeout_seconds=20.0, retries=1)

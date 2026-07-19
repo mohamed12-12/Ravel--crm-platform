@@ -184,6 +184,33 @@ button:disabled, input:disabled { opacity: 0.5; cursor: not-allowed; filter: non
 }
 
 /* ── FORMS & QUICK ACTIONS ──────────────────────────── */
+.chat-media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.7rem;
+  margin-top: 0.75rem;
+}
+.chat-media {
+  display: block;
+  overflow: hidden;
+  border-radius: 0.65rem;
+  border: 1px solid var(--border);
+  background: rgba(0,0,0,0.25);
+  color: var(--text-dim);
+}
+.chat-media img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+}
+.chat-media span {
+  display: block;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
 .intake-form { background: rgba(17,24,39,0.85); border: 1px solid var(--border-act); border-radius: 1rem; padding: 1.5rem; box-shadow: 0 10px 30px rgba(0,0,0,0.5); margin-bottom: 1rem; }
 .form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; }
 .form-grid label { display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.78rem; font-weight: 600; color: var(--text-dim); }

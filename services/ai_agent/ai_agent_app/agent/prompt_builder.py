@@ -45,6 +45,13 @@ class PromptBuilder:
             "conversation_history": conversation_history or [],
             "crm_context": crm_context or {},
             "base_message": base_text,
+            "grounding_policy": {
+                "crm_is_source_of_truth": True,
+                "workflow_policy_is_authoritative": True,
+                "never_infer_traveler_status_from_model_text": True,
+                "only_state_trip_facts_from_crm_context_or_tool_results": True,
+                "do_not_mix_customer_preferences_with_verified_crm_facts": True,
+            },
             "available_tools": list(self.tool_registry.keys()),
             "output_contract": {
                 "type": "plain_text",
@@ -53,6 +60,9 @@ class PromptBuilder:
                     "Do not invent facts.",
                     "Do not change the workflow step.",
                     "Keep the reply concise and conversational.",
+                    "Use plain text only: no Markdown emphasis, asterisks, backticks, or code fences.",
+                    "Put each list item on its own line and use 1), 2), 3) numbering.",
+                    "Ask one question per turn.",
                 ],
             },
         }
@@ -81,6 +91,17 @@ class PromptBuilder:
             "session_context": session_context or {},
             "conversation_history": conversation_history or [],
             "crm_context": crm_context or {},
+            "grounding_policy": {
+                "crm_is_source_of_truth": True,
+                "workflow_policy_is_authoritative": True,
+                "never_infer_traveler_status_from_model_text": True,
+                "only_state_trip_facts_from_crm_context_or_tool_results": True,
+                "do_not_mix_customer_preferences_with_verified_crm_facts": True,
+                "if_workflow_blocks_a_tool_use_the_blocked_result_message": True,
+                "plain_text_customer_format": True,
+                "numbered_lists_use_parenthesis": True,
+                "one_question_per_turn": True,
+            },
             "available_tools": list(self.tool_registry.keys()),
             "output_contract": {
                 "type": "json",

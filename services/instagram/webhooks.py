@@ -56,6 +56,6 @@ def verify_webhook(verify_token: str):
             webhook_logger.info("Webhook verified successfully")
             return challenge, 200
         else:
-            webhook_logger.warning(f"Verification failed: token={token}")
+            webhook_logger.warning("Webhook verification failed")
             return "Forbidden", 403
     return "Not Found", 404

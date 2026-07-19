@@ -2,6 +2,48 @@
 {% block title %}{{ trip.trip_name }} — Rahma CRM{% endblock %}
 {% block topbar_title %}Trip Detail{% endblock %}
 
+{% block head %}
+<style>
+.trip-cover-hero {
+    border-radius: 0.75rem;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: var(--bg-base);
+}
+.trip-cover-hero img {
+    width: 100%;
+    max-height: 360px;
+    object-fit: cover;
+    display: block;
+}
+.trip-media-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 0.85rem;
+}
+.trip-media-tile {
+    border: 1px solid var(--border);
+    border-radius: 0.6rem;
+    overflow: hidden;
+    background: var(--bg-base);
+}
+.trip-media-tile img {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    object-fit: cover;
+    display: block;
+}
+.trip-media-meta {
+    padding: 0.55rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+}
+</style>
+{% endblock %}
+
 {% block topbar_actions %}
 <a href="{{ url_for('trips.index', **back_query) if back_query else url_for('trips.index') }}" class="btn btn-ghost btn-sm">← All Trips</a>
 <button onclick="openModal('editTrip')" class="btn btn-primary btn-sm">✏ Edit Trip</button>
@@ -12,6 +54,12 @@
 
     <!-- Left: Main info -->
     <div style="display:flex;flex-direction:column;gap:1.25rem">
+
+        {% if cover_media %}
+        <div class="trip-cover-hero">
+            <img src="{{ cover_media.public_url }}" alt="{{ cover_media.alt_text or trip.trip_name }}">
+        </div>
+        {% endif %}
 
         <!-- Header Card -->
         <div class="card">
@@ -94,6 +142,28 @@
         </div>
         {% endif %}
 
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Official Trip Media</span>
+                <button onclick="openModal('editTrip')" class="btn btn-ghost btn-sm">Upload</button>
+            </div>
+            {% if trip_media %}
+            <div class="trip-media-grid">
+                {% for media in trip_media %}
+                <div class="trip-media-tile">
+                    <img src="{{ media.public_url }}" alt="{{ media.alt_text or trip.trip_name }}">
+                    <div class="trip-media-meta">
+                        <span>{{ media.image_type|title }}</span>
+                        <span>#{{ media.display_order }}</span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p style="color:var(--text-muted);font-size:0.83rem">No verified trip images uploaded yet.</p>
+            {% endif %}
+        </div>
+
         {% if commercial_config.vip_offer or commercial_config.group_offer %}
         <div class="card">
             <div class="card-title" style="margin-bottom:0.75rem">💸 Commercial Offers</div>
@@ -168,6 +238,7 @@
                 <button onclick="openModal('editInventory')" class="btn btn-ghost">🛏 Adjust Inventory</button>
                 <a href="{{ url_for('bookings.index') }}" class="btn btn-ghost">📋 All Bookings</a>
                 <form action="{{ url_for('trips.update', trip_id=trip.trip_id) }}" method="POST" onsubmit="return confirm('Mark as Cancelled?')">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="_method" value="DELETE">
                     <button type="submit" class="btn btn-danger" style="width:100%">✕ Cancel Trip</button>
                 </form>
@@ -201,7 +272,8 @@
             <span class="modal-title">✏ Edit Trip</span>
             <button class="modal-close" onclick="closeModal('editTrip')">✕</button>
         </div>
-        <form action="{{ url_for('trips.update', trip_id=trip.trip_id) }}" method="POST">
+        <form action="{{ url_for('trips.update', trip_id=trip.trip_id) }}" method="POST" enctype="multipart/form-data">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="grid-2">
                 <div class="form-group col-span-2">
                     <label class="form-label">Trip ID</label>
@@ -280,6 +352,15 @@
                     <label class="form-label">Description</label>
                     <textarea class="form-textarea" name="public_description">{{ trip.public_description or '' }}</textarea>
                 </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Replace Main Trip Image</label>
+                    <input class="form-input" type="file" name="cover_image" accept="image/jpeg,image/png,image/webp">
+                    <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.35rem">Uploading a new main image keeps the old file stored but removes it from active CRM media.</div>
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Add Gallery Images</label>
+                    <input class="form-input" type="file" name="gallery_images" accept="image/jpeg,image/png,image/webp" multiple>
+                </div>
                 <div class="form-group">
                     <label class="form-label">VIP Discount Note</label>
                     <input class="form-input" type="text" name="vip_discount_note" value="{{ commercial_config.vip_offer or '' }}" placeholder="e.g. 10% VIP discount">
@@ -350,7 +431,8 @@ function saveInventory() {
     };
     fetch('{{ url_for("trips.update_inventory", trip_id=trip.trip_id) }}', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN },
         body: JSON.stringify(body)
     }).then(r => r.json()).then(d => {
         if (d.status === 'ok') { closeModal('editInventory'); location.reload(); }

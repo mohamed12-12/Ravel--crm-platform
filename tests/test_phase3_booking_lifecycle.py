@@ -68,6 +68,7 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
                     draft_holds_single=0,
                     draft_holds_double=0,
                     draft_holds_triple=0,
+                    public_price="$1,000",
                 )
             )
             self.db.session.commit()
@@ -154,6 +155,26 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
             self.assertEqual(self.Traveler.query.count(), 1)
             self.assertEqual(self.TripBooking.query.filter_by(traveler_id="TR100").count(), 1)
 
+    def test_cancelled_booking_releases_room_inventory(self) -> None:
+        booking = self.service.create_booking_draft(
+            traveler_id="TR100",
+            traveler_name="Returning Traveler",
+            trip_id="TRIP-100",
+            room_type="Double",
+            channel="web",
+            source="Web CRM",
+        )
+
+        before = self.service._fetch_trip_record("TRIP-100")
+        self.assertEqual(before["draft_holds_double"], 1)
+        self.assertEqual(before["available_double"], 1)
+
+        self.service.update_booking_status(booking["booking_id"], new_status="Cancelled")
+
+        after = self.service._fetch_trip_record("TRIP-100")
+        self.assertEqual(after["draft_holds_double"], 0)
+        self.assertEqual(after["available_double"], 2)
+
     def test_admin_booking_ui_updates_lifecycle_and_history(self) -> None:
         with self.app.app_context():
             booking = self.TripBooking(
@@ -188,6 +209,82 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
             self.assertEqual(len(history), 1)
             self.assertEqual(history[0].old_status, "Confirmed")
             self.assertEqual(history[0].new_status, "Payment Pending")
+
+    def test_booking_status_update_recalculates_traveler_summary(self) -> None:
+        with self.app.app_context():
+            booking = self.TripBooking(
+                booking_id="B-103",
+                trip_id="TRIP-100",
+                trip_name="Lifecycle Trip",
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type="Double",
+                booking_status="Draft",
+                booking_source="Admin",
+                payment_status="Pending",
+            )
+            self.db.session.add(booking)
+            self.db.session.commit()
+            traveler = self.db.session.get(self.Traveler, "TR100")
+            self.assertEqual(traveler.total_trips or 0, 0)
+
+        self.service.recalculate_traveler_stats("TR100")
+
+        with self.app.app_context():
+            traveler = self.db.session.get(self.Traveler, "TR100")
+            self.assertEqual(traveler.local_trips_count, 1)
+            self.assertEqual(traveler.international_trips_count, 0)
+            self.assertEqual(traveler.total_trips, 1)
+            self.assertEqual(traveler.lifetime_revenue or 0, 0)
+
+        self.service.update_booking_status("B-103", new_status="Pending Confirmation")
+        self.service.update_booking_status("B-103", new_status="Confirmed", new_payment_status="Fully Paid")
+
+        with self.app.app_context():
+            traveler = self.db.session.get(self.Traveler, "TR100")
+            self.assertEqual(traveler.lifetime_revenue, 1000)
+
+        self.service.update_booking_status("B-103", new_status="Cancelled", new_payment_status="Deposit Paid")
+
+        with self.app.app_context():
+            traveler = self.db.session.get(self.Traveler, "TR100")
+            self.assertEqual(traveler.local_trips_count, 0)
+            self.assertEqual(traveler.international_trips_count, 0)
+            self.assertEqual(traveler.total_trips, 0)
+            self.assertEqual(traveler.lifetime_revenue, 0)
+
+    def test_traveler_detail_recalculates_stale_summary_from_bookings(self) -> None:
+        with self.app.app_context():
+            traveler = self.db.session.get(self.Traveler, "TR100")
+            traveler.local_trips_count = 0
+            traveler.international_trips_count = 0
+            traveler.total_trips = 0
+            traveler.lifetime_revenue = 0
+            self.db.session.add(
+                self.TripBooking(
+                    booking_id="B-104",
+                    trip_id="TRIP-100",
+                    trip_name="Lifecycle Trip",
+                    traveler_id="TR100",
+                    traveler_name="Returning Traveler",
+                    room_type="Single",
+                    group_size=3,
+                    booking_status="Confirmed",
+                    booking_source="Admin",
+                    payment_status="Fully Paid",
+                )
+            )
+            self.db.session.commit()
+
+        response = self.client.get("/travelers/TR100")
+        self.assertEqual(response.status_code, 200)
+
+        with self.app.app_context():
+            traveler = self.db.session.get(self.Traveler, "TR100")
+            self.assertEqual(traveler.local_trips_count, 1)
+            self.assertEqual(traveler.international_trips_count, 0)
+            self.assertEqual(traveler.total_trips, 1)
+            self.assertEqual(traveler.lifetime_revenue, 3000)
 
     def test_trip_detail_shows_remaining_after_active_bookings(self) -> None:
         with self.app.app_context():

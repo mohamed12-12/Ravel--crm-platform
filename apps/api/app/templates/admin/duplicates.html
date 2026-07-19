@@ -76,7 +76,8 @@ function mergeGroup(masterId, aliasIds) {
 
     fetch('{{ url_for("admin.merge_dup") }}', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN },
         body: JSON.stringify({ master_id: masterId, alias_ids: aliasIds })
     }).then(r => r.json()).then(d => {
         if (d.status === 'ok') {

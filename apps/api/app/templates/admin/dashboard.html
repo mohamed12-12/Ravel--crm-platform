@@ -37,6 +37,91 @@
     </div>
 </div>
 
+<!-- Employee Work Queue -->
+<div class="card" style="margin-bottom:1.25rem">
+    <div class="card-header">
+        <span class="card-title">Employee Work Queue</span>
+        <a href="{{ url_for('leads.index', queue='overdue') }}" class="btn btn-ghost btn-sm">Open follow-ups</a>
+    </div>
+    {% if current_employee_role %}
+    <div class="grid-3" style="gap:1rem;margin-bottom:1rem">
+        <div>
+            <div class="form-label">My Leads</div>
+            {% for lead in my_leads %}
+            <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" style="display:block;color:var(--text-main);text-decoration:none;margin-bottom:0.45rem">{{ lead.customer_name or lead.lead_id }}</a>
+            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">No leads assigned to you.</div>{% endfor %}
+        </div>
+        <div>
+            <div class="form-label">My Bookings</div>
+            {% for booking in my_bookings %}
+            <a href="{{ url_for('bookings.detail', booking_id=booking.booking_id) }}" style="display:block;color:var(--text-main);text-decoration:none;margin-bottom:0.45rem">{{ booking.traveler_name or booking.booking_id }}</a>
+            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">No bookings assigned to you.</div>{% endfor %}
+        </div>
+        <div>
+            <div class="form-label">My Overdue Follow-ups</div>
+            {% for lead in my_overdue_leads %}
+            <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" style="display:block;color:var(--red);text-decoration:none;margin-bottom:0.45rem">{{ lead.customer_name or lead.lead_id }}</a>
+            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">Nothing overdue.</div>{% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    <div class="grid-3" style="gap:1rem">
+        <div>
+            <div class="form-label">Overdue Follow-ups</div>
+            {% for lead in overdue_followups %}
+            <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" style="display:block;color:var(--text-main);text-decoration:none;margin-bottom:0.45rem">{{ lead.customer_name or lead.lead_id }} <span style="color:var(--red)">{{ lead.follow_up_due_date.strftime('%d %b') if lead.follow_up_due_date else '' }}</span></a>
+            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">No overdue leads.</div>{% endfor %}
+        </div>
+        <div>
+            <div class="form-label">Due Today</div>
+            {% for lead in due_today %}
+            <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" style="display:block;color:var(--text-main);text-decoration:none;margin-bottom:0.45rem">{{ lead.customer_name or lead.lead_id }} - {{ lead.current_step or lead.follow_up_status or 'Follow up' }}</a>
+            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">Nothing due today.</div>{% endfor %}
+        </div>
+        <div>
+            <div class="form-label">New Unassigned Leads</div>
+            {% for lead in new_unassigned %}
+            <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" style="display:block;color:var(--text-main);text-decoration:none;margin-bottom:0.45rem">{{ lead.customer_name or lead.lead_id }} - {{ lead.channel or lead.lead_source or 'CRM' }}</a>
+            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">No unassigned new leads.</div>{% endfor %}
+        </div>
+        <div>
+            <div class="form-label">Waiting Customer</div>
+            {% for lead in waiting_customer_leads %}
+            <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" style="display:block;color:var(--text-main);text-decoration:none;margin-bottom:0.45rem">{{ lead.customer_name or lead.lead_id }} - {{ lead.follow_up_status or lead.lead_stage }}</a>
+            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">No waiting-customer leads.</div>{% endfor %}
+        </div>
+        <div>
+            <div class="form-label">Deposit Follow-ups</div>
+            {% for booking in deposit_followups %}
+            <a href="{{ url_for('bookings.detail', booking_id=booking.booking_id) }}" style="display:block;color:var(--text-main);text-decoration:none;margin-bottom:0.45rem">{{ booking.traveler_name or booking.booking_id }} - {{ booking.payment_status or 'Pending' }}</a>
+            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">No deposit follow-ups.</div>{% endfor %}
+        </div>
+        <div>
+            <div class="form-label">Missing Documents</div>
+            {% for booking in missing_documents %}
+            <a href="{{ url_for('bookings.detail', booking_id=booking.booking_id) }}" style="display:block;color:var(--text-main);text-decoration:none;margin-bottom:0.45rem">{{ booking.traveler_name or booking.booking_id }} - Passport pending</a>
+            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">No missing documents flagged.</div>{% endfor %}
+        </div>
+    </div>
+    {% if team_workload %}
+    <div style="margin-top:1rem;border-top:1px solid var(--border);padding-top:1rem">
+        <div class="form-label">Team Workload</div>
+        <div style="display:flex;flex-wrap:wrap;gap:0.6rem">
+            {% for item in team_workload %}
+            <a href="{{ url_for('leads.index', queue='employee', employee_id=item.employee.id) }}" class="btn btn-ghost btn-sm">{{ item.employee.display_name }} · {{ item.leads }} leads · {{ item.bookings }} bookings</a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    {% if inactive_owner_leads or inactive_owner_bookings %}
+    <div style="margin-top:1rem;border-top:1px solid var(--border);padding-top:1rem">
+        <div class="form-label">Assigned to Inactive Employees</div>
+        {% for lead in inactive_owner_leads %}<a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" style="display:inline-block;color:var(--text-main);margin:0 0.8rem 0.4rem 0">{{ lead.customer_name or lead.lead_id }}</a>{% endfor %}
+        {% for booking in inactive_owner_bookings %}<a href="{{ url_for('bookings.detail', booking_id=booking.booking_id) }}" style="display:inline-block;color:var(--text-main);margin:0 0.4rem 0.4rem 0">{{ booking.traveler_name or booking.booking_id }}</a>{% endfor %}
+    </div>
+    {% endif %}
+</div>
+
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem">
     <!-- Recent Leads -->
     <div class="card">

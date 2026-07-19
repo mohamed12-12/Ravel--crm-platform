@@ -81,7 +81,9 @@ class Phase9SyncSafetyTests(unittest.TestCase):
             db_path=db_path,
             sheet_backend="excel",
             excel_source_workbook=str(workbook_path),
-            excel_runtime_workbook=str(workbook_path)
+            excel_runtime_workbook=str(workbook_path),
+            sheet_export_enabled=True,
+            allow_source_workbook_writes=False,
         )
         
         service = FakeFailingService(settings)

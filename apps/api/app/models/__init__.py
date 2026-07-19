@@ -2,6 +2,7 @@
 from .traveler import Traveler
 from .traveler_document import TravelerDocument
 from .trip import Trip
+from .trip_media import TripMedia
 from .event import CommunityEvent
 from .booking import TripBooking, CEBooking
 from .booking_status_history import BookingStatusHistory

@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from services.data_authority import load_data_authority
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_AGENT_CONVERSATION_PROMPT_FILE = (
@@ -73,12 +75,21 @@ class Settings:
     log_level: str
 
     ai_agent_mode: str
+    ai_max_tool_rounds: int
     ai_provider: str
     gemini_api_key: str
     gemini_model: str
     ai_agent_system_prompt: str
     openai_api_key: str
     openai_model: str
+
+    data_authority: str
+    data_schema_version: str
+    crm_access_mode: str
+    crm_api_base_url: str
+    crm_api_token: str
+    sheet_mirror_enabled: bool
+    demo_data_mode: bool
 
     sheet_backend: str
     excel_source_workbook: Path
@@ -119,8 +130,12 @@ class Settings:
         errors: list[str] = []
         if self.app_env == "production" and not self.app_secret_key:
             errors.append("APP_SECRET_KEY is required in production.")
-        if self.ai_agent_mode not in {"deterministic", "gemini"}:
-            errors.append("AI_AGENT_MODE must be either 'deterministic' or 'gemini'.")
+        if self.ai_agent_mode not in {"deterministic", "gemini", "tool_calling"}:
+            errors.append("AI_AGENT_MODE must be either 'deterministic', 'gemini', or 'tool_calling'.")
+        if self.ai_max_tool_rounds <= 0:
+            errors.append("AI_MAX_TOOL_ROUNDS must be a positive integer.")
+        if self.app_env == "production" and self.ai_agent_mode != "tool_calling":
+            errors.append("AI_AGENT_MODE must be 'tool_calling' in production so agent data access uses the CRM API contract.")
         if self.sheet_backend not in {"excel", "google", "google_sheets"}:
             errors.append("SHEET_BACKEND must be either 'excel', 'google', or 'google_sheets'.")
         if self.sheet_backend == "excel" and not self.excel_source_workbook.exists():
@@ -133,6 +148,16 @@ class Settings:
             creds_path = _optional_path(self.google_application_credentials)
             if creds_path is None or not creds_path.exists():
                 errors.append(f"GOOGLE_APPLICATION_CREDENTIALS file was not found for SHEET_BACKEND={self.sheet_backend}.")
+        authority = load_data_authority(environment=self.app_env)
+        errors.extend(
+            authority.validate(
+                environment=self.app_env,
+                database_url=os.getenv("DATABASE_URL", ""),
+                system_db_path=os.getenv("RAHMA_SYSTEM_DB_PATH", ""),
+                excel_source_workbook=str(self.excel_source_workbook),
+                excel_runtime_workbook=str(self.excel_runtime_workbook),
+            )
+        )
         return errors
 
 
@@ -150,6 +175,8 @@ def load_settings() -> Settings:
     if not runtime_path.is_absolute():
         runtime_path = PROJECT_ROOT / runtime_path
 
+    authority = load_data_authority(environment=app_env)
+
     return Settings(
         app_env=os.getenv("APP_ENV", "development"),
         app_host=os.getenv("APP_HOST", "127.0.0.1"),
@@ -160,6 +187,7 @@ def load_settings() -> Settings:
         ),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         ai_agent_mode=os.getenv("AI_AGENT_MODE", "deterministic").strip().lower() or "deterministic",
+        ai_max_tool_rounds=int(os.getenv("AI_MAX_TOOL_ROUNDS", "4")),
         ai_provider=os.getenv("AI_PROVIDER", "gemini").strip().lower(),
         gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip(),
@@ -172,6 +200,13 @@ def load_settings() -> Settings:
         ),
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         openai_model=os.getenv("OPENAI_MODEL", "").strip(),
+        data_authority=authority.authority,
+        data_schema_version=authority.schema_version,
+        crm_access_mode=authority.agent_access_mode,
+        crm_api_base_url=authority.crm_api_base_url,
+        crm_api_token=authority.crm_api_token,
+        sheet_mirror_enabled=authority.sheet_mirror_enabled,
+        demo_data_mode=authority.demo_data_mode,
         sheet_backend=os.getenv("SHEET_BACKEND", "excel").strip().lower(),
         excel_source_workbook=source_path,
         excel_runtime_workbook=runtime_path,

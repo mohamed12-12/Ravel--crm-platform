@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from pathlib import Path
-from flask import Flask
+from flask import Flask, session
 from sqlalchemy import text
 from .config import config
 from .extensions import db, migrate, login_manager, socketio
@@ -120,15 +120,163 @@ def _ensure_lead_and_booking_group_columns(app: Flask) -> None:
         inspector = db.inspect(db.engine)
         if "leads" in inspector.get_table_names():
             lead_columns = {column["name"] for column in inspector.get_columns("leads")}
+            missing_lead_columns = []
             if "group_size" not in lead_columns:
+                missing_lead_columns.append("ALTER TABLE leads ADD COLUMN group_size INTEGER DEFAULT 1")
+            if "passport_attachment_ref" not in lead_columns:
+                missing_lead_columns.append("ALTER TABLE leads ADD COLUMN passport_attachment_ref TEXT")
+            if "passport_status" not in lead_columns:
+                missing_lead_columns.append("ALTER TABLE leads ADD COLUMN passport_status VARCHAR(50)")
+            if missing_lead_columns:
                 with db.engine.begin() as connection:
-                    connection.execute(text("ALTER TABLE leads ADD COLUMN group_size INTEGER DEFAULT 1"))
+                    for statement in missing_lead_columns:
+                        connection.execute(text(statement))
 
         if "trip_bookings" in inspector.get_table_names():
             booking_columns = {column["name"] for column in inspector.get_columns("trip_bookings")}
             if "group_size" not in booking_columns:
                 with db.engine.begin() as connection:
                     connection.execute(text("ALTER TABLE trip_bookings ADD COLUMN group_size INTEGER DEFAULT 1"))
+
+
+def _ensure_employee_followup_columns(app: Flask) -> None:
+    uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
+    if not uri.startswith("sqlite"):
+        return
+
+    with app.app_context():
+        inspector = db.inspect(db.engine)
+        table_names = set(inspector.get_table_names())
+        additions = {
+            "leads": {
+                "assigned_to": "VARCHAR(100)",
+                "last_contact_at": "DATETIME",
+                "customer_response_status": "VARCHAR(100)",
+            },
+            "trip_bookings": {
+                "assigned_to": "VARCHAR(100)",
+                "priority": "VARCHAR(50)",
+                "next_follow_up_at": "DATETIME",
+                "next_action": "VARCHAR(200)",
+                "last_contact_at": "DATETIME",
+                "customer_response_status": "VARCHAR(100)",
+            },
+        }
+        with db.engine.begin() as connection:
+            for table_name, columns in additions.items():
+                if table_name not in table_names:
+                    continue
+                existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+                for column_name, column_type in columns.items():
+                    if column_name not in existing_columns:
+                        connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
+
+
+def _ensure_relational_assignment_schema(app: Flask) -> None:
+    """Add employee ownership tables/columns for existing SQLite CRM databases."""
+    uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
+    if not uri.startswith("sqlite"):
+        return
+
+    with app.app_context():
+        inspector = db.inspect(db.engine)
+        table_names = set(inspector.get_table_names())
+        with db.engine.begin() as connection:
+            if "users" not in table_names:
+                connection.execute(text(
+                    """
+                    CREATE TABLE users (
+                        id INTEGER PRIMARY KEY,
+                        username VARCHAR(80) NOT NULL UNIQUE,
+                        full_name VARCHAR(200),
+                        password_hash VARCHAR(200) NOT NULL,
+                        email VARCHAR(120) UNIQUE,
+                        role VARCHAR(50) NOT NULL DEFAULT 'agent',
+                        is_active BOOLEAN NOT NULL DEFAULT 1,
+                        created_at DATETIME,
+                        updated_at DATETIME,
+                        last_login_at DATETIME
+                    )
+                    """
+                ))
+                table_names.add("users")
+            user_columns = {column["name"] for column in inspector.get_columns("users")}
+            user_additions = {
+                "full_name": "VARCHAR(200)",
+                "role": "VARCHAR(50) NOT NULL DEFAULT 'agent'",
+                "updated_at": "DATETIME",
+                "last_login_at": "DATETIME",
+            }
+            for column_name, column_type in user_additions.items():
+                if column_name not in user_columns:
+                    connection.execute(text(f"ALTER TABLE users ADD COLUMN {column_name} {column_type}"))
+
+            additions = {
+                "leads": {
+                    "assigned_to_user_id": "INTEGER",
+                    "assigned_at": "DATETIME",
+                    "assigned_by_user_id": "INTEGER",
+                },
+                "trip_bookings": {
+                    "assigned_to_user_id": "INTEGER",
+                    "assigned_at": "DATETIME",
+                    "assigned_by_user_id": "INTEGER",
+                },
+            }
+            for table_name, columns in additions.items():
+                if table_name not in table_names:
+                    continue
+                existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+                for column_name, column_type in columns.items():
+                    if column_name not in existing_columns:
+                        connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
+
+            connection.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS assignment_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    resource_type VARCHAR(30) NOT NULL,
+                    resource_id VARCHAR(80) NOT NULL,
+                    previous_user_id INTEGER,
+                    new_user_id INTEGER,
+                    assigned_by_user_id INTEGER,
+                    reason TEXT,
+                    request_id VARCHAR(100),
+                    created_at DATETIME NOT NULL,
+                    FOREIGN KEY(previous_user_id) REFERENCES users(id),
+                    FOREIGN KEY(new_user_id) REFERENCES users(id),
+                    FOREIGN KEY(assigned_by_user_id) REFERENCES users(id)
+                )
+                """
+            ))
+            connection.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS user_audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    actor_user_id INTEGER,
+                    target_user_id INTEGER,
+                    action VARCHAR(80) NOT NULL,
+                    details TEXT,
+                    created_at DATETIME NOT NULL,
+                    FOREIGN KEY(actor_user_id) REFERENCES users(id),
+                    FOREIGN KEY(target_user_id) REFERENCES users(id)
+                )
+                """
+            ))
+            for index_name, table_name, column_name in (
+                ("ix_leads_assigned_to_user_id", "leads", "assigned_to_user_id"),
+                ("ix_trip_bookings_assigned_to_user_id", "trip_bookings", "assigned_to_user_id"),
+                ("ix_assignment_history_resource", "assignment_history", "resource_id"),
+            ):
+                if table_name in table_names or table_name == "assignment_history":
+                    connection.execute(text(
+                        f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({column_name})"
+                    ))
+
+        if {"leads", "trip_bookings"}.issubset(table_names):
+            from .services.assignments import backfill_legacy_assignments
+
+            backfill_legacy_assignments()
 
 
 def _ensure_booking_history_columns(app: Flask) -> None:
@@ -199,6 +347,51 @@ def _ensure_traveler_documents_table(app: Flask) -> None:
             )
 
 
+def _ensure_trip_media_table(app: Flask) -> None:
+    uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
+    if not uri.startswith("sqlite"):
+        return
+
+    with app.app_context():
+        inspector = db.inspect(db.engine)
+        if "trip_media" in inspector.get_table_names():
+            return
+
+        with db.engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS trip_media (
+                        media_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        public_id VARCHAR(36) NOT NULL UNIQUE,
+                        trip_id VARCHAR(50) NOT NULL,
+                        storage_key VARCHAR(500) NOT NULL UNIQUE,
+                        public_url VARCHAR(500) NOT NULL,
+                        image_type VARCHAR(20) NOT NULL DEFAULT 'gallery',
+                        alt_text VARCHAR(255),
+                        display_order INTEGER NOT NULL DEFAULT 0,
+                        original_filename VARCHAR(255),
+                        mime_type VARCHAR(100) NOT NULL,
+                        file_extension VARCHAR(10) NOT NULL,
+                        file_size INTEGER NOT NULL DEFAULT 0,
+                        uploaded_by_user_id INTEGER,
+                        uploaded_by_name VARCHAR(100),
+                        created_at DATETIME NOT NULL,
+                        is_active BOOLEAN NOT NULL DEFAULT 1,
+                        verification_status VARCHAR(50) NOT NULL DEFAULT 'verified',
+                        FOREIGN KEY(trip_id) REFERENCES trips (trip_id),
+                        FOREIGN KEY(uploaded_by_user_id) REFERENCES users (id)
+                    )
+                    """
+                )
+            )
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_trip_media_trip_id ON trip_media (trip_id)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_trip_media_public_id ON trip_media (public_id)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_trip_media_image_type ON trip_media (image_type)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_trip_media_is_active ON trip_media (is_active)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_trip_media_verification_status ON trip_media (verification_status)"))
+
+
 def _normalize_sqlite_temporal_values(app: Flask) -> None:
     """Convert legacy slash-formatted SQLite date strings into SQLAlchemy-friendly ISO values."""
     uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
@@ -226,9 +419,12 @@ def _normalize_sqlite_temporal_values(app: Flask) -> None:
             "created_at": "datetime",
             "updated_at": "datetime",
             "follow_up_due_date": "date",
+            "last_contact_at": "datetime",
         },
         "trip_bookings": {
             "draft_created_at": "datetime",
+            "next_follow_up_at": "datetime",
+            "last_contact_at": "datetime",
         },
         "ce_bookings": {
             "created_at": "datetime",
@@ -299,6 +495,12 @@ def create_app(config_name=None):
         config_name = os.getenv('FLASK_CONFIG', 'default')
 
     app = Flask(__name__)
+    app.config["CRM_AUTH_ENABLED"] = os.environ.get(
+        "CRM_AUTH_ENABLED", "true"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    app.config["CRM_API_TOKEN"] = os.environ.get("CRM_API_TOKEN", "").strip()
+    app.config["DATA_AUTHORITY"] = os.environ.get("DATA_AUTHORITY", "crm").strip().lower()
+    app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
     app.config.from_object(config[config_name])
     if not app.config.get("SECRET_KEY") and config_name != "production":
         app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-key-rahma-traveler")
@@ -321,6 +523,8 @@ def create_app(config_name=None):
     if config_errors:
         raise RuntimeError("Configuration error: " + " | ".join(config_errors))
     app.config.setdefault('TRAVELER_UPLOAD_ROOT', str(Path(app.instance_path) / 'uploads' / 'travelers'))
+    app.config.setdefault('TRIP_MEDIA_ROOT', str(Path(app.instance_path) / 'uploads' / 'trips'))
+    app.config.setdefault('TRIP_MEDIA_MAX_BYTES', int(os.environ.get("TRIP_MEDIA_MAX_BYTES", str(5 * 1024 * 1024))))
 
     # Initialize extensions
     db.init_app(app)
@@ -328,12 +532,22 @@ def create_app(config_name=None):
     login_manager.init_app(app)
     
     from .models.user import User
+    from .models.assignment_history import AssignmentHistory
+    from .models.user_audit import UserAuditLog
     @login_manager.user_loader
     def load_user(user_id):
         return db.session.get(User, int(user_id))
     
     from .extensions import socketio
     socketio.init_app(app)
+    _ensure_travelers_passport_columns(app)
+    _ensure_trip_room_columns(app)
+    _ensure_lead_and_booking_group_columns(app)
+    _ensure_employee_followup_columns(app)
+    _ensure_relational_assignment_schema(app)
+    _ensure_booking_history_columns(app)
+    _ensure_traveler_documents_table(app)
+    _ensure_trip_media_table(app)
     _normalize_sqlite_temporal_values(app)
 
     # Register Blueprints
@@ -346,7 +560,10 @@ def create_app(config_name=None):
     from .routes.admin import admin_bp
     from .routes.copy import copy_bp
     from .routes.crm import crm_bp
+    from .routes.api_docs import api_docs_bp
+    from .routes.auth import auth_bp
 
+    app.register_blueprint(auth_bp)
     app.register_blueprint(travelers_bp)
     app.register_blueprint(trips_bp)
     app.register_blueprint(bookings_bp)
@@ -356,6 +573,20 @@ def create_app(config_name=None):
     app.register_blueprint(admin_bp)
     app.register_blueprint(copy_bp)
     app.register_blueprint(crm_bp)
+    app.register_blueprint(api_docs_bp)
+
+    from .security import crm_request_guard
+    app.before_request(crm_request_guard)
+
+    from .security import current_role, current_user, generate_csrf_token
+
+    @app.context_processor
+    def inject_security_helpers():
+        return {
+            "csrf_token": generate_csrf_token,
+            "current_employee": current_user(),
+            "current_employee_role": current_role(),
+        }
 
     @app.after_request
     def add_security_headers(response):

@@ -62,6 +62,7 @@ class Phase3DemoWebTests(unittest.TestCase):
                 )
                 connection.commit()
             os.environ["RAHMA_SYSTEM_DB_PATH"] = str(db_path)
+            os.environ["AI_AGENT_MODE"] = "deterministic"
 
             wb = Workbook()
             travelers = wb.active

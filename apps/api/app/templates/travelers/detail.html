@@ -133,6 +133,7 @@
                 </div>
                 {% endif %}
                 <form action="{{ url_for('travelers.upload_document', traveler_id=traveler.traveler_id) }}" method="POST" enctype="multipart/form-data" style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;margin-bottom:0.9rem">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="category" value="passport">
                     <input type="file" name="file" accept=".jpg,.jpeg,.png,.pdf" required style="flex:1;min-width:220px">
                     <input type="text" name="notes" placeholder="Upload notes" style="flex:1;min-width:160px;padding:0.6rem 0.8rem;background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
@@ -606,7 +607,8 @@ async function saveChanges() {
     try {
         const response = await fetch("{{ url_for('travelers.update', traveler_id=traveler.traveler_id) }}", {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN },
             body: JSON.stringify(data)
         });
         
@@ -637,7 +639,11 @@ async function saveChanges() {
 async function markInactive(id) {
     if (!confirm('Are you sure you want to mark this traveler as Inactive?')) return;
     try {
-        const response = await fetch(`/travelers/${id}`, { method: 'DELETE' });
+        const response = await fetch(`/travelers/${id}`, {
+            method: 'DELETE',
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN }
+        });
         if (response.ok) {
             location.reload();
         } else {

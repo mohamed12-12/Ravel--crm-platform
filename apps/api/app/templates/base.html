@@ -156,6 +156,8 @@
         }
         .flash-success { background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.25); color: #86efac; }
         .flash-error   { background: rgba(239,68,68,0.1);  border: 1px solid rgba(239,68,68,0.25);  color: #fca5a5; }
+        .flash-danger  { background: rgba(239,68,68,0.1);  border: 1px solid rgba(239,68,68,0.25);  color: #fca5a5; }
+        .flash-warning { background: rgba(234,179,8,0.1);  border: 1px solid rgba(234,179,8,0.25);  color: #fde047; }
         .flash-info    { background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.25); color: #a5b4fc; }
 
         /* ── Shared component styles ─────────────────────────── */
@@ -318,6 +320,11 @@
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
         .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
         .col-span-2 { grid-column: span 2; }
+        .work-summary { display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.75rem; }
+        .work-item { background:var(--bg-base); border:1px solid var(--border); border-radius:0.5rem; padding:0.8rem; }
+        .work-label { font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.07em; font-weight:700; margin-bottom:0.25rem; }
+        .work-value { color:var(--text-main); font-weight:700; font-size:0.86rem; overflow-wrap:anywhere; }
+        .timeline-entry { display:grid; grid-template-columns:8.5rem 1fr; gap:0.75rem; background:var(--bg-base); border:1px solid var(--border); border-radius:0.6rem; padding:0.75rem 0.9rem; }
 
         /* Capacity bar */
         .cap-bar { height: 5px; background: var(--border); border-radius: 999px; overflow: hidden; margin-top: 4px; }
@@ -388,6 +395,9 @@
             </a>
 
             <div class="nav-section-label">Admin</div>
+            <a href="{{ url_for('admin.users') }}" class="nav-link {% if request.endpoint == 'admin.users' %}active{% endif %}">
+                <span class="nav-icon">♙</span> Employees
+            </a>
             <a href="{{ url_for('admin.import_data') }}" class="nav-link {% if request.endpoint == 'admin.import_data' %}active{% endif %}">
                 <span class="nav-icon">⬆</span> Import / Sync
             </a>
@@ -423,6 +433,7 @@
 </div>
 
 <script>
+window.CRM_CSRF_TOKEN = "{{ csrf_token() }}";
 // Poll pending handoff count
 function updateHandoffBadge() {
     fetch('/admin/handoffs/pending')

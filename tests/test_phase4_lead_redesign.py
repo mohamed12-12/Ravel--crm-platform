@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 SYSTEM_ROOT = Path(__file__).resolve().parent.parent / "apps" / "api"
@@ -142,6 +143,57 @@ class Phase4LeadRedesignTests(unittest.TestCase):
         self.assertIn("International Lead Trip", body)
         self.assertIn('data-trip-type="Local"', body)
         self.assertIn('data-trip-type="International"', body)
+
+    def test_leads_index_orders_by_latest_activity(self) -> None:
+        with self.app.app_context():
+            older_active = self.db.session.get(self.Lead, "L-100")
+            older_active.created_at = datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
+            older_active.updated_at = datetime(2026, 7, 15, 10, 33, tzinfo=timezone.utc)
+            self.db.session.add(self.Lead(
+                lead_id="L-200",
+                customer_name="Newer Created Lead",
+                lead_stage="New Lead",
+                priority="Medium",
+                lead_source="Manual",
+                created_at=datetime(2026, 6, 28, 9, 0, tzinfo=timezone.utc),
+                updated_at=datetime(2026, 6, 28, 9, 0, tzinfo=timezone.utc),
+            ))
+            self.db.session.commit()
+
+        response = self.client.get("/leads/")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertLess(body.find("L-100"), body.find("L-200"))
+        self.assertIn("Last Activity", body)
+
+    def test_leads_index_humanizes_legacy_source_and_workflow_step(self) -> None:
+        with self.app.app_context():
+            lead = self.db.session.get(self.Lead, "L-100")
+            lead.lead_source = b"\xf0\x9f\x92\xac- Rahma Sales AI".decode("latin-1")
+            lead.current_step = "booking_ready"
+            self.db.session.commit()
+
+        response = self.client.get("/leads/")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Rahma Sales AI", body)
+        self.assertIn("Ready to create booking draft", body)
+        self.assertNotIn("booking_ready", body)
+        self.assertNotIn("\u00c2\u00b7", body)
+
+    def test_lost_lead_shows_reason_not_stale_next_action(self) -> None:
+        with self.app.app_context():
+            lead = self.db.session.get(self.Lead, "L-100")
+            lead.lead_stage = "Lost"
+            lead.current_step = "booking_ready"
+            lead.notes = "Customer chose not to continue."
+            self.db.session.commit()
+
+        response = self.client.get("/leads/?stage=Lost")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Reason: Customer chose not to continue.", body)
+        self.assertNotIn("Next: Ready to create booking draft", body)
 
     def test_handoff_needed_lead_visible_and_actionable(self) -> None:
         with self.app.app_context():

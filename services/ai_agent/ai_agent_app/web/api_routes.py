@@ -57,6 +57,8 @@ def create_booking_draft():
 @api_bp.post("/reset")
 def reset_gateway():
     gateway: ExcelSheetGateway = current_app.config["SHEET_GATEWAY"]
+    if not gateway.settings.demo_data_mode:
+        return jsonify({"error": "demo_reset_disabled"}), 409
     gateway.reset_runtime_workbook()
     # Also clear session manager if needed, but Blueprint doesn't easily access app.config["SESSIONS"] 
     # without current_app.

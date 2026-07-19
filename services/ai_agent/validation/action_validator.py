@@ -551,31 +551,23 @@ class ActionValidator:
         return open_leads
 
     def _find_duplicate_active_booking(self, *, traveler_id: str, trip_id: str) -> dict[str, Any] | None:
-        with self.service.connect() as connection:
-            placeholders = ", ".join("?" for _ in ACTIVE_BOOKING_STATUSES)
-            row = connection.execute(
-                f"""
-                SELECT booking_id, traveler_id, trip_id, booking_status
-                FROM trip_bookings
-                WHERE traveler_id = ?
-                  AND trip_id = ?
-                  AND booking_status IN ({placeholders})
-                ORDER BY draft_created_at DESC, booking_id DESC
-                LIMIT 1
-                """,
-                (traveler_id, trip_id, *ACTIVE_BOOKING_STATUSES),
-            ).fetchone()
-        return dict(row) if row is not None else None
+        result = self.read_only_tools.get_booking_status(traveler_id=traveler_id)
+        for booking in result.get("bookings", []):
+            if str(booking.get("trip_id") or "").strip() != trip_id:
+                continue
+            if str(booking.get("booking_status") or "").strip() in ACTIVE_BOOKING_STATUSES:
+                return dict(booking)
+        return None
 
     def _get_lead_by_id(self, lead_id: str) -> dict[str, Any] | None:
-        with self.service.connect() as connection:
-            row = connection.execute("SELECT * FROM leads WHERE lead_id = ?", (lead_id,)).fetchone()
-        return dict(row) if row is not None else None
+        result = self.read_only_tools.lookup_lead(lead_id=lead_id)
+        leads = list(result.get("leads") or [])
+        return dict(leads[0]) if leads else None
 
     def _get_booking_by_id(self, booking_id: str) -> dict[str, Any] | None:
-        with self.service.connect() as connection:
-            row = connection.execute("SELECT * FROM trip_bookings WHERE booking_id = ?", (booking_id,)).fetchone()
-        return dict(row) if row is not None else None
+        result = self.read_only_tools.get_booking_status(booking_id=booking_id)
+        bookings = list(result.get("bookings") or [])
+        return dict(bookings[0]) if bookings else None
 
     @staticmethod
     def _trip_has_departure_dates(trip: dict[str, Any]) -> bool:

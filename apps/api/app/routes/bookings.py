@@ -5,21 +5,101 @@ from app.models.booking_event import BookingEventTrail
 from app.models.booking_status_history import BookingStatusHistory
 from app.models.traveler import Traveler
 from app.models.trip import Trip
+from app.models.user import User
 from app.extensions import db
-from sqlalchemy import or_
-from datetime import datetime
+from sqlalchemy import or_, and_
+from datetime import datetime, date, timezone
 from services.crm.system_services import UnifiedCRMService
+from app.services.assignments import (
+    active_assignees,
+    apply_assignment,
+    assignment_history,
+    exact_legacy_user,
+    resolve_user_id,
+)
+from app.security import current_actor, current_role, current_user, current_user_id, has_permission
 
 bookings_bp = Blueprint('bookings', __name__, url_prefix='/bookings')
 
 BOOKING_STATUSES = ['Draft', 'Waiting Customer', 'Pending Confirmation', 'Confirmed', 'Payment Pending', 'Paid', 'Completed', 'Cancelled']
 PAYMENT_STATUSES = ['Pending', 'Deposit Paid', 'Fully Paid', 'Refunded']
+PAYMENT_TRANSITIONS = {
+    'Pending': {'Deposit Paid', 'Fully Paid', 'Refunded'},
+    'Deposit Paid': {'Fully Paid', 'Refunded'},
+    'Fully Paid': {'Refunded'},
+    'Refunded': set(),
+}
+
+
+def _allowed_status_options(current_status: str | None) -> list[str]:
+    """Return the complete employee status menu in lifecycle order."""
+    current = (current_status or 'Draft').strip() or 'Draft'
+    return list(dict.fromkeys([current, *BOOKING_STATUSES]))
+
+
+def _allowed_payment_options(current_status: str | None) -> list[str]:
+    """Return the complete employee payment menu in lifecycle order."""
+    current = (current_status or 'Pending').strip() or 'Pending'
+    return list(dict.fromkeys([current, *PAYMENT_STATUSES]))
+
+
+def _parse_datetime_local(value: str | None):
+    raw = (value or '').strip()
+    if not raw:
+        return None
+    for fmt in ('%Y-%m-%dT%H:%M', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _validate_payment_transition(
+    current_status: str | None,
+    new_status: str | None,
+    *,
+    allow_employee_correction: bool = False,
+    correction_note: str = '',
+) -> None:
+    current = (current_status or 'Pending').strip() or 'Pending'
+    target = (new_status or '').strip()
+    if not target or target == current:
+        return
+    if target not in PAYMENT_TRANSITIONS.get(current, set()):
+        if allow_employee_correction and target in PAYMENT_STATUSES:
+            if not correction_note.strip():
+                raise ValueError(
+                    'Add a reason before making a non-standard payment status change.'
+                )
+            return
+        raise ValueError(f"Invalid payment status transition: {current} -> {target}")
+
+
+def _append_note(existing: str | None, note: str, actor: str) -> str | None:
+    clean_note = (note or '').strip()
+    if not clean_note:
+        return existing
+    stamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat(sep=' ')
+    entry = f"[{stamp} by {actor}] {clean_note}"
+    return f"{existing.rstrip()}\n{entry}" if existing else entry
+
+
+def _is_overdue(moment) -> bool:
+    if not moment:
+        return False
+    if isinstance(moment, datetime):
+        return moment.date() < date.today()
+    return moment < date.today()
 
 
 @bookings_bp.route('/')
 def index():
     q = request.args.get('q', '')
     status = request.args.get('status', '')
+    payment = request.args.get('payment', '')
+    queue = request.args.get('queue', '')
+    employee_id = request.args.get('employee_id', type=int)
     page = request.args.get('page', 1, type=int)
     per_page = 25
 
@@ -35,6 +115,28 @@ def index():
         ))
     if status:
         query = query.filter(TripBooking.booking_status == status)
+    if payment:
+        query = query.filter(TripBooking.payment_status == payment)
+    if queue == 'assigned_to_me':
+        query = query.filter(TripBooking.assigned_to_user_id == current_user_id())
+    elif employee_id and has_permission('view_all'):
+        query = query.filter(TripBooking.assigned_to_user_id == employee_id)
+    elif queue == 'unassigned':
+        query = query.filter(TripBooking.assigned_to_user_id.is_(None))
+    elif queue == 'inactive_owner':
+        query = query.filter(TripBooking.assigned_user.has(User.is_active.is_(False)))
+    elif queue == 'overdue':
+        query = query.filter(TripBooking.next_follow_up_at < datetime.combine(date.today(), datetime.min.time()))
+    elif queue == 'today':
+        start = datetime.combine(date.today(), datetime.min.time())
+        end = datetime.combine(date.today(), datetime.max.time())
+        query = query.filter(and_(TripBooking.next_follow_up_at >= start, TripBooking.next_follow_up_at <= end))
+    elif queue == 'waiting_customer':
+        query = query.filter(TripBooking.booking_status == 'Waiting Customer')
+    elif queue == 'deposit_pending':
+        query = query.filter(or_(TripBooking.payment_status == 'Pending', TripBooking.booking_status == 'Payment Pending'))
+    elif queue == 'documents_missing':
+        query = query.filter(TripBooking.passport_status == 'pending')
 
     pagination = query.order_by(TripBooking.draft_created_at.desc()).paginate(
         page=page, per_page=per_page, error_out=False)
@@ -53,9 +155,16 @@ def index():
                            total_count=pagination.total,
                            q=q,
                            current_status=status,
+                           current_payment=payment,
+                           current_queue=queue,
+                           current_employee_id=employee_id,
+                           employees=active_assignees() if has_permission('view_all') else [],
+                           can_assign=has_permission('assign_work'),
                            statuses=BOOKING_STATUSES,
+                           payment_statuses=PAYMENT_STATUSES,
                            counts=counts,
-                           trips_data=trips_data)
+                           trips_data=trips_data,
+                           today=date.today())
 
 
 @bookings_bp.route('/<string:booking_id>')
@@ -81,6 +190,8 @@ def detail(booking_id):
         )
     ).order_by(BookingEventTrail.occurred_at.asc()).all()
     status_history = BookingStatusHistory.query.filter_by(booking_id=booking.booking_id).order_by(BookingStatusHistory.changed_at.asc(), BookingStatusHistory.history_id.asc()).all()
+    history_count = len(status_history)
+    assigned_history = assignment_history('booking', booking.booking_id)
     return render_template('bookings/detail.html',
                            booking=booking,
                            traveler=traveler,
@@ -88,8 +199,14 @@ def detail(booking_id):
                            commercial_context=commercial_context,
                            event_trail=event_trail,
                            status_history=status_history,
-                           booking_statuses=BOOKING_STATUSES,
-                           payment_statuses=PAYMENT_STATUSES)
+                           history_count=history_count,
+                           assigned_history=assigned_history,
+                           employees=active_assignees(),
+                           can_assign=has_permission('assign_work'),
+                           assigned_user=booking.assigned_user,
+                           is_overdue=_is_overdue,
+                           booking_statuses=_allowed_status_options(booking.booking_status),
+                           payment_statuses=_allowed_payment_options(booking.payment_status))
 
 
 @bookings_bp.route('/', methods=['POST'])
@@ -103,6 +220,9 @@ def create():
     
     if not trip_id or not traveler_id or not room_type:
         flash("Trip, Traveler, and Room Type are required to create a booking.", "error")
+        return redirect(url_for('bookings.index'))
+    if data.get('assigned_to_user_id') and not has_permission('assign_work'):
+        flash('You do not have permission to assign bookings.', 'error')
         return redirect(url_for('bookings.index'))
 
     traveler = db.session.get(Traveler, traveler_id)
@@ -140,6 +260,18 @@ def create():
             group_size=normalized_group_size,
         )
         booking_id = result["booking_id"]
+        if data.get('assigned_to_user_id'):
+            db.session.expire_all()
+            created_booking = db.session.get(TripBooking, booking_id)
+            apply_assignment(
+                created_booking,
+                resource_type='booking',
+                resource_id=booking_id,
+                new_user_id=resolve_user_id(data.get('assigned_to_user_id'), allow_blank=False),
+                actor=current_user(),
+                reason=data.get('assignment_reason', ''),
+            )
+            db.session.commit()
         flash(f"Booking {booking_id} created successfully.", 'success')
         return redirect(url_for('bookings.detail', booking_id=booking_id))
     except ValueError as e:
@@ -156,35 +288,114 @@ def update_status(booking_id):
     data = request.get_json(silent=True) or request.form.to_dict()
     new_status = data.get('booking_status')
     new_payment = data.get('payment_status')
+    note_for_service = (data.get('booking_notes') or '').strip()
+    employee_correction = (
+        str(data.get('employee_correction') or '').strip().lower() in {'1', 'true', 'yes'}
+        and not request.is_json
+    )
+    expected_history_count = data.get('expected_history_count')
+    if expected_history_count not in (None, ''):
+        actual_history_count = BookingStatusHistory.query.filter_by(booking_id=booking_id).count()
+        try:
+            if int(expected_history_count) != actual_history_count:
+                raise ValueError("Booking was updated by another employee")
+        except ValueError as e:
+            if request.is_json:
+                return jsonify({'error': str(e)}), 409
+            flash(str(e), 'error')
+            return redirect(url_for('bookings.detail', booking_id=booking_id))
     if new_status and new_status not in BOOKING_STATUSES:
-        flash('Invalid booking status.', 'error')
+        flash('Invalid status transition', 'error')
         return redirect(url_for('bookings.detail', booking_id=booking_id))
     if new_payment and new_payment not in PAYMENT_STATUSES:
-        flash('Invalid payment status.', 'error')
+        flash('Invalid payment status transition', 'error')
         return redirect(url_for('bookings.detail', booking_id=booking_id))
-
     try:
-        service = UnifiedCRMService()
-        result = service.update_booking_status(
-            booking_id,
-            new_status=new_status,
-            new_payment_status=new_payment,
-            changed_by='system-ui',
-            change_source='crm-ui',
-            notes=data.get('booking_notes', ''),
+        _validate_payment_transition(
+            booking.payment_status,
+            new_payment,
+            allow_employee_correction=employee_correction,
+            correction_note=note_for_service,
         )
-        if result:
-            booking = db.get_or_404(TripBooking, booking_id)
     except ValueError as e:
+        if request.is_json:
+            return jsonify({'error': str(e)}), 400
         flash(str(e), 'error')
         return redirect(url_for('bookings.detail', booking_id=booking_id))
+    actor = current_actor()
+    assignment_requested = 'assigned_to_user_id' in data or 'assigned_to' in data
+    requested_user_id = booking.assigned_to_user_id
+    if assignment_requested:
+        if not has_permission('assign_work'):
+            if request.is_json:
+                return jsonify({'error': 'forbidden'}), 403
+            flash('You do not have permission', 'error')
+            return redirect(url_for('bookings.detail', booking_id=booking_id))
+        try:
+            if 'assigned_to_user_id' in data:
+                requested_user_id = resolve_user_id(data.get('assigned_to_user_id'))
+            else:
+                legacy_user = exact_legacy_user(data.get('assigned_to'), include_inactive=False)
+                if data.get('assigned_to', '').strip() and not legacy_user:
+                    raise ValueError('Choose an active employee from the list')
+                requested_user_id = legacy_user.id if legacy_user else None
+        except ValueError as exc:
+            if request.is_json:
+                return jsonify({'error': str(exc)}), 400
+            flash(str(exc), 'error')
+            return redirect(url_for('bookings.detail', booking_id=booking_id))
+    status_for_service = new_status if new_status and new_status != (booking.booking_status or '') else None
+    payment_for_service = new_payment if new_payment and new_payment != (booking.payment_status or '') else None
+    try:
+        service = UnifiedCRMService()
+        if status_for_service or payment_for_service or note_for_service:
+            service.update_booking_status(
+                booking_id,
+                new_status=status_for_service,
+                new_payment_status=payment_for_service,
+                changed_by=actor,
+                change_source='crm-ui',
+                notes=note_for_service,
+                allow_employee_correction=employee_correction,
+            )
+        db.session.expire_all()
+        booking = db.get_or_404(TripBooking, booking_id)
+        if assignment_requested:
+            apply_assignment(
+                booking,
+                resource_type='booking',
+                resource_id=booking.booking_id,
+                new_user_id=requested_user_id,
+                actor=current_user(),
+                reason=data.get('assignment_reason', ''),
+            )
+        booking.priority = (data.get('priority') or booking.priority or 'Medium').strip()
+        booking.next_action = (data.get('next_action') or '').strip() or None
+        booking.next_follow_up_at = _parse_datetime_local(data.get('next_follow_up_at'))
+        booking.customer_response_status = (data.get('customer_response_status') or '').strip() or None
+        if data.get('mark_contacted') == '1':
+            booking.last_contact_at = datetime.now(timezone.utc).replace(microsecond=0)
+            booking.customer_response_status = booking.customer_response_status or 'Contacted'
+        booking.booking_notes = _append_note(booking.booking_notes, note_for_service, actor)
+        db.session.commit()
+    except ValueError as e:
+        message = 'Invalid status transition' if 'Invalid booking status transition' in str(e) else str(e)
+        flash(message, 'error')
+        return redirect(url_for('bookings.detail', booking_id=booking_id))
     except Exception as e:
-        flash(f'Booking update failed: {str(e)}', 'error')
+        flash('CRM service unavailable', 'error')
         return redirect(url_for('bookings.detail', booking_id=booking_id))
 
     if request.is_json:
         return jsonify({'status': 'ok', 'booking': booking.to_dict()})
-    flash('Booking updated.', 'success')
+    if status_for_service and payment_for_service:
+        flash('Changes saved', 'success')
+    elif payment_for_service:
+        flash('Payment status updated successfully', 'success')
+    elif status_for_service:
+        flash('Status updated successfully', 'success')
+    else:
+        flash('Changes saved', 'success')
     return redirect(url_for('bookings.detail', booking_id=booking_id))
 
 

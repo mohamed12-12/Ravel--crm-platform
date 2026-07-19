@@ -62,6 +62,26 @@
             </div>
         </div>
 
+        <!-- Follow-up workspace -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Employee Follow-up</span>
+                {% if lead.follow_up_due_date and lead.follow_up_due_date < today %}
+                <span class="badge badge-red">Overdue</span>
+                {% endif %}
+            </div>
+            <div class="work-summary">
+                <div class="work-item"><div class="work-label">Next Action</div><div class="work-value">{{ lead.current_step or 'Review lead' }}</div></div>
+                <div class="work-item"><div class="work-label">Assigned Employee</div><div class="work-value">{{ assigned_user.display_name if assigned_user else (lead.assigned_to or 'Unassigned') }}</div></div>
+                <div class="work-item"><div class="work-label">Priority</div><div class="work-value">{{ lead.priority or 'Medium' }}</div></div>
+                <div class="work-item"><div class="work-label">Next Follow-up</div><div class="work-value">{{ lead.follow_up_due_date.strftime('%d %b %Y') if lead.follow_up_due_date else 'Not scheduled' }}</div></div>
+                <div class="work-item"><div class="work-label">Last Customer Contact</div><div class="work-value">{{ lead.last_contact_at.strftime('%d %b %Y %H:%M') if lead.last_contact_at else 'No employee contact recorded' }}</div></div>
+                <div class="work-item"><div class="work-label">Customer Response</div><div class="work-value">{{ lead.customer_response_status or lead.follow_up_status or 'Open' }}</div></div>
+                <div class="work-item"><div class="work-label">Missing Documents</div><div class="work-value">{% if lead.passport_status == 'pending' %}Passport pending{% else %}None flagged{% endif %}</div></div>
+                <div class="work-item"><div class="work-label">Channel</div><div class="work-value">{{ lead.channel or lead.lead_source or 'Unknown' }}</div></div>
+            </div>
+        </div>
+
         <!-- Details -->
         <div class="card">
             <div class="card-header">
@@ -95,6 +115,14 @@
                 <div>
                     <div class="form-label">Language</div>
                     <div style="color:var(--text-main)">{{ lead.language or '—' }}</div>
+                </div>
+                <div>
+                    <div class="form-label">Passport Status</div>
+                    <div style="color:var(--text-main)">{{ lead.passport_status or '—' }}</div>
+                </div>
+                <div>
+                    <div class="form-label">Passport File</div>
+                    <div style="color:var(--text-main)">{{ passport_file_name or '—' }}</div>
                 </div>
                 <div>
                     <div class="form-label">Interested Trip IDs</div>
@@ -168,7 +196,7 @@
 
         <div class="card">
             <div class="card-header">
-                <span class="card-title">Booking Event Trail</span>
+                <span class="card-title">Activity Timeline</span>
             </div>
             {% if event_trail %}
             <div style="display:flex;flex-direction:column;gap:0.7rem">
@@ -191,6 +219,27 @@
             <p style="color:var(--text-muted);font-size:0.83rem">No booking events recorded yet.</p>
             {% endif %}
         </div>
+
+        {% if assigned_history %}
+        <div class="card">
+            <div class="card-header"><span class="card-title">Assignment History</span></div>
+            <div style="display:flex;flex-direction:column;gap:0.5rem">
+                {% for item in assigned_history %}
+                <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;padding:0.65rem 0.75rem;font-size:0.78rem">
+                    <div style="color:var(--text-main);font-weight:700">
+                        {{ item.new_user.display_name if item.new_user else 'Unassigned' }}
+                        <span style="color:var(--text-muted);font-weight:400">from {{ item.previous_user.display_name if item.previous_user else 'Unassigned' }}</span>
+                    </div>
+                    <div style="color:var(--text-muted);margin-top:0.2rem">
+                        {{ item.assigned_by_user.display_name if item.assigned_by_user else 'System' }}
+                        · {{ item.created_at.strftime('%d %b %Y %H:%M') if item.created_at else 'Unknown time' }}
+                        {% if item.reason %} · {{ item.reason }}{% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
 
         <!-- Interactions -->
         <div class="card">
@@ -229,7 +278,12 @@
                 <button class="btn btn-ghost" onclick="openModal('triggerHandoff')">🔔 Create Handoff</button>
                 <a href="{{ url_for('bookings.index') }}" class="btn btn-ghost">📋 Create Booking</a>
                 <button onclick="openModal('editLead')" class="btn btn-ghost">✏ Edit Lead</button>
+                <button class="btn btn-ghost" onclick="runQuickAction('mark_contacted')">Mark Customer Contacted</button>
+                <button class="btn btn-ghost" onclick="runQuickAction('waiting_customer')">Waiting for Customer</button>
+                <button class="btn btn-ghost" onclick="runQuickAction('request_documents')">Request Documents</button>
+                <button class="btn btn-ghost" onclick="runQuickAction('request_deposit')">Deposit Requested</button>
                 <form action="{{ url_for('leads.update', lead_id=lead.lead_id) }}" method="POST" onsubmit="return confirm('Mark as Lost?')">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="_method" value="DELETE">
                     <button type="submit" class="btn btn-danger" style="width:100%">✕ Mark as Lost</button>
                 </form>
@@ -272,6 +326,9 @@
             <button class="modal-close" onclick="closeModal('editLead')">✕</button>
         </div>
         <form action="{{ url_for('leads.update', lead_id=lead.lead_id) }}" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="expected_updated_at" value="{{ lead.updated_at.isoformat() if lead.updated_at else '' }}">
+            <input type="hidden" name="employee_correction" value="1">
             <div class="grid-2">
                 <div class="form-group col-span-2">
                     <label class="form-label">Customer Name</label>
@@ -288,6 +345,7 @@
                         <option value="{{ s }}" {% if lead.lead_stage == s %}selected{% endif %}>{{ s }}</option>
                         {% endfor %}
                     </select>
+                    <div style="color:var(--text-muted);font-size:0.72rem;margin-top:0.35rem">You can reopen or correct a closed lead. Add a reason below when changing a non-standard stage.</div>
                 </div>
                 <div class="form-group">
                     <label class="form-label">Priority</label>
@@ -297,6 +355,19 @@
                         {% endfor %}
                     </select>
                 </div>
+                {% if can_assign %}
+                <div class="form-group">
+                    <label class="form-label">Assigned Employee</label>
+                    <select class="form-select" name="assigned_to_user_id">
+                        <option value="">Unassigned</option>
+                        {% for employee in employees %}
+                        <option value="{{ employee.id }}" {% if lead.assigned_to_user_id == employee.id %}selected{% endif %}>{{ employee.display_name }} · {{ employee.role }}</option>
+                        {% endfor %}
+                    </select>
+                    {% if lead.assigned_to and not assigned_user %}<div style="color:var(--text-muted);font-size:0.72rem;margin-top:0.35rem">Legacy owner text: {{ lead.assigned_to }}. Choose an employee to link it.</div>{% endif %}
+                    <input class="form-input" type="text" name="assignment_reason" placeholder="Optional reassignment reason" style="margin-top:0.5rem">
+                </div>
+                {% endif %}
                 <div class="form-group">
                     <label class="form-label">Follow-Up Status</label>
                     <select class="form-select" name="follow_up_status">
@@ -310,12 +381,24 @@
                     <input class="form-input" type="date" name="follow_up_due_date" value="{{ lead.follow_up_due_date.strftime('%Y-%m-%d') if lead.follow_up_due_date else '' }}">
                 </div>
                 <div class="form-group">
+                    <label class="form-label">Customer Response</label>
+                    <select class="form-select" name="customer_response_status">
+                        {% for s in ['Open','Contacted','Waiting Customer','No Answer','Resolved'] %}
+                        <option value="{{ s }}" {% if (lead.customer_response_status or 'Open') == s %}selected{% endif %}>{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
                     <label class="form-label">Interested Trip IDs</label>
                     <input class="form-input" type="text" name="interested_trip_ids" value="{{ lead.interested_trip_ids or '' }}">
                 </div>
                 <div class="form-group">
                     <label class="form-label">Group Size</label>
                     <input class="form-input" type="number" name="group_size" min="1" value="{{ lead.group_size or 1 }}" placeholder="1">
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Stage Change Reason</label>
+                    <input class="form-input" type="text" name="stage_change_reason" placeholder="Required when reopening or correcting the pipeline stage">
                 </div>
                 <div class="form-group col-span-2">
                     <label class="form-label">Notes</label>
@@ -366,11 +449,34 @@ document.querySelectorAll('.modal-overlay').forEach(m => {
 });
 
 function advanceStage(leadId) {
-    fetch(`/leads/${leadId}/advance`, { method: 'POST' })
+    fetch(`/leads/${leadId}/advance`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN }
+    })
         .then(r => r.json())
         .then(d => {
             if (d.new_stage) { location.reload(); }
         });
+}
+
+function runQuickAction(action) {
+    fetch('{{ url_for("leads.quick_action", lead_id=lead.lead_id) }}', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': window.CRM_CSRF_TOKEN
+        },
+        body: JSON.stringify({ action })
+    }).then(r => r.json()).then(d => {
+        if (d.status === 'ok') {
+            location.reload();
+        } else {
+            alert(d.error || 'CRM service unavailable');
+        }
+    }).catch(() => alert('CRM service unavailable'));
 }
 
 function triggerHandoff() {
@@ -378,7 +484,12 @@ function triggerHandoff() {
     const priority = document.getElementById('handoff-priority').value;
     fetch('{{ url_for("leads.create_handoff", lead_id=lead.lead_id) }}', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': window.CRM_CSRF_TOKEN
+        },
         body: JSON.stringify({ reason, priority })
     }).then(r => r.json()).then(d => {
         closeModal('triggerHandoff');

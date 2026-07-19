@@ -1,12 +1,24 @@
 # app/routes/trips.py
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash
+from pathlib import Path
+
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, send_file, abort
 from app.models.trip import Trip
 from app.models.booking import TripBooking
+from app.models.trip_media import TripMedia
 from app.extensions import db
 from sqlalchemy import or_
 import uuid
 from datetime import datetime, date, timezone
 from services.crm.system_services import UnifiedCRMService
+from app.security import current_user, current_user_id, employee_session_guard, employee_session_required
+from app.services.trip_media import (
+    TripMediaValidationError,
+    cover_media_by_trip_ids,
+    has_trip_media_upload,
+    resolve_storage_key,
+    save_trip_media_uploads,
+    verified_trip_media,
+)
 
 trips_bp = Blueprint('trips', __name__, url_prefix='/trips')
 
@@ -47,6 +59,27 @@ def _sync_trip_after_commit(trip_id: str) -> None:
         flash(f"Trip saved in the system, but sheet sync needs attention: {exc}", "warning")
 
 
+def _uploaded_by_name() -> str:
+    user = current_user()
+    return str(getattr(user, "display_name", "") or getattr(user, "username", "") or "CRM Employee").strip()
+
+
+def _guard_media_upload_if_present():
+    if not has_trip_media_upload(request.files):
+        return None
+    return employee_session_guard(require_csrf=True)
+
+
+def _save_uploaded_trip_media(trip_id: str):
+    return save_trip_media_uploads(
+        trip_id=trip_id,
+        files=request.files,
+        form=request.form,
+        uploaded_by_user_id=current_user_id(),
+        uploaded_by_name=_uploaded_by_name(),
+    )
+
+
 @trips_bp.route('/')
 def index():
     q = request.args.get('q', '')
@@ -70,8 +103,11 @@ def index():
     statuses = [r[0] for r in db.session.query(Trip.sales_status).distinct().all() if r[0]]
     types = [r[0] for r in db.session.query(Trip.type).distinct().all() if r[0]]
 
+    cover_media_by_trip = cover_media_by_trip_ids([trip.trip_id for trip in trips])
+
     return render_template('trips/index.html',
                            trips=trips,
+                           cover_media_by_trip=cover_media_by_trip,
                            q=q,
                            current_status=status,
                            current_type=trip_type,
@@ -115,9 +151,13 @@ def detail(trip_id):
         "double": max((trip.double_remaining or 0) - room_counts["double_booked"], 0),
         "triple": max((trip.triple_remaining or 0) - room_counts["triple_booked"], 0),
     }
+    trip_media = verified_trip_media(trip_id)
+    cover_media = next((media for media in trip_media if media.image_type == "cover"), None)
     return render_template(
         'trips/detail.html',
         trip=trip,
+        trip_media=trip_media,
+        cover_media=cover_media,
         commercial_config=commercial_config,
         bookings=bookings,
         room_counts=room_counts,
@@ -128,6 +168,9 @@ def detail(trip_id):
 
 @trips_bp.route('/', methods=['POST'])
 def create():
+    denied = _guard_media_upload_if_present()
+    if denied is not None:
+        return denied
     data = request.form.to_dict()
 
     # Auto-generate trip ID if blank
@@ -184,8 +227,15 @@ def create():
         public_description=data.get('public_description', ''),
         sales_notes=_compose_trip_sales_notes(data),
     )
-    db.session.add(trip)
-    db.session.commit()
+    try:
+        db.session.add(trip)
+        db.session.flush()
+        _save_uploaded_trip_media(trip.trip_id)
+        db.session.commit()
+    except TripMediaValidationError as exc:
+        db.session.rollback()
+        flash(str(exc), 'error')
+        return redirect(url_for('trips.index'))
     _sync_trip_after_commit(trip.trip_id)
     flash(f"Trip '{trip.trip_name}' created successfully.", 'success')
     return redirect(url_for('trips.detail', trip_id=trip.trip_id))
@@ -197,6 +247,9 @@ def update(trip_id):
     method_override = request.form.get('_method', '').upper()
     if method_override == 'DELETE':
         return delete(trip_id)
+    denied = _guard_media_upload_if_present()
+    if denied is not None:
+        return denied
 
     trip = db.get_or_404(Trip, trip_id)
     data = request.form.to_dict()
@@ -235,7 +288,13 @@ def update(trip_id):
     trip.public_description = data.get('public_description', trip.public_description)
     trip.sales_notes = _compose_trip_sales_notes(data, trip)
 
-    db.session.commit()
+    try:
+        _save_uploaded_trip_media(trip.trip_id)
+        db.session.commit()
+    except TripMediaValidationError as exc:
+        db.session.rollback()
+        flash(str(exc), 'error')
+        return redirect(url_for('trips.detail', trip_id=trip_id))
     _sync_trip_after_commit(trip.trip_id)
     flash(f"Trip '{trip.trip_name}' updated.", 'success')
     return redirect(url_for('trips.detail', trip_id=trip_id))
@@ -269,3 +328,58 @@ def update_inventory(trip_id):
     db.session.commit()
     _sync_trip_after_commit(trip.trip_id)
     return jsonify({'status': 'ok', 'trip': trip.to_dict()})
+
+
+@trips_bp.route('/<string:trip_id>/media', methods=['POST'])
+@employee_session_required
+def upload_media(trip_id):
+    db.get_or_404(Trip, trip_id)
+    if not has_trip_media_upload(request.files):
+        return jsonify({"error": "no_trip_media_uploaded"}), 400
+    try:
+        created = _save_uploaded_trip_media(trip_id)
+        db.session.commit()
+    except TripMediaValidationError as exc:
+        db.session.rollback()
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"status": "ok", "media": [media.to_public_dict() for media in created]})
+
+
+@trips_bp.route('/<string:trip_id>/media/<int:media_id>', methods=['POST'])
+@employee_session_required
+def update_media(trip_id, media_id):
+    media = TripMedia.query.filter_by(trip_id=trip_id, media_id=media_id).first_or_404()
+    data = request.form.to_dict() or request.get_json(silent=True) or {}
+    if "alt_text" in data:
+        media.alt_text = str(data.get("alt_text") or "").strip()[:255]
+    if "display_order" in data:
+        try:
+            media.display_order = max(0, int(data.get("display_order") or 0))
+        except (TypeError, ValueError):
+            pass
+    if "is_active" in data:
+        raw = str(data.get("is_active") or "").strip().lower()
+        media.is_active = raw in {"1", "true", "yes", "on", "active"}
+    db.session.commit()
+    return jsonify({"status": "ok", "media": media.to_public_dict()})
+
+
+@trips_bp.route('/media/<string:public_id>')
+def public_media(public_id):
+    media = TripMedia.query.filter_by(
+        public_id=public_id,
+        is_active=True,
+        verification_status="verified",
+    ).first()
+    if media is None:
+        abort(404)
+    try:
+        path = resolve_storage_key(media.storage_key)
+    except TripMediaValidationError:
+        abort(404)
+    if not path.exists() or not path.is_file():
+        abort(404)
+    response = send_file(path, mimetype=media.mime_type, as_attachment=False, conditional=True, max_age=3600)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Content-Disposition"] = "inline"
+    return response

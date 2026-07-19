@@ -7,6 +7,8 @@ from app.models.lead import Lead
 from app.models.trip import Trip
 from app.models.booking import TripBooking
 from app.models.handoff import HandoffQueue
+from app.models.user import User
+from app.models.user_audit import UserAuditLog
 from app.services.importer import run_full_import, run_sheets_import
 from app.services.identity import find_duplicates, merge_travelers
 from services.crm.system_services.config import get_database_diagnostics
@@ -15,8 +17,121 @@ from pathlib import Path
 import os
 import uuid
 from werkzeug.utils import secure_filename
+from sqlalchemy import or_
+from werkzeug.security import generate_password_hash
+from app.security import current_user, current_user_id, has_permission, permission_required
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
+ROLE_OPTIONS = ['admin', 'manager', 'agent', 'sales']
+
+
+def _audit_user_change(action: str, target: User, details: str = '') -> None:
+    actor = current_user()
+    db.session.add(UserAuditLog(
+        actor_user_id=actor.id if actor else None,
+        target_user_id=target.id,
+        action=action,
+        details=details or None,
+    ))
+
+
+@admin_bp.route('/users')
+@permission_required('manage_users')
+def users():
+    user_rows = User.query.order_by(User.is_active.desc(), User.full_name.asc(), User.username.asc()).all()
+    return render_template('admin/users.html', users=user_rows, roles=ROLE_OPTIONS)
+
+
+@admin_bp.route('/users/create', methods=['POST'])
+@permission_required('manage_users')
+def create_user():
+    username = (request.form.get('username') or '').strip()
+    full_name = (request.form.get('full_name') or '').strip()
+    email = (request.form.get('email') or '').strip() or None
+    role = (request.form.get('role') or 'agent').strip().lower()
+    password = request.form.get('password') or ''
+    if not username or not password or len(password) < 8:
+        flash('Username and a password of at least 8 characters are required.', 'error')
+        return redirect(url_for('admin.users'))
+    if role not in ROLE_OPTIONS:
+        flash('Invalid employee role.', 'error')
+        return redirect(url_for('admin.users'))
+    if User.query.filter(db.func.lower(User.username) == username.casefold()).first():
+        flash('That username already exists.', 'error')
+        return redirect(url_for('admin.users'))
+    if email and User.query.filter(db.func.lower(User.email) == email.casefold()).first():
+        flash('That email already exists.', 'error')
+        return redirect(url_for('admin.users'))
+    user = User(
+        username=username,
+        full_name=full_name or username,
+        email=email,
+        role=role,
+        is_active=True,
+        password_hash=generate_password_hash(password),
+    )
+    db.session.add(user)
+    db.session.flush()
+    _audit_user_change('user_created', user, f'role={role}')
+    db.session.commit()
+    try:
+        from app.services.assignments import backfill_legacy_assignments
+        backfill_legacy_assignments()
+    except Exception:
+        db.session.rollback()
+    flash(f'Employee {user.display_name} created.', 'success')
+    return redirect(url_for('admin.users'))
+
+
+@admin_bp.route('/users/<int:user_id>/update', methods=['POST'])
+@permission_required('manage_users')
+def update_user(user_id: int):
+    user = db.get_or_404(User, user_id)
+    actor = current_user()
+    role = (request.form.get('role') or user.role).strip().lower()
+    if role not in ROLE_OPTIONS:
+        flash('Invalid employee role.', 'error')
+        return redirect(url_for('admin.users'))
+    if actor and actor.id == user.id and role != user.role:
+        flash('You cannot change your own role.', 'error')
+        return redirect(url_for('admin.users'))
+    user.full_name = (request.form.get('full_name') or user.full_name or user.username).strip()
+    user.email = (request.form.get('email') or '').strip() or None
+    user.role = role
+    _audit_user_change('user_updated', user, f'role={role}')
+    db.session.commit()
+    flash('Employee details updated.', 'success')
+    return redirect(url_for('admin.users'))
+
+
+@admin_bp.route('/users/<int:user_id>/toggle', methods=['POST'])
+@permission_required('manage_users')
+def toggle_user(user_id: int):
+    user = db.get_or_404(User, user_id)
+    actor = current_user()
+    if actor and actor.id == user.id:
+        flash('You cannot deactivate your own account.', 'error')
+        return redirect(url_for('admin.users'))
+    user.is_active = not bool(user.is_active)
+    _audit_user_change('user_activated' if user.is_active else 'user_deactivated', user)
+    db.session.commit()
+    flash(f'Employee {user.display_name} is now {"active" if user.is_active else "inactive"}.', 'success')
+    return redirect(url_for('admin.users'))
+
+
+@admin_bp.route('/users/<int:user_id>/reset-password', methods=['POST'])
+@permission_required('manage_users')
+def reset_user_password(user_id: int):
+    user = db.get_or_404(User, user_id)
+    password = request.form.get('password') or ''
+    if len(password) < 8:
+        flash('Password must be at least 8 characters.', 'error')
+        return redirect(url_for('admin.users'))
+    user.password_hash = generate_password_hash(password)
+    _audit_user_change('password_reset', user)
+    db.session.commit()
+    flash(f'Password reset for {user.display_name}.', 'success')
+    return redirect(url_for('admin.users'))
 
 
 @admin_bp.route('/')
@@ -49,6 +164,46 @@ def dashboard():
         Lead.priority == 'High',
         Lead.lead_stage.notin_(['Booked', 'Lost'])
     ).order_by(Lead.created_at.desc()).limit(5).all()
+    today = datetime.now(timezone.utc).date()
+    overdue_followups = Lead.query.filter(
+        Lead.follow_up_due_date < today,
+        Lead.lead_stage.notin_(['Won', 'Lost'])
+    ).order_by(Lead.follow_up_due_date.asc()).limit(8).all()
+    due_today = Lead.query.filter(
+        Lead.follow_up_due_date == today,
+        Lead.lead_stage.notin_(['Won', 'Lost'])
+    ).order_by(Lead.updated_at.desc()).limit(8).all()
+    new_unassigned = Lead.query.filter(
+        Lead.lead_stage.in_(['New Lead', 'New', 'New Inquiry']),
+        Lead.assigned_to_user_id.is_(None)
+    ).order_by(Lead.created_at.desc()).limit(8).all()
+    waiting_customer_leads = Lead.query.filter(
+        Lead.lead_stage.in_(['Waiting Customer Reply', 'Follow Up Needed', 'VIP Follow Up', 'Repeat Follow Up'])
+    ).order_by(Lead.updated_at.desc()).limit(8).all()
+    deposit_followups = TripBooking.query.filter(
+        or_(TripBooking.booking_status == 'Payment Pending', TripBooking.payment_status == 'Pending')
+    ).order_by(TripBooking.draft_created_at.desc()).limit(8).all()
+    missing_documents = TripBooking.query.filter(
+        TripBooking.passport_status == 'pending'
+    ).order_by(TripBooking.draft_created_at.desc()).limit(8).all()
+    my_leads = Lead.query.filter(Lead.assigned_to_user_id == current_user_id()).order_by(Lead.updated_at.desc()).limit(8).all() if current_user_id() else []
+    my_bookings = TripBooking.query.filter(TripBooking.assigned_to_user_id == current_user_id()).order_by(TripBooking.draft_created_at.desc()).limit(8).all() if current_user_id() else []
+    my_overdue_leads = Lead.query.filter(
+        Lead.assigned_to_user_id == current_user_id(),
+        Lead.follow_up_due_date < today,
+        Lead.lead_stage.notin_(['Won', 'Lost']),
+    ).order_by(Lead.follow_up_due_date.asc()).limit(8).all() if current_user_id() else []
+    inactive_owner_leads = Lead.query.filter(Lead.assigned_user.has(User.is_active.is_(False))).limit(8).all() if has_permission('view_all') else []
+    inactive_owner_bookings = TripBooking.query.filter(TripBooking.assigned_user.has(User.is_active.is_(False))).limit(8).all() if has_permission('view_all') else []
+    team_workload = []
+    if has_permission('view_all'):
+        for employee in User.query.filter(User.is_active.is_(True)).order_by(User.full_name.asc()).all():
+            team_workload.append({
+                'employee': employee,
+                'leads': Lead.query.filter_by(assigned_to_user_id=employee.id).count(),
+                'bookings': TripBooking.query.filter_by(assigned_to_user_id=employee.id).count(),
+            })
+    recent_bookings = TripBooking.query.order_by(TripBooking.draft_created_at.desc()).limit(8).all()
 
     return render_template('admin/dashboard.html',
                            traveler_count=traveler_count,
@@ -58,7 +213,20 @@ def dashboard():
                            draft_booking_count=draft_booking_count,
                            recent_leads=recent_leads,
                            recent_handoffs=recent_handoffs,
-                           urgent_leads=urgent_leads)
+                           urgent_leads=urgent_leads,
+                           overdue_followups=overdue_followups,
+                           due_today=due_today,
+                           new_unassigned=new_unassigned,
+                           waiting_customer_leads=waiting_customer_leads,
+                           deposit_followups=deposit_followups,
+                           missing_documents=missing_documents,
+                           my_leads=my_leads,
+                           my_bookings=my_bookings,
+                           my_overdue_leads=my_overdue_leads,
+                           inactive_owner_leads=inactive_owner_leads,
+                           inactive_owner_bookings=inactive_owner_bookings,
+                           team_workload=team_workload,
+                           recent_bookings=recent_bookings)
 
 
 @admin_bp.route('/import', methods=['GET', 'POST'])
@@ -74,8 +242,8 @@ def import_data():
                 flash('Google Sheet ID or credentials path not configured in .env', 'error')
                 return redirect(url_for('admin.import_data'))
             try:
-                results = run_sheets_import(sheet_id, creds_path)
-                flash('Google Sheets sync completed successfully.', 'success')
+                results = run_sheets_import(sheet_id, creds_path, apply=False)
+                flash('Google Sheets preview completed. No CRM records were changed.', 'success')
             except Exception as e:
                 flash(f'Sheets sync failed: {e}', 'error')
 
@@ -90,8 +258,8 @@ def import_data():
             upload_path = upload_root / f"{uuid.uuid4().hex}-{safe_name}"
             f.save(upload_path)
             try:
-                results = run_full_import(upload_path)
-                flash('Excel import completed successfully.', 'success')
+                results = run_full_import(upload_path, apply=False)
+                flash('Excel preview completed. No CRM records were changed.', 'success')
             except Exception as e:
                 flash(f'Excel import failed: {e}', 'error')
 

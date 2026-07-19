@@ -239,6 +239,9 @@ class Phase3BookingWriteThroughTests(unittest.TestCase):
             connection.commit()
 
         os.environ["RAHMA_SYSTEM_DB_PATH"] = str(db_path)
+        os.environ["AI_AGENT_MODE"] = "deterministic"
+        os.environ["CRM_SHEET_MIRROR_ENABLED"] = "true"
+        os.environ["EXCEL_EXPORT_ENABLED"] = "true"
         source_workbook = self.tmp_path / "source.xlsx"
         runtime_workbook = self.tmp_path / "runtime.xlsx"
         create_workbook(source_workbook)

@@ -17,5 +17,16 @@ from app.extensions import socketio
 
 app = create_app(os.getenv('FLASK_CONFIG', 'default'))
 
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    return default if value is None else value.strip().lower() in {"1", "true", "yes", "on"}
+
 if __name__ == '__main__':
-    socketio.run(app, debug=True, port=5000)
+    debug = _env_flag("FLASK_DEBUG", default=False)
+    socketio.run(
+        app,
+        debug=debug,
+        use_reloader=_env_flag("FLASK_USE_RELOADER", default=debug),
+        port=int(os.getenv("PORT", "5000")),
+    )
