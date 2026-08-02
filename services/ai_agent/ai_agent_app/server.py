@@ -12,6 +12,8 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, sen
 
 from services.ai_agent.ai_agent_app.agent import GeminiAgent, SessionFlowManager
 from services.ai_agent.ai_agent_app.agent.response_format import response_completeness_issue
+from services.ai_agent.ai_agent_app.agent.response_guard import guard_customer_response
+from services.ai_agent.ai_agent_app.agent.write_response_gating import detect_write_record_type
 from services.ai_agent.ai_agent_app.agent.tool_calling_runtime import ToolCallingSessionRuntime
 from services.ai_agent.ai_agent_app.agent.session_flow import detect_language
 from services.ai_agent.ai_agent_app.config import Settings, load_settings
@@ -87,6 +89,25 @@ def _strip_trip_media_urls(text: str) -> str:
     cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
+
+
+def _latest_write_result_from_agent_result(result: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+    tool_requests = result.get("tool_requests") if isinstance(result, dict) else []
+    if not isinstance(tool_requests, list):
+        return None, ""
+    for event in reversed(tool_requests):
+        if not isinstance(event, dict) or not event.get("write"):
+            continue
+        tool_result = event.get("result") if isinstance(event.get("result"), dict) else {}
+        write_result = tool_result.get("write_result_contract") if isinstance(tool_result.get("write_result_contract"), dict) and tool_result.get("write_result_contract") else None
+        if write_result is None and isinstance(tool_result.get("write_result"), dict):
+            write_result = tool_result["write_result"]
+        if write_result is None:
+            write_result = tool_result
+        record_type = detect_write_record_type(str(event.get("name") or ""), write_result)
+        if record_type != "write":
+            return write_result, record_type
+    return None, ""
 
 
 def _extract_trip_media_from_agent_result(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1405,6 +1426,25 @@ def _route_live_message_with_gemini(session, text: str, gemini_agent: GeminiAgen
             if isinstance(event, dict) and str(event.get("name") or "").strip()
         ]
     reply = _sanitize_gemini_reply(reply, session.language)
+    write_result, record_type = _latest_write_result_from_agent_result(result)
+    guarded = guard_customer_response(
+        reply,
+        language=session.language,
+        write_result=write_result,
+        record_type=record_type,
+        fallback_message_key=record_type or "general",
+    )
+    if guarded.fallback_used:
+        app_logger.warning(
+            "Gemini response guard fallback session=%s reason=%s terms=%s",
+            session.id,
+            guarded.reason_code,
+            ",".join(guarded.blocked_terms_found),
+        )
+        reply = guarded.message
+        fallback_used = True
+    else:
+        reply = guarded.message
     completion_issue = response_completeness_issue(reply)
     if completion_issue:
         app_logger.warning(
@@ -1630,13 +1670,10 @@ def create_app(
     from services.ai_agent.ai_agent_app.web.api_routes import api_bp
     from services.ai_agent.ai_agent_app.web.auth import auth_bp, login_required
 
-    if not getattr(api_bp, "_auth_guard_registered", False):
-        @api_bp.before_request
-        def check_api_auth():
-            if not session.get("logged_in"):
-                return jsonify({"error": "unauthorized"}), 401
-
-        api_bp._auth_guard_registered = True  # type: ignore[attr-defined]
+    @app.before_request
+    def check_api_auth():
+        if request.blueprint == api_bp.name and not session.get("logged_in"):
+            return jsonify({"error": "unauthorized"}), 401
 
     app.register_blueprint(api_bp)
     app.register_blueprint(auth_bp)
@@ -1751,7 +1788,7 @@ def create_app(
         if path is None or not path.exists() or not path.is_file():
             abort(404)
         return send_file(path, mimetype=row["mime_type"] or "image/jpeg", as_attachment=False, conditional=True, max_age=3600)
-    
+
     @app.get("/webhook")
     def webhook_verify():
         settings: Settings = app.config["SETTINGS"]

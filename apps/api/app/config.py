@@ -29,6 +29,16 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return default if value is None else value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _looks_weak_secret(value: str) -> bool:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return True
+    if len(normalized) < 24:
+        return True
+    weak_markers = {"changeme", "change-me", "default", "dev-key", "demo", "password"}
+    return normalized in weak_markers or any(marker in normalized for marker in weak_markers)
+
+
 def _default_sqlite_uri() -> str:
     db_path = (SYSTEM_ROOT / "instance" / "rahma_traveler_dev.db").resolve()
     return f"sqlite:///{db_path.as_posix()}"
@@ -67,8 +77,12 @@ def validate_config(config_name: str) -> list[str]:
     errors: list[str] = []
     resolved_config = config.get(config_name, DevelopmentConfig)
     if config_name == "production":
-        if not os.environ.get("SECRET_KEY", "").strip():
-            errors.append("SECRET_KEY is required in production.")
+        if _looks_weak_secret(os.environ.get("SECRET_KEY", "")):
+            errors.append("SECRET_KEY must be a strong non-default secret in production.")
+        if not _env_flag("CRM_AUTH_ENABLED", default=True):
+            errors.append("CRM_AUTH_ENABLED cannot be false in production.")
+        if _env_flag("FLASK_DEBUG", default=False):
+            errors.append("FLASK_DEBUG cannot be true in production.")
     authority = load_data_authority(environment=config_name)
     errors.extend(
         authority.validate(

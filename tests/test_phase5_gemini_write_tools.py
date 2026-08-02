@@ -514,6 +514,98 @@ class TestPhase5GeminiWriteTools(unittest.TestCase):
         self.assertTrue(result["write_results"][0]["executed"])
         self.assertIn("Booking draft", result["reply"])
 
+    def test_booking_draft_accepts_schema_declared_room_requirements_object(self) -> None:
+        with self._patched_service():
+            agent = self._build_agent(
+                [
+                    function_call_response(
+                        "create_booking_draft",
+                        {
+                            "traveler_id": "TR00002",
+                            "trip_id": "RT-LOC-26-001",
+                            "room_type": "Double",
+                            "room_group": "girls",
+                            "flight_option": "Without Flight",
+                            "lead_id": "LD00099",
+                            "room_requirements": {
+                                "room_type": "Double",
+                                "room_group": "girls",
+                                "girls_rooms_requested": 1,
+                                "requirements": [
+                                    {"room_type": "Double", "room_group": "girls", "count": 1}
+                                ],
+                            },
+                        },
+                    ),
+                    text_response("Booking draft created."),
+                ]
+            )
+            result = agent.respond(
+                user_message="create booking draft",
+                session_context={
+                    "session_id": "sess-book-room-req",
+                    "traveler_id": "TR00002",
+                    "trip_id": "RT-LOC-26-001",
+                    "room_type": "Double",
+                    "room_group": "girls",
+                    "flight_option": "Without Flight",
+                    "lead_id": "LD00099",
+                    "booking_confirmed": True,
+                    "workflow_policy": {"allowed_tools": ["create_booking_draft"], "state": "booking_ready"},
+                },
+            )
+
+        self.assertTrue(result["write_results"][0]["executed"])
+        self.assertEqual(len(self.service.created_bookings), 1)
+
+    def test_booking_draft_capacity_failure_returns_safe_write_result(self) -> None:
+        original_create_booking_draft = self.service.create_booking_draft
+
+        def fail_capacity(**kwargs):
+            raise ValueError("No remaining draftable capacity for Double")
+
+        self.service.create_booking_draft = fail_capacity
+        with self._patched_service():
+            agent = self._build_agent(
+                [
+                    function_call_response(
+                        "create_booking_draft",
+                        {
+                            "traveler_id": "TR00002",
+                            "trip_id": "RT-LOC-26-001",
+                            "room_type": "Double",
+                            "room_group": "girls",
+                            "flight_option": "Without Flight",
+                            "lead_id": "LD00099",
+                        },
+                    ),
+                    text_response("Booking draft created."),
+                ]
+            )
+            result = agent.respond(
+                user_message="yes",
+                session_context={
+                    "session_id": "sess-book-capacity",
+                    "traveler_id": "TR00002",
+                    "trip_id": "RT-LOC-26-001",
+                    "room_type": "Double",
+                    "room_group": "girls",
+                    "flight_option": "Without Flight",
+                    "lead_id": "LD00099",
+                    "booking_confirmed": True,
+                    "workflow_policy": {"allowed_tools": ["create_booking_draft"], "state": "booking_ready", "identity_verified": True},
+                },
+            )
+        self.service.create_booking_draft = original_create_booking_draft
+
+        write = result["write_results"][0]
+        self.assertFalse(write["executed"])
+        self.assertEqual(write["result"]["write_result_contract"]["status"], "failed")
+        self.assertEqual(write["result"]["write_result_contract"]["error_code"], "capacity_unavailable")
+        self.assertNotIn("created", result["reply"].lower())
+        self.assertIn("availability", result["reply"].lower())
+        self.assertEqual(len(self.service.created_bookings), 0)
+
     def test_booking_draft_without_lead_creates_and_links_current_lead(self) -> None:
         with self._patched_service():
             agent = self._build_agent(

@@ -27,6 +27,9 @@ class UiLayoutRegressionTests(unittest.TestCase):
         self.original_env = dict(os.environ)
         os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path.resolve().as_posix()}"
         os.environ["RAHMA_SYSTEM_DB_PATH"] = str(self.db_path)
+        os.environ["SHEET_BACKEND"] = "excel"
+        os.environ["EXCEL_SOURCE_WORKBOOK"] = str(ROOT / "tests" / "fixtures" / "operational_source_workbook.xlsx")
+        os.environ["EXCEL_RUNTIME_WORKBOOK"] = str(self.tmpdir / "runtime.xlsx")
         if str(ROOT) not in sys.path:
             sys.path.insert(0, str(ROOT))
         if str(API_ROOT) not in sys.path:

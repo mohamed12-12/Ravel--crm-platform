@@ -372,6 +372,18 @@ class TestPhase4BusinessValidation(unittest.TestCase):
         self.assertEqual(result.decision, APPROVED)
         self.assertIn("requested a human agent", " ".join(result.reasons))
 
+    def test_controlled_capacity_handoff_is_approved(self) -> None:
+        with self._patch_service():
+            validator = self._build_validator()
+            result = validator.validate_action(
+                action="create_handoff",
+                payload={"reason_code": "room_capacity", "reason_text": "Room inventory needs review."},
+                session_context={"session_id": "sess-capacity", "state": "capacity_handoff_required"},
+            )
+
+        self.assertEqual(result.decision, APPROVED)
+        self.assertIn("controlled human review", " ".join(result.reasons))
+
     def test_validation_decision_is_logged(self) -> None:
         with self._patch_service():
             validator = self._build_validator()

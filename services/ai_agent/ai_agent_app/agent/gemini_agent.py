@@ -8,12 +8,15 @@ from typing import Any
 
 from services.ai_agent.ai_agent_app.agent.prompt_builder import PromptBuilder
 from services.ai_agent.ai_agent_app.agent.response_format import format_agent_reply, response_completeness_issue
+from services.ai_agent.ai_agent_app.agent.response_guard import guard_customer_response
 from services.ai_agent.ai_agent_app.agent.privacy_policy import AgentPrivacyPolicy
 from services.ai_agent.ai_agent_app.agent.read_only_tools import ReadOnlyCRMTools
 from services.ai_agent.ai_agent_app.agent.safety import AgentSafetyLayer
 from services.ai_agent.ai_agent_app.agent.tool_registry import ToolSpec, build_agent_tool_registry
+from services.ai_agent.ai_agent_app.agent.tool_routing_audit import evaluate_tool_route, should_enforce_tool_route
 from services.ai_agent.ai_agent_app.agent.workflow_policy import ConversationWorkflowPolicy
 from services.ai_agent.ai_agent_app.agent.write_tool_executor import GeminiWriteToolExecutor
+from services.ai_agent.ai_agent_app.agent.write_response_gating import detect_write_record_type, gate_customer_write_reply
 from services.ai_agent.ai_agent_app.config import Settings
 from services.ai_agent.ai_agent_app.logger import agent_logger
 from services.ai_agent.validation import ActionValidator
@@ -175,6 +178,90 @@ class GeminiAgent:
             return None
         decision = self.workflow_policy.evaluate(session_context or {})
         return self.workflow_policy.block_tool_result(tool_name, decision)
+
+    def _route_tool_call(self, tool_name: str, session_context: dict[str, Any] | None) -> dict[str, Any]:
+        decision = evaluate_tool_route(
+            requested_tool_name=tool_name,
+            session_context=session_context or {},
+            mode=getattr(self.settings, "agent_tool_router_mode", "dry_run"),
+        )
+        payload = decision.to_dict()
+        agent_logger.info(
+            "Tool router audit mode=%s state=%s tool=%s group=%s allowed=%s would_block=%s reason=%s",
+            decision.mode,
+            decision.state,
+            decision.requested_tool,
+            decision.tool_group,
+            decision.allowed,
+            decision.would_block,
+            decision.reason_code,
+        )
+        if decision.would_block:
+            agent_logger.warning(
+                "Tool router would block mode=%s state=%s tool=%s group=%s reason=%s",
+                decision.mode,
+                decision.state,
+                decision.requested_tool,
+                decision.tool_group,
+                decision.reason_code,
+            )
+        return payload
+
+    @staticmethod
+    def _record_type_for_tool_name(tool_name: str) -> str:
+        normalized = str(tool_name or "").strip().lower()
+        if "passport" in normalized or "document" in normalized:
+            return "document"
+        return detect_write_record_type(normalized, {})
+
+    @staticmethod
+    def _route_decision_is_write_tool(route_decision: dict[str, Any]) -> bool:
+        audit = route_decision.get("audit") if isinstance(route_decision.get("audit"), dict) else {}
+        if isinstance(audit.get("write_tool_group"), bool):
+            return bool(audit.get("write_tool_group"))
+        return str(route_decision.get("tool_group") or "") in {
+            "lead_write",
+            "booking_write",
+            "handoff_write",
+            "passport_write",
+        }
+
+    def _write_tool_enforcement_enabled(self) -> bool:
+        return bool(getattr(self.settings, "agent_write_tool_enforcement", False))
+
+    def _should_block_write_tool_runtime(self, route_decision: dict[str, Any]) -> bool:
+        if not self._write_tool_enforcement_enabled():
+            return False
+        if not self._route_decision_is_write_tool(route_decision):
+            return False
+        return bool(route_decision.get("would_block"))
+
+    def _router_block_result(self, route_decision: dict[str, Any], *, tool_name: str = "") -> dict[str, Any]:
+        customer_message_key = str(route_decision.get("safe_customer_message_key") or "request_not_ready")
+        record_type = self._record_type_for_tool_name(tool_name)
+        contract = {
+            "status": "blocked",
+            "executed": False,
+            "reused": False,
+            "record_type": record_type,
+            "record_id": "",
+            "idempotency_key": "",
+            "customer_confirmation_allowed": False,
+            "error_code": str(route_decision.get("reason_code") or "request_not_ready"),
+            "safe_customer_message_key": customer_message_key,
+            "audit": {
+                "router_mode": str(route_decision.get("mode") or ""),
+                "tool_group": str(route_decision.get("tool_group") or ""),
+            },
+        }
+        return {
+            "status": "router_blocked",
+            "executed": False,
+            "assistant_message": "I cannot save this yet. I need to confirm the required details first.",
+            "customer_message_key": customer_message_key,
+            "write_result": {"write_result_contract": contract},
+            "write_result_contract": contract,
+        }
 
     @staticmethod
     def _tool_events_contain_verified_crm_fact(tool_events: list[dict[str, Any]]) -> bool:
@@ -425,12 +512,21 @@ class GeminiAgent:
             if not isinstance(value, str) or not value.strip():
                 raise GeminiToolLoopError(f"Invalid tool input for {name}: missing {field}.")
 
+        properties = spec.input_schema.get("properties") if isinstance(spec.input_schema, dict) else {}
+        if not isinstance(properties, dict):
+            properties = {}
         for key, value in args.items():
             if value is None:
                 continue
             if isinstance(value, str):
                 continue
             if isinstance(value, (int, float, bool)):
+                continue
+            field_schema = properties.get(key) if isinstance(properties.get(key), dict) else {}
+            allowed_type = field_schema.get("type") if isinstance(field_schema, dict) else ""
+            if isinstance(value, dict) and allowed_type == "object":
+                continue
+            if isinstance(value, list) and allowed_type == "array":
                 continue
             raise GeminiToolLoopError(f"Invalid tool input for {name}: unsupported field {key}.")
         return spec
@@ -513,6 +609,69 @@ class GeminiAgent:
                 session_context=session_context or {},
             )
         raise GeminiToolLoopError(f"Unsupported tool requested: {name}")
+
+    @staticmethod
+    def _last_write_result_for_guard(tool_events: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, str]:
+        for event in reversed(tool_events):
+            if not isinstance(event, dict) or not event.get("write"):
+                continue
+            result = event.get("result") if isinstance(event.get("result"), dict) else {}
+            write_result = result.get("write_result_contract") if isinstance(result.get("write_result_contract"), dict) and result.get("write_result_contract") else None
+            if write_result is None and isinstance(result.get("write_result"), dict):
+                write_result = result["write_result"]
+            if write_result is None:
+                write_result = result
+            record_type = detect_write_record_type(str(event.get("name") or ""), write_result)
+            if record_type != "write":
+                return write_result, record_type
+        return None, ""
+
+    @staticmethod
+    def _guard_final_customer_reply(
+        reply_text: str,
+        *,
+        tool_events: list[dict[str, Any]],
+        language: str,
+        fallback_message_key: str = "general",
+    ) -> str:
+        write_result, record_type = GeminiAgent._last_write_result_for_guard(tool_events)
+        guarded = guard_customer_response(
+            reply_text,
+            language=language,
+            write_result=write_result,
+            record_type=record_type,
+            fallback_message_key=fallback_message_key or record_type or "general",
+        )
+        if guarded.fallback_used:
+            agent_logger.warning(
+                "Gemini response guard fallback reason=%s terms=%s",
+                guarded.reason_code,
+                ",".join(guarded.blocked_terms_found),
+            )
+        return guarded.message
+
+    @staticmethod
+    def _gate_reply_with_write_results(reply_text: str, tool_events: list[dict[str, Any]], language: str) -> str:
+        gated = str(reply_text or "")
+        for event in reversed(tool_events):
+            if not isinstance(event, dict) or not event.get("write"):
+                continue
+            result = event.get("result") if isinstance(event.get("result"), dict) else {}
+            write_result = result.get("write_result_contract") if isinstance(result.get("write_result_contract"), dict) and result.get("write_result_contract") else None
+            if write_result is None and isinstance(result.get("write_result"), dict):
+                write_result = result["write_result"]
+            if write_result is None:
+                write_result = result
+            record_type = detect_write_record_type(str(event.get("name") or ""), write_result)
+            if record_type == "write":
+                continue
+            return gate_customer_write_reply(
+                proposed_reply=gated,
+                write_result=write_result,
+                record_type=record_type,
+                language=language,
+            )
+        return gated
 
     @staticmethod
     def _tool_result_summary(result: dict[str, Any]) -> dict[str, Any]:
@@ -598,7 +757,23 @@ class GeminiAgent:
                 if not reply_text:
                     workflow = session_context.get("workflow_policy") if isinstance(session_context.get("workflow_policy"), dict) else {}
                     reply_text = str(workflow.get("assistant_message") or "").strip()
+                language = str(session_context.get("language") or _detect_language(user_message) or "en")
                 reply_text = self.sanitize_reply(reply_text)
+                reply_text = self._gate_reply_with_write_results(
+                    reply_text,
+                    tool_events,
+                    language,
+                )
+                if self._contains_internal_instruction_leak(reply_text):
+                    reply_text = self._workflow_fallback_reply(session_context)
+                reply_text = self._guard_final_customer_reply(
+                    reply_text,
+                    tool_events=tool_events,
+                    language=language,
+                    fallback_message_key=str((session_context.get("workflow_policy") or {}).get("message_key") or "general")
+                    if isinstance(session_context.get("workflow_policy"), dict)
+                    else "general",
+                )
                 if self._contains_internal_instruction_leak(reply_text):
                     reply_text = self._workflow_fallback_reply(session_context)
                 if not reply_text:
@@ -609,6 +784,14 @@ class GeminiAgent:
                     user_message=user_message,
                     reply_text=reply_text,
                     response=response,
+                )
+                reply_text = self._guard_final_customer_reply(
+                    reply_text,
+                    tool_events=tool_events,
+                    language=language,
+                    fallback_message_key=str((session_context.get("workflow_policy") or {}).get("message_key") or "general")
+                    if isinstance(session_context.get("workflow_policy"), dict)
+                    else "general",
                 )
                 memory_key = self._memory_key(session_context)
                 self._memory.setdefault(memory_key, []).extend(
@@ -665,7 +848,27 @@ class GeminiAgent:
                     thought_signature_present,
                     json.dumps(tool_input, ensure_ascii=False, sort_keys=True),
                 )
-                result = self._workflow_block_result(spec.name, session_context)
+                route_decision = self._route_tool_call(spec.name, session_context)
+                result = None
+                if self._should_block_write_tool_runtime(route_decision):
+                    agent_logger.warning(
+                        "Runtime write-only enforcement blocked tool=%s state=%s group=%s reason=%s",
+                        spec.name,
+                        route_decision.get("state"),
+                        route_decision.get("tool_group"),
+                        route_decision.get("reason_code"),
+                    )
+                    result = self._router_block_result(route_decision, tool_name=spec.name)
+                if result is None and should_enforce_tool_route(
+                    evaluate_tool_route(
+                        requested_tool_name=spec.name,
+                        session_context=session_context,
+                        mode=route_decision.get("mode"),
+                    )
+                ):
+                    result = self._router_block_result(route_decision, tool_name=spec.name)
+                if result is None:
+                    result = self._workflow_block_result(spec.name, session_context)
                 if result is None:
                     result = self._execute_tool(spec.name, tool_input, session_context)
                 summary = self._tool_result_summary(result)
@@ -686,6 +889,7 @@ class GeminiAgent:
                         "summary": summary,
                         "write": bool(spec.allowed_write),
                         "result": deepcopy(result),
+                        "tool_route": deepcopy(route_decision),
                         "assistant_message": str(result.get("assistant_message") or "").strip(),
                         "executed": bool(result.get("executed", spec.allowed_write is False)),
                         "session_update": deepcopy(result.get("session_update")) if isinstance(result.get("session_update"), dict) else None,

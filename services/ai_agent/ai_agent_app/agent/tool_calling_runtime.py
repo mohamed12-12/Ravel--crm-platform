@@ -15,6 +15,7 @@ from services.ai_agent.ai_agent_app.agent.persona import AgentPersona
 from services.ai_agent.ai_agent_app.agent.planner import AgentPlanner
 from services.ai_agent.ai_agent_app.agent.privacy_policy import AgentPrivacyPolicy
 from services.ai_agent.ai_agent_app.agent.response_format import format_agent_reply, response_completeness_issue
+from services.ai_agent.ai_agent_app.agent.response_guard import response_guard_issue
 from services.ai_agent.ai_agent_app.agent.production_agent import ProductionAgentCoordinator
 from services.ai_agent.ai_agent_app.agent.safety import AgentSafetyLayer
 from services.ai_agent.ai_agent_app.agent.read_only_tools import ReadOnlyCRMTools
@@ -399,10 +400,49 @@ class ToolCallingSessionRuntime:
         return any(term in normalized for term in blocked) or bool(re.search(r"^\s*[\[{].*[\]}]\s*$", str(reply or ""), re.S))
 
     @staticmethod
-    def _customer_reply_validation_issue(reply: str) -> str:
+    def _customer_reply_validation_issue(
+        reply: str,
+        *,
+        write_result: dict[str, Any] | None = None,
+        record_type: str = "",
+    ) -> str:
         if ToolCallingSessionRuntime._customer_reply_has_structural_leak(reply):
             return "structural_leak"
+        issue, _terms = response_guard_issue(reply, write_result=write_result, record_type=record_type)
+        if issue:
+            return issue
         return response_completeness_issue(reply)
+
+    @staticmethod
+    def _response_write_result_for_message(session: SessionState, message_key: str) -> tuple[dict[str, Any] | None, str]:
+        key = str(message_key or "").strip().lower()
+        final_result = session.final_result if isinstance(session.final_result, dict) else {}
+        booking_result = session.booking_result if isinstance(session.booking_result, dict) else {}
+        record_type = ""
+        record_id = ""
+        if "booking" in key:
+            record_type = "booking"
+            record_id = str(booking_result.get("booking_id") or final_result.get("booking_id") or "").strip()
+        elif "handoff" in key or "human" in key:
+            record_type = "handoff"
+            record_id = str(final_result.get("handoff_id") or "").strip()
+        elif "lead" in key:
+            record_type = "lead"
+            record_id = str(final_result.get("lead_id") or "").strip()
+        if not record_type:
+            return None, ""
+        if not record_id:
+            return None, record_type
+        return (
+            {
+                "status": "success",
+                "executed": True,
+                "reused": False,
+                "record_type": record_type,
+                "record_id": record_id,
+            },
+            record_type,
+        )
 
     def _safe_response_fallback(self, session: SessionState, *, message_key: str, base_text: str = "") -> str:
         if "handoff_failed" in message_key:
@@ -412,7 +452,8 @@ class ToolCallingSessionRuntime:
         if message_key.endswith("already_under_review") or (self._has_active_handoff(session) and "workflow.handoff." not in message_key):
             return self._handoff_already_under_review_message(session)
         fallback = self._normalize_reply(base_text, session.language)
-        if self._customer_reply_validation_issue(fallback):
+        write_result, record_type = self._response_write_result_for_message(session, message_key)
+        if self._customer_reply_validation_issue(fallback, write_result=write_result, record_type=record_type):
             if session.language.startswith("ar"):
                 return "\u0645\u0639\u0644\u0634\u060c \u0645\u0642\u062f\u0631\u062a\u0634 \u0623\u062c\u0647\u0632 \u0627\u0644\u0631\u062f \u0628\u0634\u0643\u0644 \u0635\u062d\u064a\u062d. \u0645\u0645\u0643\u0646 \u062a\u0628\u0639\u062a \u0637\u0644\u0628\u0643 \u0645\u0631\u0629 \u062a\u0627\u0646\u064a\u0629\u061f"
             return "Sorry, I couldn\u2019t prepare that response properly. Could you try that again?"
@@ -476,7 +517,8 @@ class ToolCallingSessionRuntime:
             agent_logger.warning("AI reply generation failed session=%s key=%s error=%s", session.id, message_key, exc)
             return fallback
         reply = self._normalize_reply(str(rewritten or ""), session.language)
-        validation_issue = self._customer_reply_validation_issue(reply)
+        write_result, record_type = self._response_write_result_for_message(session, message_key)
+        validation_issue = self._customer_reply_validation_issue(reply, write_result=write_result, record_type=record_type)
         if validation_issue:
             agent_logger.warning(
                 "AI reply rejected session=%s key=%s reason=%s text=%r",
@@ -1620,8 +1662,23 @@ class ToolCallingSessionRuntime:
         return "Requested: " + " and ".join(parts)
 
     def _handle_booking_confirmation_reply(self, session: SessionState, clean_text: str) -> bool:
-        if session.stage != "booking_confirmation_required":
+        last_assistant = next(
+            (
+                str(message.get("text") or "")
+                for message in reversed(session.messages or [])
+                if isinstance(message, dict) and message.get("role") == "assistant"
+            ),
+            "",
+        ).casefold()
+        confirmation_visible = "booking draft" in last_assistant and "confirm" in last_assistant
+        if (
+            session.stage != "booking_confirmation_required"
+            and not session.booking_confirmation_requested
+            and not confirmation_visible
+        ):
             return False
+        if session.booking_confirmation_requested or confirmation_visible:
+            session.stage = "booking_confirmation_required"
         if self._looks_affirmative(clean_text):
             session.booking_confirmed = True
             session.booking_confirmation_requested = False
@@ -1637,12 +1694,16 @@ class ToolCallingSessionRuntime:
                 if session.language.startswith("ar")
                 else "No problem. I will not create a booking draft now. I can adjust the details or connect you with a human agent."
             )
+            if session.language.startswith("ar"):
+                reply = "تمام، لن أرسل طلب الحجز الآن. أقدر أعدل التفاصيل أو أحولك لموظف."
         else:
             reply = (
                 "من فضلك أكد بنعم لإنشاء طلب الحجز، أو لا لإيقافه."
                 if session.language.startswith("ar")
-                else "Please confirm with yes to create the booking draft, or no to stop."
+                else "Please reply yes to continue with this booking draft, or no to stop."
             )
+            if session.language.startswith("ar"):
+                reply = "من فضلك رد بنعم للمتابعة في طلب الحجز، أو لا لإيقافه."
         self._append_authoritative_reply(session, message_key="booking.confirmation_reply", base_text=reply)
         session.tools_used = []
         session.fallback_used = False
@@ -2380,6 +2441,12 @@ class ToolCallingSessionRuntime:
     def _handoff_success_message(self, session: SessionState, reason_code: str = "") -> str:
         if session.language.startswith("ar"):
             if reason_code == "duplicate_phone_match":
+                return "رقم واتساب ده مرتبط بأكتر من ملف مسافر، لذلك أرسلت الطلب لفريق Ravel للمراجعة، وسيتواصل معك أحد أعضاء الفريق."
+            if reason_code == "room_capacity":
+                return "خيار الغرفة المطلوب غير متاح حاليا للمجموعة كلها. أرسلت الطلب لفريق Ravel لمراجعة البدائل المتاحة، وسيتواصل معك أحد أعضاء الفريق بعد المراجعة."
+            return "تم إرسال طلبك لفريق Ravel للمراجعة، وسيتواصل معك أحد أعضاء الفريق بعد التحقق من التفاصيل."
+        if session.language.startswith("ar"):
+            if reason_code == "duplicate_phone_match":
                 return "رقم واتساب هذا مرتبط بأكثر من ملف مسافر، لذلك أرسلت الطلب إلى فريق Ravel للمراجعة وسيتواصل معك أحد أعضاء الفريق."
             if reason_code == "room_capacity":
                 return "خيار الغرفة المطلوب غير متاح حاليا للمجموعة كلها. أرسلت الطلب إلى فريق Ravel لمراجعة البدائل المتاحة، وسيتواصل معك أحد أعضاء الفريق بعد المراجعة."
@@ -2391,6 +2458,8 @@ class ToolCallingSessionRuntime:
         return "I've sent your request to the Ravel team for review, and a team member will follow up with you once they have an update."
 
     def _handoff_already_under_review_message(self, session: SessionState) -> str:
+        if session.language.startswith("ar"):
+            return "طلبك موجود بالفعل مع فريق Ravel للمراجعة. سيتواصلون معك بعد التحقق من البدائل المتاحة."
         if session.language.startswith("ar"):
             return "طلبك موجود بالفعل مع فريق Ravel للمراجعة. سيتواصلون معك بعد التحقق من البدائل المتاحة."
         return "Your request is already with the Ravel team for review. They'll follow up with you once they've checked the available options."
@@ -2458,13 +2527,10 @@ class ToolCallingSessionRuntime:
                     "handoff_reason": "customer_requested_human",
                     "write_result": {"handoff_case": result.get("handoff_case") if isinstance(result.get("handoff_case"), dict) else {}},
                 }
-            self._append_agent_reply(
+            self._append_authoritative_reply(
                 session,
                 message_key="workflow.handoff.customer_requested_human",
                 base_text=self._handoff_success_message(session, "customer_requested_human"),
-                user_text=clean_text,
-                required_action="Confirm that the human handoff was created successfully.",
-                session_context=session_context,
             )
             session.tools_used = ["create_handoff"]
             session.fallback_used = False
@@ -2505,13 +2571,22 @@ class ToolCallingSessionRuntime:
         return normalized in greetings or (normalized.startswith("\u0627\u0644\u0633\u0644\u0627\u0645") and len(normalized.split()) <= 4)
 
     def _handle_identity_required_greeting(self, session: SessionState, clean_text: str) -> bool:
-        if not session.language.startswith("ar"):
-            return False
         if session.raw_phone or session.pending_raw_phone or self._extract_phone_candidate(clean_text):
             return False
         if session.stage not in {"identity_required", "awaiting_phone", "gemini_conversation", "collecting_context"}:
             return False
-        if not self._is_simple_greeting(clean_text):
+        compact_intent = self._compact_intent(clean_text)
+        early_booking_intent = compact_intent in {
+            "book",
+            "booking",
+            "reserve",
+            "reservation",
+            "createbooking",
+            "makebooking",
+            "احجز",
+            "حجز",
+        }
+        if not (self._is_simple_greeting(clean_text) or self._looks_affirmative(clean_text) or early_booking_intent):
             return False
         session.messages.append({"role": "user", "text": clean_text})
         session.stage = "identity_required"
@@ -2544,6 +2619,9 @@ class ToolCallingSessionRuntime:
         if self._handle_post_booking_message(session, clean_text):
             return session
 
+        if self._handle_booking_confirmation_reply(session, clean_text):
+            return session
+
         if self._handle_navigation_intent(session, clean_text):
             return session
 
@@ -2552,9 +2630,6 @@ class ToolCallingSessionRuntime:
 
         if self._is_human_agent_request(clean_text):
             self._execute_manual_handoff(session, clean_text)
-            return session
-
-        if self._handle_booking_confirmation_reply(session, clean_text):
             return session
 
         identity_response = self._identity_policy.evaluate(clean_text)
@@ -2960,16 +3035,6 @@ class ToolCallingSessionRuntime:
             return False
         if not isinstance(result, dict) or not result.get("executed") or not str(result.get("result_id") or "").strip():
             return False
-        self._append_agent_reply(
-            session,
-            message_key=f"workflow.handoff.{decision.state}",
-            base_text=self._handoff_success_message(session, reason_code),
-            user_text=str(session_context.get("last_user_message") or ""),
-            required_action="Tell the traveler that the request has been sent to the Ravel team for review.",
-            session_context=session_context,
-        )
-        session.tools_used = ["create_handoff"]
-        session.fallback_used = False
         self._apply_result(session, {"write_results": [result], "tool_requests": []})
         session.handoff_state = "handed_off"
         if not isinstance(session.final_result, dict) or not session.final_result.get("handoff_id"):
@@ -2986,6 +3051,13 @@ class ToolCallingSessionRuntime:
                     else {}
                 },
             }
+        self._append_authoritative_reply(
+            session,
+            message_key=f"workflow.handoff.{decision.state}",
+            base_text=self._handoff_success_message(session, reason_code),
+        )
+        session.tools_used = ["create_handoff"]
+        session.fallback_used = False
         session.stage = decision.state
         agent_logger.info(
             "Backend policy handoff persisted session=%s handoff=%s reason=%s deduplicated=%s",
@@ -3688,4 +3760,3 @@ class ToolCallingSessionRuntime:
                 return True
             return False
         return False
-

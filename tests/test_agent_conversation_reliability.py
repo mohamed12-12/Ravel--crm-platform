@@ -1227,6 +1227,24 @@ def test_arabic_greeting_while_phone_required_does_not_fall_to_model_error(runti
     assert not session.fallback_used
 
 
+@pytest.mark.parametrize("message", ["hello", "yes", "book"])
+def test_identity_required_non_phone_text_stays_phone_first(runtime: ToolCallingSessionRuntime, message: str) -> None:
+    ai = FailingAgent()
+    runtime._conversation_ai = ai
+    session = runtime.create_session()
+
+    session = _send(runtime, message, session)
+
+    reply = session.messages[-1]["text"]
+    assert ai.calls == []
+    assert session.stage == "identity_required"
+    assert "whatsapp" in reply.lower()
+    assert "trouble completing" not in reply.lower()
+    assert runtime._read_only_tools.calls == []
+    assert not runtime._write_executor.execute.called
+    assert not session.fallback_used
+
+
 def test_invalid_long_phone_is_rejected_before_identity_lookup(runtime: ToolCallingSessionRuntime) -> None:
     session = _send(runtime, "012922823692000")
 
@@ -1427,4 +1445,42 @@ def test_booking_confirmation_and_cancellation_prevent_write(runtime: ToolCallin
     assert not runtime._write_executor.execute.called
 
 
+def test_booking_confirmation_requested_handles_unclear_reply_without_model_fallback(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    session = runtime.create_session()
+    session.stage = "collecting_context"
+    session.booking_confirmation_requested = True
+    session.raw_phone = "01112223333"
+    session.country_code = "20"
+    session.trip_type = "local"
+    session.selected_trip_id = "RT-LOC-26-DEM"
+    session.selected_trip_name = "DEMOO3"
+    session.room_group = "girls"
+    session.room_type = "Double"
+    session.group_size = 2
+    session.flight_option = "Not Applicable"
+    runtime._conversation_ai = RewritingAgent(rewrite_reply="this model path should not run")
 
+    session = _send(runtime, "without flight", session)
+
+    assert session.stage == "booking_confirmation_required"
+    assert session.booking_confirmation_requested is True
+    assert not session.booking_confirmed
+    assert not runtime._write_executor.execute.called
+    assert "yes" in session.messages[-1]["text"].lower()
+    assert "couldn't prepare" not in session.messages[-1]["text"].lower()
+
+    session.stage = "collecting_context"
+    session.booking_confirmation_requested = False
+    session.messages[-1] = {
+        "role": "assistant",
+        "text": "Before I create the booking draft, please confirm these details. Do you confirm creating the booking draft?",
+    }
+
+    session = _send(runtime, "without flight", session)
+
+    assert session.stage == "booking_confirmation_required"
+    assert not session.booking_confirmed
+    assert "yes" in session.messages[-1]["text"].lower()
+    assert "couldn't prepare" not in session.messages[-1]["text"].lower()

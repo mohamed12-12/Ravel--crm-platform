@@ -8,7 +8,10 @@ from pathlib import Path
 # when running this file directly (e.g., `python demo_web/app.py`).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from archive.legacy_demo_web.app import create_app
+try:
+    from archive.legacy_demo_web.app import create_app
+except ModuleNotFoundError:
+    from services.ai_agent.ai_agent_app.server import create_app
 
 
 __all__ = ["create_app"]

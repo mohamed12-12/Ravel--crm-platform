@@ -511,6 +511,22 @@ class ActionValidator:
             reasons.append("Repeated validation failures require human review.")
         if resolution and resolution.get("handoff_required"):
             reasons.append(f"Traveler resolution requires handoff: {resolution.get('handoff_reason') or 'manual_review'}.")
+        controlled_reason = str(self._value(payload, session_context, "reason_code", "handoff_reason_code") or "").strip().lower()
+        controlled_step = str(self._value(payload, session_context, "required_step") or "").strip().lower()
+        controlled_state = str(self._value(payload, session_context, "state") or "").strip().lower()
+        controlled_review_reasons = {
+            "room_capacity",
+            "capacity_review",
+            "duplicate_phone_match",
+            "unsupported_request",
+            "policy_review",
+        }
+        if (
+            controlled_reason in controlled_review_reasons
+            or controlled_step == "create_capacity_handoff"
+            or controlled_state in {"capacity_handoff_required", "duplicate_traveler_detected"}
+        ):
+            reasons.append("Backend workflow policy requires a controlled human review handoff.")
         traveler_status = str((traveler or {}).get("status") or "").strip().lower()
         if traveler_status in REJECTED_TRAVELER_STATUSES:
             reasons.append(f"Traveler status {traveler.get('status') or 'unknown'} requires handoff.")

@@ -4,6 +4,7 @@ import sqlite3
 import uuid
 import json
 import os
+import hashlib
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -245,6 +246,80 @@ class UnifiedCRMService:
         return list(dict.fromkeys(candidate for candidate in candidates if candidate))
 
     @staticmethod
+    def _stable_json_hash(value: Any) -> str:
+        payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+    @classmethod
+    def booking_idempotency_key(
+        cls,
+        *,
+        traveler_id: str,
+        trip_id: str,
+        room_requirements: Any,
+        session_id: str = "",
+    ) -> str:
+        requirements_hash = cls._stable_json_hash(room_requirements or [])
+        return f"booking:{str(traveler_id or '').strip()}:{str(trip_id or '').strip()}:{requirements_hash}:{str(session_id or '').strip()}"
+
+    @staticmethod
+    def lead_idempotency_key(
+        *,
+        normalized_phone: str,
+        trip_interest_or_general: str = "general",
+        session_id: str = "",
+    ) -> str:
+        return (
+            f"lead:{str(normalized_phone or '').strip()}:"
+            f"{str(trip_interest_or_general or 'general').strip()}:"
+            f"{str(session_id or '').strip()}"
+        )
+
+    @staticmethod
+    def handoff_idempotency_key(
+        *,
+        traveler_id_or_phone: str,
+        reason_code: str,
+        session_id_or_open_lead_id: str = "",
+    ) -> str:
+        return (
+            f"handoff:{str(traveler_id_or_phone or '').strip()}:"
+            f"{str(reason_code or 'manual_handoff').strip()}:"
+            f"{str(session_id_or_open_lead_id or '').strip()}"
+        )
+
+    @staticmethod
+    def document_idempotency_key(*, traveler_id: str, file_hash: str) -> str:
+        return f"document:{str(traveler_id or '').strip()}:{str(file_hash or '').strip()}"
+
+    @staticmethod
+    def write_result_contract(
+        *,
+        status: str,
+        executed: bool,
+        reused: bool,
+        record_type: str,
+        record_id: str = "",
+        idempotency_key: str = "",
+        customer_confirmation_allowed: bool = False,
+        error_code: str = "",
+        safe_customer_message_key: str = "",
+        audit: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "status": status,
+            "executed": bool(executed),
+            "reused": bool(reused),
+            "record_type": record_type,
+            "record_id": str(record_id or ""),
+            "idempotency_key": str(idempotency_key or ""),
+            "customer_confirmation_allowed": bool(customer_confirmation_allowed),
+            "error_code": str(error_code or ""),
+            "safe_customer_message_key": str(safe_customer_message_key or ""),
+            "audit": audit or {},
+        }
+
+    @staticmethod
     def normalize_trip_type(raw_type: str | None) -> str | None:
         lowered = (raw_type or "").strip().lower()
         if lowered in {"local", "inside egypt", "egypt", "egypt trips"}:
@@ -400,8 +475,8 @@ class UnifiedCRMService:
                     """
                     SELECT COUNT(*) FROM trip_bookings b
                     JOIN trips t ON TRIM(b.trip_id) = TRIM(t.trip_id)
-                    WHERE TRIM(b.traveler_id) = ? 
-                      AND IFNULL(b.booking_status, '') != 'Cancelled' 
+                    WHERE TRIM(b.traveler_id) = ?
+                      AND IFNULL(b.booking_status, '') != 'Cancelled'
                       AND TRIM(t.type) = 'Local'
                     """,
                     (traveler_id.strip(),),
@@ -412,8 +487,8 @@ class UnifiedCRMService:
                     """
                     SELECT COUNT(*) FROM trip_bookings b
                     JOIN trips t ON TRIM(b.trip_id) = TRIM(t.trip_id)
-                    WHERE TRIM(b.traveler_id) = ? 
-                      AND IFNULL(b.booking_status, '') != 'Cancelled' 
+                    WHERE TRIM(b.traveler_id) = ?
+                      AND IFNULL(b.booking_status, '') != 'Cancelled'
                       AND TRIM(t.type) = 'International'
                     """,
                     (traveler_id.strip(),),
@@ -715,7 +790,7 @@ class UnifiedCRMService:
         phone = self.normalize_phone(raw_phone, country_code)
         first_name, last_name = self._split_name(full_name)
         now = _utc_now().replace(microsecond=0).isoformat()
-        
+
         max_retries = 3
         traveler_id = self.next_traveler_id()
         for attempt in range(max_retries):
@@ -797,14 +872,33 @@ class UnifiedCRMService:
         country_code: str = "20",
         group_size: int | str = 1,
         force_create_new: bool = False,
+        session_id: str = "",
+        idempotency_key: str = "",
     ) -> dict[str, Any]:
+        self.ensure_operational_schema()
         phone = self.normalize_phone(raw_phone, country_code)
         lookup_keys = self.lookup_key_variants(phone)
+        interest_key = interested_trip_ids or preferred_trip_type or "general"
+        resolved_idempotency_key = str(idempotency_key or "").strip() or self.lead_idempotency_key(
+            normalized_phone=phone.get("lookup_key") or phone.get("normalized_whatsapp") or raw_phone,
+            trip_interest_or_general=interest_key,
+            session_id=session_id or flow_key,
+        )
         now = _utc_now().replace(microsecond=0).isoformat()
         created = False
         with self.connect() as connection:
             existing = None
-            if not force_create_new:
+            if not force_create_new and resolved_idempotency_key:
+                existing = connection.execute(
+                    """
+                    SELECT lead_id, interaction_count FROM leads
+                    WHERE idempotency_key = ?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (resolved_idempotency_key,),
+                ).fetchone()
+            if not existing and not force_create_new:
                 query = """
                     SELECT lead_id, interaction_count FROM leads
                     WHERE (? <> '' AND traveler_id = ?)
@@ -835,7 +929,8 @@ class UnifiedCRMService:
                         preferred_trip_type = ?, group_size = ?, interested_trip_ids = ?, suggested_trip_ids = ?,
                         priority = ?, follow_up_status = ?, follow_up_due_date = ?, last_interaction_id = ?,
                         interaction_count = ?, notes = ?, booking_id = ?, flow_key = ?, current_step = ?,
-                        handoff_required = ?, handoff_reason = ?, language = ?
+                        handoff_required = ?, handoff_reason = ?, language = ?,
+                        idempotency_key = COALESCE(idempotency_key, ?)
                     WHERE lead_id = ?
                     """,
                     (
@@ -867,6 +962,7 @@ class UnifiedCRMService:
                         1 if handoff_required else 0,
                         handoff_reason or None,
                         language or None,
+                        resolved_idempotency_key or None,
                         lead_id,
                     ),
                 )
@@ -881,8 +977,8 @@ class UnifiedCRMService:
                         lead_stage, lead_source, channel, preferred_trip_type, group_size, interested_trip_ids,
                         suggested_trip_ids, priority, follow_up_status, follow_up_due_date,
                         last_interaction_id, interaction_count, notes, booking_id, flow_key,
-                        current_step, handoff_required, handoff_reason, language
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        current_step, handoff_required, handoff_reason, language, idempotency_key
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         lead_id,
@@ -915,6 +1011,7 @@ class UnifiedCRMService:
                         1 if handoff_required else 0,
                         handoff_reason or None,
                         language or None,
+                        resolved_idempotency_key or None,
                     ),
                 )
             if traveler_id:
@@ -927,6 +1024,17 @@ class UnifiedCRMService:
                     (lead_id, now, traveler_id),
                 )
             connection.commit()
+        contract = self.write_result_contract(
+            status="success" if created else "reused",
+            executed=created,
+            reused=not created,
+            record_type="lead",
+            record_id=lead_id,
+            idempotency_key=resolved_idempotency_key,
+            customer_confirmation_allowed=True,
+            safe_customer_message_key="lead.created" if created else "lead.already_recorded",
+            audit={"phone_lookup_key": phone.get("lookup_key") or "", "interest_key": interest_key},
+        )
         return {
             "lead_id": lead_id,
             "lead_stage": lead_stage,
@@ -935,6 +1043,9 @@ class UnifiedCRMService:
             "follow_up_due_date": follow_up_due_date,
             "interaction_id": last_interaction_id,
             "created": created,
+            "reused": not created,
+            "idempotency_key": resolved_idempotency_key,
+            "write_result_contract": contract,
         }
 
     def record_agent_outcome(
@@ -957,6 +1068,8 @@ class UnifiedCRMService:
         manual_follow_up_due_date: str = "",
         force_create_new_lead: bool = False,
         group_size: int | str = 1,
+        session_id: str = "",
+        idempotency_key: str = "",
         **legacy_kwargs: Any,
     ) -> dict[str, Any]:
         """Persist an agent qualification outcome to the system DB, then sync sheets."""
@@ -1102,7 +1215,9 @@ class UnifiedCRMService:
             handoff_reason=effective_handoff_reason,
             language=language,
             country_code=country_code,
-            force_create_new=force_create_new_lead,
+            force_create_new=force_create_new_lead and not (idempotency_key or session_id),
+            session_id=session_id,
+            idempotency_key=idempotency_key,
         )
 
         events = [
@@ -1179,6 +1294,7 @@ class UnifiedCRMService:
             },
             "lead_update": lead_update,
             "event_trail": events,
+            "write_result_contract": lead_update.get("write_result_contract") if isinstance(lead_update, dict) else None,
         }
         return preview
 
@@ -1202,6 +1318,8 @@ class UnifiedCRMService:
         lead_stage_override: str = "",
         update_lead: bool = True,
         deduplicate_open: bool = False,
+        session_id: str = "",
+        idempotency_key: str = "",
     ) -> dict[str, Any]:
         self.ensure_operational_schema()
         reason_code = str(reason_code or "").strip()
@@ -1218,12 +1336,30 @@ class UnifiedCRMService:
         display_reason = self._handoff_display_summary(reason_code, reason_text, package)
         notes_blob = self._handoff_notes_blob(display_reason, package, notes)
         timestamp = _utc_now().replace(microsecond=0)
+        scope_key = traveler_id or lead_id or flow_key or customer_name
+        resolved_idempotency_key = str(idempotency_key or "").strip() or self.handoff_idempotency_key(
+            traveler_id_or_phone=scope_key,
+            reason_code=reason_code or reason_text,
+            session_id_or_open_lead_id=session_id or lead_id or flow_key,
+        )
         deduplicated = False
         existing_status = ""
 
         with self.connect() as connection:
             existing = None
-            if deduplicate_open:
+            if resolved_idempotency_key:
+                existing = connection.execute(
+                    """
+                    SELECT handoff_id, status, priority, reason
+                    FROM handoff_queue
+                    WHERE idempotency_key = ?
+                      AND LOWER(COALESCE(status, '')) IN ('new', 'pending', 'in progress')
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (resolved_idempotency_key,),
+                ).fetchone()
+            if not existing and deduplicate_open:
                 scope_sql = ""
                 scope_value = ""
                 if traveler_id:
@@ -1274,8 +1410,8 @@ class UnifiedCRMService:
                     """
                     INSERT INTO handoff_queue (
                         handoff_id, created_at, lead_id, traveler_id, trip_id, flow_key,
-                        reason, priority, channel, status, notes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        reason, priority, channel, status, notes, idempotency_key
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         handoff_id,
@@ -1289,6 +1425,7 @@ class UnifiedCRMService:
                         channel or None,
                         status or "Pending",
                         notes_blob or None,
+                        resolved_idempotency_key or None,
                     ),
                 )
             if update_lead and lead_id:
@@ -1352,6 +1489,19 @@ class UnifiedCRMService:
             "package": package,
             "event_id": event["event_id"] if event else "",
             "deduplicated": deduplicated,
+            "reused": deduplicated,
+            "idempotency_key": resolved_idempotency_key,
+            "write_result_contract": self.write_result_contract(
+                status="reused" if deduplicated else "success",
+                executed=not deduplicated,
+                reused=deduplicated,
+                record_type="handoff",
+                record_id=handoff_id,
+                idempotency_key=resolved_idempotency_key,
+                customer_confirmation_allowed=True,
+                safe_customer_message_key="handoff.already_recorded" if deduplicated else "handoff.created",
+                audit={"reason_code": reason_code, "lead_id": lead_id, "traveler_id": traveler_id},
+            ),
         }
 
     def update_existing_traveler_profile(
@@ -1551,7 +1701,28 @@ class UnifiedCRMService:
         passport_required: bool = False,
         passport_status: str = "",
         group_size: int | str = 1,
+        session_id: str = "",
+        idempotency_key: str = "",
+        require_explicit_confirmation: bool = False,
+        customer_confirmed: bool | str = True,
     ) -> dict[str, Any]:
+        if require_explicit_confirmation and not self._as_bool(customer_confirmed, default=False):
+            return {
+                "booking_id": "",
+                "booking_status": "blocked",
+                "write_result_contract": self.write_result_contract(
+                    status="blocked",
+                    executed=False,
+                    reused=False,
+                    record_type="booking",
+                    idempotency_key=str(idempotency_key or ""),
+                    customer_confirmation_allowed=False,
+                    error_code="confirmation_required",
+                    safe_customer_message_key="booking.confirmation_required",
+                    audit={"source": source, "session_id": session_id},
+                ),
+                "write_result": {},
+            }
         return self.create_booking(
             trip_id=trip_id,
             traveler_id=traveler_id,
@@ -1573,6 +1744,8 @@ class UnifiedCRMService:
             passport_required=passport_required,
             passport_status=passport_status,
             group_size=group_size,
+            session_id=session_id,
+            idempotency_key=idempotency_key,
         )
 
     @staticmethod
@@ -1830,6 +2003,75 @@ class UnifiedCRMService:
             "history": history,
         }
 
+    def _existing_booking_write_result(
+        self,
+        *,
+        row: sqlite3.Row,
+        normalized_requirements: list[dict[str, Any]],
+        idempotency_key: str,
+        status: str,
+        safe_customer_message_key: str,
+    ) -> dict[str, Any]:
+        booking_id = str(row["booking_id"] or "")
+        trip_id = str(row["trip_id"] or "")
+        traveler_id = str(row["traveler_id"] or "")
+        lead_id = str(self._row_value(row, "lead_id") or "")
+        room_requirements = self._booking_row_room_requirements(row) or normalized_requirements
+        contract = self.write_result_contract(
+            status=status,
+            executed=False,
+            reused=True,
+            record_type="booking",
+            record_id=booking_id,
+            idempotency_key=idempotency_key,
+            customer_confirmation_allowed=True,
+            safe_customer_message_key=safe_customer_message_key,
+            audit={"traveler_id": traveler_id, "trip_id": trip_id},
+        )
+        result = {
+            "booking_id": booking_id,
+            "booking_row": None,
+            "trip_id": trip_id,
+            "trip_name": str(self._row_value(row, "trip_name") or ""),
+            "traveler_id": traveler_id,
+            "traveler_name": str(self._row_value(row, "traveler_name") or ""),
+            "room_type": str(self._row_value(row, "room_type") or ""),
+            "room_group": str(self._row_value(row, "room_group") or ""),
+            "boys_rooms_requested": self._as_int(self._row_value(row, "boys_rooms_requested"), default=0) or 0,
+            "girls_rooms_requested": self._as_int(self._row_value(row, "girls_rooms_requested"), default=0) or 0,
+            "room_requirements": room_requirements,
+            "flight_option": str(self._row_value(row, "flight_option") or ""),
+            "date_option": str(self._row_value(row, "date_option") or ""),
+            "currency": str(self._row_value(row, "currency") or ""),
+            "booking_status": str(self._row_value(row, "booking_status") or "Draft"),
+            "payment_status": str(self._row_value(row, "payment_status") or "Pending"),
+            "passport_required": bool(self._as_int(self._row_value(row, "passport_required"), default=0) or 0),
+            "passport_status": str(self._row_value(row, "passport_status") or ""),
+            "interaction": {"interaction_id": str(self._row_value(row, "interaction_id") or "")},
+            "lead_update": None,
+            "event_trail": [],
+            "reused": True,
+            "idempotency_key": idempotency_key,
+            "write_result_contract": contract,
+        }
+        result["write_result"] = {
+            "booking_draft": {
+                "booking_id": booking_id,
+                "trip_id": trip_id,
+                "traveler_id": traveler_id,
+                "lead_id": lead_id,
+                "room_group": result["room_group"],
+                "boys_rooms_requested": result["boys_rooms_requested"],
+                "girls_rooms_requested": result["girls_rooms_requested"],
+                "room_requirements": room_requirements,
+            },
+            "interaction_log": result["interaction"],
+            "lead_update": None,
+            "event_trail": [],
+            "write_result_contract": contract,
+        }
+        return result
+
     def create_booking(
         self,
         *,
@@ -1854,6 +2096,8 @@ class UnifiedCRMService:
         passport_required: bool = False,
         passport_status: str = "",
         group_size: int | str = 1,
+        session_id: str = "",
+        idempotency_key: str = "",
     ) -> dict[str, Any]:
         self.ensure_operational_schema()
         timestamp = _utc_now().replace(microsecond=0)
@@ -1878,6 +2122,12 @@ class UnifiedCRMService:
         elif girls_rooms_total:
             resolved_room_group = "girls"
         room_requirements_json = json.dumps(normalized_requirements, ensure_ascii=False, separators=(",", ":"))
+        resolved_idempotency_key = str(idempotency_key or "").strip() or self.booking_idempotency_key(
+            traveler_id=traveler_id,
+            trip_id=trip_id,
+            room_requirements=normalized_requirements,
+            session_id=session_id,
+        )
         if booking_status not in BOOKING_LIFECYCLE_STATUSES:
             raise ValueError(f"Unsupported booking status {booking_status!r}")
         if booking_status not in {"Draft", "Waiting Customer"}:
@@ -1899,6 +2149,47 @@ class UnifiedCRMService:
             sales_status = str(trip["sales_status"] or "").strip().lower()
             if sales_status and sales_status != "open":
                 raise ValueError(f"Trip {trip_id} is not bookable because its status is {trip['sales_status']}")
+
+            existing_by_key = connection.execute(
+                """
+                SELECT * FROM trip_bookings
+                WHERE idempotency_key = ?
+                  AND LOWER(TRIM(COALESCE(booking_status, ''))) NOT IN ('cancelled', 'canceled', 'completed')
+                ORDER BY draft_created_at DESC
+                LIMIT 1
+                """,
+                (resolved_idempotency_key,),
+            ).fetchone() if resolved_idempotency_key else None
+            if existing_by_key:
+                connection.commit()
+                return self._existing_booking_write_result(
+                    row=existing_by_key,
+                    normalized_requirements=normalized_requirements,
+                    idempotency_key=resolved_idempotency_key,
+                    status="reused",
+                    safe_customer_message_key="booking.already_recorded",
+                )
+
+            existing_active = connection.execute(
+                """
+                SELECT * FROM trip_bookings
+                WHERE traveler_id = ?
+                  AND trip_id = ?
+                  AND LOWER(TRIM(COALESCE(booking_status, ''))) NOT IN ('cancelled', 'canceled', 'completed')
+                ORDER BY draft_created_at DESC
+                LIMIT 1
+                """,
+                (traveler_id, trip_id),
+            ).fetchone()
+            if existing_active:
+                connection.commit()
+                return self._existing_booking_write_result(
+                    row=existing_active,
+                    normalized_requirements=normalized_requirements,
+                    idempotency_key=resolved_idempotency_key,
+                    status="duplicate",
+                    safe_customer_message_key="booking.duplicate_active",
+                )
 
             aggregate_availability: dict[str, int] = {}
             category_availability: dict[str, int] = {}
@@ -1997,6 +2288,7 @@ class UnifiedCRMService:
                 "boys_rooms_requested": boys_rooms_total,
                 "girls_rooms_requested": girls_rooms_total,
                 "room_requirements_json": room_requirements_json,
+                "idempotency_key": resolved_idempotency_key or None,
             }
             for column, value in optional_booking_values.items():
                 if column in booking_table_columns:
@@ -2097,7 +2389,21 @@ class UnifiedCRMService:
             "interaction": {"interaction_id": interaction_id},
             "lead_update": lead_update,
             "event_trail": [booking_event, follow_up_event],
+            "reused": False,
+            "idempotency_key": resolved_idempotency_key,
         }
+        contract = self.write_result_contract(
+            status="success",
+            executed=True,
+            reused=False,
+            record_type="booking",
+            record_id=booking_id,
+            idempotency_key=resolved_idempotency_key,
+            customer_confirmation_allowed=True,
+            safe_customer_message_key="booking.created",
+            audit={"traveler_id": traveler_id, "trip_id": trip_id},
+        )
+        result["write_result_contract"] = contract
         result["write_result"] = {
             "booking_draft": {
                 "booking_id": booking_id,
@@ -2112,6 +2418,7 @@ class UnifiedCRMService:
             "interaction_log": {"interaction_id": interaction_id},
             "lead_update": lead_update,
             "event_trail": [booking_event, follow_up_event],
+            "write_result_contract": contract,
         }
         return result
 
@@ -2565,7 +2872,7 @@ class UnifiedCRMService:
 
         # Spin up a daemon thread to process sheet writing asynchronously
         import threading
-        
+
         def run_async():
             try:
                 self._run_sync_agent_write_to_sheet_worker(
@@ -2797,6 +3104,7 @@ class UnifiedCRMService:
                 self._migrate_trips_room_columns(connection)
                 self._migrate_trip_booking_passport_columns(connection)
                 self._migrate_lead_columns(connection)
+                self._migrate_idempotency_columns(connection)
                 connection.commit()
             self._schema_ready_paths.add(db_key)
 
@@ -3073,6 +3381,37 @@ class UnifiedCRMService:
             connection.execute("ALTER TABLE leads ADD COLUMN passport_attachment_ref TEXT")
         if 'passport_status' not in existing_cols:
             connection.execute("ALTER TABLE leads ADD COLUMN passport_status TEXT")
+
+    @staticmethod
+    def _migrate_idempotency_columns(connection: sqlite3.Connection) -> None:
+        table_columns = {
+            "trip_bookings": UnifiedCRMService._table_columns(connection, "trip_bookings"),
+            "leads": UnifiedCRMService._table_columns(connection, "leads"),
+            "handoff_queue": UnifiedCRMService._table_columns(connection, "handoff_queue"),
+            "traveler_documents": UnifiedCRMService._table_columns(connection, "traveler_documents"),
+        }
+        for table_name, columns in table_columns.items():
+            if columns and "idempotency_key" not in columns:
+                connection.execute(f"ALTER TABLE {table_name} ADD COLUMN idempotency_key TEXT")
+        if table_columns["trip_bookings"]:
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_trip_bookings_idempotency_key ON trip_bookings (idempotency_key)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_trip_bookings_active_traveler_trip ON trip_bookings (traveler_id, trip_id, booking_status)"
+            )
+        if table_columns["leads"]:
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_leads_idempotency_key ON leads (idempotency_key)"
+            )
+        if table_columns["handoff_queue"]:
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_handoff_queue_idempotency_key ON handoff_queue (idempotency_key)"
+            )
+        if table_columns["traveler_documents"]:
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_traveler_documents_idempotency_key ON traveler_documents (idempotency_key)"
+            )
 
     @staticmethod
     def _ensure_traveler_documents_table(connection: sqlite3.Connection) -> None:
@@ -3646,7 +3985,7 @@ class UnifiedCRMService:
 
         # Spin up a daemon thread to process trip updates to sheets asynchronously
         import threading
-        
+
         def run_async():
             try:
                 self._run_sync_trip_to_sheet_worker(trip_id)
@@ -4202,6 +4541,14 @@ class UnifiedCRMService:
         if field_name == "type":
             return record.get("trip_type") or record.get("type")
         return record.get(field_name)
+
+    @staticmethod
+    def _as_bool(value: Any, *, default: bool = False) -> bool:
+        if value in (None, ""):
+            return default
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
     @staticmethod
     def _as_int(value: Any, default: int | None = None) -> int | None:

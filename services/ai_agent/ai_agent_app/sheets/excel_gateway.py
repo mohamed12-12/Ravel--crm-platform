@@ -160,6 +160,10 @@ class ExcelSheetGateway:
         passport_required: bool = False,
         passport_status: str = "",
         group_size: int | str = 1,
+        session_id: str = "",
+        idempotency_key: str = "",
+        require_explicit_confirmation: bool = False,
+        customer_confirmed: bool | str = True,
     ) -> dict[str, Any]:
         sheet_logger.info(f"Creating booking draft: traveler={traveler_id}, trip={trip_id}")
         with self._lock:
@@ -183,6 +187,10 @@ class ExcelSheetGateway:
                 passport_required=passport_required,
                 passport_status=passport_status,
                 group_size=group_size,
+                session_id=session_id,
+                idempotency_key=idempotency_key,
+                require_explicit_confirmation=require_explicit_confirmation,
+                customer_confirmed=customer_confirmed,
             )
 
     def get_demo_stats(self) -> dict[str, Any]:

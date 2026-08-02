@@ -1,7 +1,7 @@
 param(
     [string]$Python = "C:\Python314\python.exe",
-    [int]$ApiPort = 3000,
-    [int]$DemoPort = 5001,
+    [int]$ApiPort = 5000,
+    [int]$DemoPort = 5101,
     [int]$GatewayPort = 8080,
     [switch]$NoNgrok,
     [switch]$NoRestart
@@ -11,11 +11,45 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $ApiScript = Join-Path $RepoRoot "apps\api\run.py"
-$DemoScript = Join-Path $RepoRoot "demo_web\app.py"
 $GatewayScript = Join-Path $RepoRoot "scripts\dev_gateway.py"
 $LogDir = Join-Path $RepoRoot ".tmp-run"
+$DotEnvPath = Join-Path $RepoRoot ".env"
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+
+function Import-DotEnv {
+    param(
+        [string]$Path
+    )
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    foreach ($rawLine in Get-Content -LiteralPath $Path) {
+        $line = $rawLine.Trim()
+        if (-not $line -or $line.StartsWith("#") -or -not ($line -match "=")) {
+            continue
+        }
+
+        $parts = $line.Split("=", 2)
+        if ($parts.Count -lt 2) {
+            continue
+        }
+
+        $name = $parts[0].Trim()
+        if (-not $name) {
+            continue
+        }
+
+        $value = $parts[1].Trim().Trim('"').Trim("'")
+        if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name, "Process"))) {
+            [Environment]::SetEnvironmentVariable($name, $value, "Process")
+        }
+    }
+}
+
+Import-DotEnv -Path $DotEnvPath
 
 function Stop-MatchingProcess {
     param(
@@ -104,7 +138,8 @@ if (-not (Test-Path $Python)) {
 }
 
 Stop-MatchingProcess -ProcessName "python.exe" -Patterns @("apps/api/run.py")
-Stop-MatchingProcess -ProcessName "python.exe" -Patterns @("demo_web/app.py")
+Stop-MatchingProcess -ProcessName "python.exe" -Patterns @("services.ai_agent.ai_agent_app.server")
+Stop-MatchingProcess -ProcessName "python.exe" -Patterns @("services/ai_agent/ai_agent_app/server.py")
 Stop-MatchingProcess -ProcessName "python.exe" -Patterns @("scripts/dev_gateway.py")
 Stop-MatchingProcess -ProcessName "ngrok.exe" -Patterns @("http")
 
@@ -123,7 +158,7 @@ $api = Start-WithEnvironment `
 $demo = Start-WithEnvironment `
     -Name "Rahma demo web" `
     -FilePath $Python `
-    -Arguments @("`"$DemoScript`"") `
+    -Arguments @("-m", "services.ai_agent.ai_agent_app.server") `
     -Environment @{
         "APP_HOST" = "127.0.0.1"
         "APP_PORT" = $DemoPort

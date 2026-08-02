@@ -39,6 +39,24 @@ def _bool(value: str | None, default: bool = False) -> bool:
     return lowered in {"1", "true", "yes", "y", "on"}
 
 
+def _looks_weak_secret(value: str) -> bool:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return True
+    if len(normalized) < 24:
+        return True
+    weak_markers = {
+        "changeme",
+        "change-me",
+        "default",
+        "dev-key",
+        "demo",
+        "password",
+        "rahma-traveler-demo",
+    }
+    return normalized in weak_markers or any(marker in normalized for marker in weak_markers)
+
+
 def _optional_path(raw: str | None) -> Path | None:
     if not raw:
         return None
@@ -110,6 +128,8 @@ class Settings:
     demo_reset_on_start: bool
     default_country_code: str
     demo_write_mode: str
+    agent_tool_router_mode: str
+    agent_write_tool_enforcement: bool
 
     agent_persona_name: str
     agent_conversation_prompt: str
@@ -128,14 +148,28 @@ class Settings:
 
     def validate(self) -> list[str]:
         errors: list[str] = []
-        if self.app_env == "production" and not self.app_secret_key:
-            errors.append("APP_SECRET_KEY is required in production.")
+        if self.app_env == "production" and _looks_weak_secret(self.app_secret_key):
+            errors.append("APP_SECRET_KEY must be a strong non-default secret in production.")
         if self.ai_agent_mode not in {"deterministic", "gemini", "tool_calling"}:
             errors.append("AI_AGENT_MODE must be either 'deterministic', 'gemini', or 'tool_calling'.")
+        if self.agent_tool_router_mode not in {"off", "dry_run", "enforce"}:
+            errors.append("AGENT_TOOL_ROUTER_MODE must be 'off', 'dry_run', or 'enforce'.")
         if self.ai_max_tool_rounds <= 0:
             errors.append("AI_MAX_TOOL_ROUNDS must be a positive integer.")
         if self.app_env == "production" and self.ai_agent_mode != "tool_calling":
             errors.append("AI_AGENT_MODE must be 'tool_calling' in production so agent data access uses the CRM API contract.")
+        if self.app_env == "production" and self.ai_provider == "gemini" and not self.gemini_api_key:
+            errors.append("GEMINI_API_KEY is required in production when AI_PROVIDER=gemini.")
+        if self.app_env == "production" and self.ai_provider == "gemini" and not self.gemini_model:
+            errors.append("GEMINI_MODEL is required in production when AI_PROVIDER=gemini.")
+        if self.app_env == "production" and not self.agent_write_tool_enforcement:
+            errors.append("AGENT_WRITE_TOOL_ENFORCEMENT must be true in production.")
+        if self.app_env == "production" and self.demo_reset_on_start:
+            errors.append("DEMO_RESET_ON_START cannot be true in production.")
+        if self.app_env == "production" and _bool(os.getenv("APP_DEBUG"), default=False):
+            errors.append("APP_DEBUG cannot be true in production.")
+        if self.app_env == "production" and _bool(os.getenv("APP_USE_RELOADER"), default=False):
+            errors.append("APP_USE_RELOADER cannot be true in production.")
         if self.sheet_backend not in {"excel", "google", "google_sheets"}:
             errors.append("SHEET_BACKEND must be either 'excel', 'google', or 'google_sheets'.")
         if self.sheet_backend == "excel" and not self.excel_source_workbook.exists():
@@ -224,6 +258,8 @@ def load_settings() -> Settings:
         demo_reset_on_start=_bool(os.getenv("DEMO_RESET_ON_START"), default=False),
         default_country_code=os.getenv("DEFAULT_COUNTRY_CODE", "20").strip(),
         demo_write_mode=os.getenv("DEMO_WRITE_MODE", "demo").strip().lower(),
+        agent_tool_router_mode=os.getenv("AGENT_TOOL_ROUTER_MODE", "dry_run").strip().lower() or "dry_run",
+        agent_write_tool_enforcement=_bool(os.getenv("AGENT_WRITE_TOOL_ENFORCEMENT"), default=False),
         agent_persona_name=os.getenv("AGENT_PERSONA_NAME", "").strip(),
         agent_conversation_prompt=(
             os.getenv("AGENT_CONVERSATION_PROMPT", "").strip()

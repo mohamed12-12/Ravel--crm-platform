@@ -14,4 +14,6 @@ Runtime modes:
 - `tool_calling`: Gemini-driven runtime that can call read-only CRM tools only.
 - `gemini`: legacy compatibility mode used by older tests and demo paths.
 
+Tool-calling initialization requires a configured Gemini provider. If `AI_AGENT_MODE=tool_calling` is set but `GEMINI_API_KEY` is empty, the session runtime will not start and the chat endpoint returns a safe "Tool-calling agent runtime is not configured" fallback.
+
 Keep public routes and imports stable unless tests and downstream launch commands are migrated together.

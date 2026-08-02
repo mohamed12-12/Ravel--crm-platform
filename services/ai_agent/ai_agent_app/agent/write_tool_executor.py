@@ -9,6 +9,7 @@ from services.ai_agent.ai_agent_app.config import Settings
 from services.ai_agent.ai_agent_app.logger import agent_logger
 from services.ai_agent.validation import APPROVED, NEED_MORE_INFORMATION, REJECTED, ActionValidator
 from services.ai_agent.validation.validation_rules import normalize_flight_option
+from services.ai_agent.ai_agent_app.agent.write_response_gating import customer_message_from_write_result, gate_customer_write_reply
 
 
 def _utc_now_iso() -> str:
@@ -52,9 +53,52 @@ class GeminiWriteToolExecutor:
             "warnings": list(validation.warnings),
         }
 
+        if action == "create_booking_draft" and "booking_confirmed" in session_context and not self._as_bool(
+            session_context.get("booking_confirmed"), default=False
+        ):
+            reply = "Before I create the booking draft, please confirm the final details."
+            contract = self._write_result_contract(
+                status="blocked",
+                executed=False,
+                reused=False,
+                record_type="booking",
+                customer_confirmation_allowed=False,
+                error_code="confirmation_required",
+                safe_customer_message_key="booking.confirmation_required",
+                audit={"session_id": str(session_context.get("session_id") or "")},
+            )
+            audit["reason"] = "confirmation_required"
+            self._log_audit(audit)
+            return {
+                "action": action,
+                "decision": REJECTED,
+                "executed": False,
+                "validation": validation_payload,
+                "assistant_message": reply,
+                "reply": reply,
+                "result": None,
+                "result_id": "",
+                "audit": audit,
+                "write_result": {"write_result_contract": contract},
+                "write_result_contract": contract,
+            }
+
         if validation.decision != APPROVED:
+            duplicate_result = self._duplicate_booking_result_if_available(action, validation_payload, session_context, audit)
+            if duplicate_result is not None:
+                return duplicate_result
             audit["reason"] = "; ".join(validation.reasons or validation.missing_information or ["write blocked"])
             reply = self._human_message_for_blocked_action(action, validation_payload, session_context)
+            contract = self._write_result_contract(
+                status="blocked",
+                executed=False,
+                reused=False,
+                record_type=action.replace("create_", "").replace("_draft", ""),
+                customer_confirmation_allowed=False,
+                error_code=str(validation.decision or "blocked"),
+                safe_customer_message_key="write.blocked",
+                audit={"session_id": str(session_context.get("session_id") or "")},
+            )
             self._log_audit(audit)
             return {
                 "action": action,
@@ -66,7 +110,8 @@ class GeminiWriteToolExecutor:
                 "result": None,
                 "result_id": "",
                 "audit": audit,
-                "write_result": None,
+                "write_result": {"write_result_contract": contract},
+                "write_result_contract": contract,
             }
 
         if self.read_only_tools.api_client is not None:
@@ -88,7 +133,7 @@ class GeminiWriteToolExecutor:
         try:
             raw_result = handler(payload, session_context, validation)
             result = self._normalize_result(action, raw_result, payload, session_context, validation)
-            audit["executed"] = True
+            audit["executed"] = bool(result.get("executed", True))
             audit["result_id"] = str(result.get("result_id") or "")
             audit["reason"] = str(result.get("assistant_message") or "").strip() or "write executed"
             self._log_audit(audit)
@@ -96,9 +141,15 @@ class GeminiWriteToolExecutor:
             result["validation"] = validation_payload
             return result
         except Exception as exc:
-            audit["reason"] = str(exc)
+            audit["reason"] = self._safe_error_code_for_exception(exc)
             self._log_audit(audit)
-            raise
+            return self._failed_write_result(
+                action=action,
+                exc=exc,
+                session_context=session_context,
+                validation_payload=validation_payload,
+                audit=audit,
+            )
 
     def _execute_create_lead(
         self,
@@ -148,6 +199,7 @@ class GeminiWriteToolExecutor:
                 language=language,
                 force_create_new_lead=True,
                 group_size=group_size,
+                session_id=str(session_context.get("session_id") or ""),
             )
             write_result = result.get("write_result") if isinstance(result.get("write_result"), dict) else {}
             lead_update = write_result.get("lead_update") if isinstance(write_result.get("lead_update"), dict) else {}
@@ -165,7 +217,7 @@ class GeminiWriteToolExecutor:
             }
             return {
                 "result_id": str(lead_update.get("lead_id") or ""),
-                "assistant_message": self._lead_message(lead_update, customer_name),
+                "assistant_message": self._lead_message(lead_update, customer_name, language),
                 "lead_update": lead_update,
                 "write_result": {
                     "created_traveler": created_traveler,
@@ -219,12 +271,13 @@ class GeminiWriteToolExecutor:
             language=language,
             country_code=country_code,
             group_size=group_size,
-            force_create_new=True,
+            force_create_new=False,
+            session_id=str(session_context.get("session_id") or ""),
         )
 
         return {
             "result_id": result.get("lead_id", ""),
-            "assistant_message": self._lead_message(result, customer_name),
+            "assistant_message": self._lead_message(result, customer_name, language),
             "lead_update": result,
             "write_result": {
                 "created_traveler": None,
@@ -345,12 +398,19 @@ class GeminiWriteToolExecutor:
             passport_required=passport_required,
             passport_status=passport_status,
             group_size=self._as_int(self._value(payload, session_context, "group_size"), default=1) or 1,
+            session_id=str(session_context.get("session_id") or ""),
+            require_explicit_confirmation="booking_confirmed" in session_context,
+            customer_confirmed=session_context.get("booking_confirmed", True),
         )
+        contract = result.get("write_result_contract") if isinstance(result.get("write_result_contract"), dict) else {}
+        executed = bool(contract.get("executed", True))
         return {
             "result_id": result.get("booking_id", ""),
-            "assistant_message": self._booking_message(result),
+            "assistant_message": self._booking_message(result, str(session_context.get("language") or "en")),
             "booking_result": result,
+            "executed": executed,
             "write_result": result.get("write_result") or {},
+            "write_result_contract": contract,
             "traveler": traveler,
             "session_update": {
                 "booking_result": result,
@@ -446,11 +506,12 @@ class GeminiWriteToolExecutor:
             notes=self._value(payload, session_context, "notes") or "",
             metadata={"validation": validation.to_dict(), "session_id": session_context.get("session_id", "")},
             update_lead=self._as_bool(self._value(payload, session_context, "update_lead", "handoff_required"), default=True),
-            deduplicate_open=self._as_bool(self._value(payload, session_context, "deduplicate_open"), default=False),
+            deduplicate_open=self._as_bool(self._value(payload, session_context, "deduplicate_open"), default=True),
+            session_id=str(session_context.get("session_id") or ""),
         )
         return {
             "result_id": result.get("handoff_id", ""),
-            "assistant_message": self._handoff_message(result),
+            "assistant_message": self._handoff_message(result, str(session_context.get("language") or "en")),
             "handoff_case": result,
             "write_result": {"handoff_case": result},
             "traveler": traveler,
@@ -466,6 +527,182 @@ class GeminiWriteToolExecutor:
                     "write_result": {"handoff_case": result},
                 },
             },
+        }
+
+    def _failed_write_result(
+        self,
+        *,
+        action: str,
+        exc: Exception,
+        session_context: dict[str, Any],
+        validation_payload: dict[str, Any],
+        audit: dict[str, Any],
+    ) -> dict[str, Any]:
+        record_type = self._record_type_for_action(action)
+        language = str(session_context.get("language") or "en")
+        error_code = self._safe_error_code_for_exception(exc)
+        message_key = f"{record_type}.{error_code}" if record_type != "write" else "write.failed"
+        contract = self._write_result_contract(
+            status="failed",
+            executed=False,
+            reused=False,
+            record_type=record_type,
+            record_id="",
+            customer_confirmation_allowed=False,
+            error_code=error_code,
+            safe_customer_message_key=message_key,
+            audit={"session_id": str(session_context.get("session_id") or ""), "action": action},
+        )
+        reply = self._safe_failed_write_message(record_type, error_code, language)
+        return {
+            "action": action,
+            "decision": validation_payload.get("decision") or APPROVED,
+            "executed": False,
+            "validation": validation_payload,
+            "assistant_message": reply,
+            "reply": reply,
+            "result": None,
+            "result_id": "",
+            "audit": audit,
+            "write_result": {"write_result_contract": contract},
+            "write_result_contract": contract,
+        }
+
+    @staticmethod
+    def _record_type_for_action(action: str) -> str:
+        normalized = str(action or "").strip().lower()
+        if "booking" in normalized:
+            return "booking"
+        if "handoff" in normalized:
+            return "handoff"
+        if "lead" in normalized:
+            return "lead"
+        if "passport" in normalized or "document" in normalized:
+            return "document"
+        return "write"
+
+    @staticmethod
+    def _safe_error_code_for_exception(exc: Exception) -> str:
+        message = str(exc or "").strip().lower()
+        if "capacity" in message or "remaining draftable" in message or "no remaining" in message:
+            return "capacity_unavailable"
+        if "not found" in message:
+            return "not_found"
+        if "could not be linked" in message or "lead" in message and "could not" in message:
+            return "lead_link_failed"
+        return "write_failed"
+
+    @staticmethod
+    def _safe_failed_write_message(record_type: str, error_code: str, language: str) -> str:
+        arabic = str(language or "").strip().lower().startswith("ar")
+        if record_type == "booking" and error_code == "capacity_unavailable":
+            if arabic:
+                return "?? ???? ???? ??? ????? ???? ???????? ???? ??? ?????? ?????. ???? ????? ??? ???? ??? ?? ????? ????? ??????."
+            return "I could not create the booking request for that option because availability changed. Please choose another room option, or I can connect you with a human agent."
+        if record_type == "booking":
+            if arabic:
+                return "?? ???? ???? ??? ????? ????. ?? ???? ???? ???????? ?? ???? ??? ????."
+            return "I could not create the booking request yet. Please review the details or try again."
+        if record_type == "handoff":
+            if arabic:
+                return "?? ????? ?? ????? ??? ??????? ?? ???? ????. ?? ???? ???? ??? ???? ?? ????? ???? ??????."
+            return "I could not submit the human handoff request right now. Please try again or contact us directly."
+        if record_type == "lead":
+            if arabic:
+                return "?? ????? ?? ????? ???? ????. ?? ???? ???? ??? ????."
+            return "I could not save your request right now. Please try again."
+        if arabic:
+            return "?? ????? ?? ????? ????? ????. ?? ???? ???? ??? ????."
+        return "I could not complete the request right now. Please try again."
+
+    def _write_result_contract(
+        self,
+        *,
+        status: str,
+        executed: bool,
+        reused: bool,
+        record_type: str,
+        record_id: str = "",
+        idempotency_key: str = "",
+        customer_confirmation_allowed: bool = False,
+        error_code: str = "",
+        safe_customer_message_key: str = "",
+        audit: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        factory = getattr(self.service, "write_result_contract", None)
+        if callable(factory):
+            return factory(
+                status=status,
+                executed=executed,
+                reused=reused,
+                record_type=record_type,
+                record_id=record_id,
+                idempotency_key=idempotency_key,
+                customer_confirmation_allowed=customer_confirmation_allowed,
+                error_code=error_code,
+                safe_customer_message_key=safe_customer_message_key,
+                audit=audit,
+            )
+        return {
+            "status": status,
+            "executed": bool(executed),
+            "reused": bool(reused),
+            "record_type": record_type,
+            "record_id": str(record_id or ""),
+            "idempotency_key": str(idempotency_key or ""),
+            "customer_confirmation_allowed": bool(customer_confirmation_allowed),
+            "error_code": str(error_code or ""),
+            "safe_customer_message_key": str(safe_customer_message_key or ""),
+            "audit": audit or {},
+        }
+
+    def _duplicate_booking_result_if_available(
+        self,
+        action: str,
+        validation_payload: dict[str, Any],
+        session_context: dict[str, Any],
+        audit: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if action != "create_booking_draft":
+            return None
+        reasons = " ".join(str(item or "") for item in validation_payload.get("reasons") or []).lower()
+        warnings = [str(item or "") for item in validation_payload.get("warnings") or []]
+        if "active booking already exists" not in reasons:
+            return None
+        booking_id = ""
+        for warning in warnings:
+            if "Existing booking ID:" in warning:
+                booking_id = warning.split("Existing booking ID:", 1)[1].strip()
+                break
+        if not booking_id:
+            return None
+        contract = self._write_result_contract(
+            status="duplicate",
+            executed=False,
+            reused=True,
+            record_type="booking",
+            record_id=booking_id,
+            customer_confirmation_allowed=True,
+            safe_customer_message_key="booking.duplicate_active",
+            audit={"session_id": str(session_context.get("session_id") or "")},
+        )
+        reply = f"Booking request {booking_id} is already recorded."
+        audit["executed"] = False
+        audit["result_id"] = booking_id
+        audit["reason"] = "duplicate_active_booking_reused"
+        self._log_audit(audit)
+        return {
+            "action": action,
+            "decision": validation_payload.get("decision") or REJECTED,
+            "executed": False,
+            "validation": validation_payload,
+            "assistant_message": reply,
+            "reply": reply,
+            "result": None,
+            "result_id": booking_id,
+            "audit": audit,
+            "write_result": {"booking_draft": {"booking_id": booking_id}, "write_result_contract": contract},
+            "write_result_contract": contract,
         }
 
     def _resolve_traveler(self, payload: dict[str, Any], session_context: dict[str, Any]) -> dict[str, Any] | None:
@@ -545,8 +782,8 @@ class GeminiWriteToolExecutor:
         if decision == NEED_MORE_INFORMATION and missing:
             joined = ", ".join(GeminiWriteToolExecutor._humanize_token(item) for item in missing if item)
             if language.startswith("ar"):
-                return f"قبل أن أتمكن من تنفيذ {action}، أحتاج إلى: {joined}."
-            return f"Before I can execute {action}, I still need: {joined}."
+                return f"\u0642\u0628\u0644 \u0623\u0646 \u0623\u062a\u0627\u0628\u0639\u060c \u0623\u062d\u062a\u0627\u062c \u0625\u0644\u0649: {joined}."
+            return f"Before I can continue, I still need: {joined}."
         if decision == REJECTED and reasons:
             joined = " ".join(GeminiWriteToolExecutor._humanize_token(item) for item in reasons if item)
             if language.startswith("ar"):
@@ -557,11 +794,18 @@ class GeminiWriteToolExecutor:
         return "I can't execute this request right now."
 
     @staticmethod
-    def _lead_message(result: dict[str, Any], customer_name: str) -> str:
+    def _lead_message(result: dict[str, Any], customer_name: str, language: str = "en") -> str:
         lead_id = str(result.get("lead_id") or "").strip()
         stage = str(result.get("lead_stage") or "").strip()
         name = customer_name.strip() or "the customer"
-        return f"Lead {lead_id} created for {name}. Current stage: {stage}."
+        proposed = f"Lead {lead_id} created for {name}. Current stage: {stage}."
+        return gate_customer_write_reply(
+            proposed_reply=proposed,
+            write_result=result,
+            record_type="lead",
+            language=language,
+            display_name=name,
+        )
 
     @staticmethod
     def _stage_message(result: dict[str, Any]) -> str:
@@ -570,17 +814,29 @@ class GeminiWriteToolExecutor:
         return f"Lead {lead_id} moved to {stage}."
 
     @staticmethod
-    def _booking_message(result: dict[str, Any]) -> str:
+    def _booking_message(result: dict[str, Any], language: str = "en") -> str:
         booking_id = str(result.get("booking_id") or "").strip()
         trip_name = str(result.get("trip_name") or "").strip()
         booking_status = str(result.get("booking_status") or "").strip() or "Draft"
-        return f"Booking draft {booking_id} created for {trip_name}. Status: {booking_status}."
+        proposed = f"Booking draft {booking_id} created for {trip_name}. Status: {booking_status}."
+        return gate_customer_write_reply(
+            proposed_reply=proposed,
+            write_result=result,
+            record_type="booking",
+            language=language,
+        )
 
     @staticmethod
-    def _handoff_message(result: dict[str, Any]) -> str:
+    def _handoff_message(result: dict[str, Any], language: str = "en") -> str:
         handoff_id = str(result.get("handoff_id") or "").strip()
         reason = str(result.get("reason_text") or result.get("reason_code") or "").strip()
-        return f"Handoff case {handoff_id} created. Automation is now stopped for this session. Reason: {reason}."
+        proposed = f"Handoff case {handoff_id} created. Automation is now stopped for this session. Reason: {reason}."
+        return gate_customer_write_reply(
+            proposed_reply=proposed,
+            write_result=result,
+            record_type="handoff",
+            language=language,
+        )
 
     @staticmethod
     def _default_priority_from_validation(validation) -> str:
