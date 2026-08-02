@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ trip.trip_name }} — Rahma CRM{% endblock %}
+{% block title %}{{ trip.trip_name }} — Nanovate CRM{% endblock %}
 {% block topbar_title %}Trip Detail{% endblock %}
 
 {% block head %}
@@ -46,7 +46,7 @@
 
 {% block topbar_actions %}
 <a href="{{ url_for('trips.index', **back_query) if back_query else url_for('trips.index') }}" class="btn btn-ghost btn-sm">← All Trips</a>
-<button onclick="openModal('editTrip')" class="btn btn-primary btn-sm">✏ Edit Trip</button>
+<button onclick="openModal('editTrip')" class="btn btn-primary btn-sm">Edit Trip</button>
 {% endblock %}
 
 {% block content %}
@@ -75,7 +75,7 @@
                     </div>
                     <h1 style="font-size:1.6rem;font-weight:800;color:var(--text-main);margin-bottom:0.35rem">{{ trip.trip_name }}</h1>
                     {% if trip.trip_leader %}
-                    <div style="color:var(--text-muted);font-size:0.83rem">👤 {{ trip.trip_leader }}</div>
+                    <div style="color:var(--text-muted);font-size:0.83rem">{{ trip.trip_leader }}</div>
                     {% endif %}
                 </div>
                 <div style="text-align:right;flex-shrink:0">
@@ -99,7 +99,7 @@
         <!-- Capacity Card -->
         <div class="card">
             <div class="card-header">
-                <span class="card-title">🛏 Room Inventory</span>
+                <span class="card-title">Room Inventory</span>
                 <button onclick="openModal('editInventory')" class="btn btn-ghost btn-sm">Adjust</button>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem">
@@ -111,7 +111,7 @@
                 {% set pct = (remaining / total * 100) if total else 0 %}
                 <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:1rem">
                     <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em">{{ label }}</div>
-                    <div style="font-size:1.5rem;font-weight:800;margin:0.35rem 0;color:{% if pct > 30 %}var(--green){% elif pct > 0 %}var(--yellow){% else %}var(--red){% endif %}">{{ remaining }}</div>
+                    <div style="font-size:1.5rem;font-weight:800;margin:0.35rem 0;color:{% if pct > 30 %}var(--green){% elif pct > 0 %}var(--warning){% else %}var(--red){% endif %}">{{ remaining }}</div>
                     <div style="font-size:0.72rem;color:var(--text-muted)">of {{ total }} remaining</div>
                     <div style="font-size:0.68rem;color:var(--text-muted);margin-top:0.15rem">Booked: {{ room_counts[label.lower() ~ '_booked'] or 0 }}</div>
                     {% if boys is not none or girls is not none %}
@@ -137,7 +137,7 @@
         <!-- Description -->
         {% if trip.public_description %}
         <div class="card">
-            <div class="card-title" style="margin-bottom:0.75rem">📝 Description</div>
+            <div class="card-title" style="margin-bottom:0.75rem">Description</div>
             <div style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;white-space:pre-wrap">{{ trip.public_description }}</div>
         </div>
         {% endif %}
@@ -166,7 +166,7 @@
 
         {% if commercial_config.vip_offer or commercial_config.group_offer %}
         <div class="card">
-            <div class="card-title" style="margin-bottom:0.75rem">💸 Commercial Offers</div>
+            <div class="card-title" style="margin-bottom:0.75rem">Commercial Offers</div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
                 <div>
                     <div style="font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.35rem">VIP Discount</div>
@@ -189,7 +189,7 @@
 
         {% if commercial_config.notes_body %}
         <div class="card">
-            <div class="card-title" style="margin-bottom:0.75rem">🔒 Sales Notes (Internal)</div>
+            <div class="card-title" style="margin-bottom:0.75rem">Sales Notes (Internal)</div>
             <div style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;white-space:pre-wrap">{{ commercial_config.notes_body }}</div>
         </div>
         {% endif %}
@@ -197,7 +197,7 @@
         <!-- Bookings -->
         <div class="card">
             <div class="card-header">
-                <span class="card-title">📋 Bookings ({{ bookings|length }})</span>
+                <span class="card-title">Bookings ({{ bookings|length }})</span>
                 <a href="{{ url_for('bookings.index') }}?q={{ trip.trip_id }}" class="btn btn-ghost btn-sm">View all</a>
             </div>
             {% if bookings %}
@@ -232,21 +232,21 @@
     <!-- Right: Actions -->
     <div style="display:flex;flex-direction:column;gap:1rem">
         <div class="card">
-            <div class="card-title" style="margin-bottom:1rem">⚡ Actions</div>
+            <div class="card-title" style="margin-bottom:1rem">Actions</div>
             <div style="display:flex;flex-direction:column;gap:0.5rem">
-                <button onclick="openModal('editTrip')" class="btn btn-primary">✏ Edit Details</button>
-                <button onclick="openModal('editInventory')" class="btn btn-ghost">🛏 Adjust Inventory</button>
-                <a href="{{ url_for('bookings.index') }}" class="btn btn-ghost">📋 All Bookings</a>
+                <button onclick="openModal('editTrip')" class="btn btn-primary">Edit Details</button>
+                <button onclick="openModal('editInventory')" class="btn btn-ghost">Adjust Inventory</button>
+                <a href="{{ url_for('bookings.index') }}" class="btn btn-ghost">All Bookings</a>
                 <form action="{{ url_for('trips.update', trip_id=trip.trip_id) }}" method="POST" onsubmit="return confirm('Mark as Cancelled?')">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="_method" value="DELETE">
-                    <button type="submit" class="btn btn-danger" style="width:100%">✕ Cancel Trip</button>
+                    <button type="submit" class="btn btn-danger" style="width:100%">Cancel Trip</button>
                 </form>
             </div>
         </div>
 
         <div class="card">
-            <div class="card-title" style="margin-bottom:0.75rem">ℹ Info</div>
+            <div class="card-title" style="margin-bottom:0.75rem">Info</div>
             <div style="display:flex;flex-direction:column;gap:0.6rem;font-size:0.8rem">
                 <div style="display:flex;justify-content:space-between">
                     <span style="color:var(--text-muted)">Year</span>
@@ -269,8 +269,8 @@
 <div id="editTrip" class="modal-overlay">
     <div class="modal-box" style="max-width:680px">
         <div class="modal-header">
-            <span class="modal-title">✏ Edit Trip</span>
-            <button class="modal-close" onclick="closeModal('editTrip')">✕</button>
+            <span class="modal-title">Edit Trip</span>
+            <button class="modal-close" onclick="closeModal('editTrip')">Close</button>
         </div>
         <form action="{{ url_for('trips.update', trip_id=trip.trip_id) }}" method="POST" enctype="multipart/form-data">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -390,8 +390,8 @@
 <div id="editInventory" class="modal-overlay">
     <div class="modal-box" style="max-width:420px">
         <div class="modal-header">
-            <span class="modal-title">🛏 Adjust Inventory</span>
-            <button class="modal-close" onclick="closeModal('editInventory')">✕</button>
+            <span class="modal-title">Adjust Inventory</span>
+            <button class="modal-close" onclick="closeModal('editInventory')">Close</button>
         </div>
         <div class="grid-2">
             <div class="form-group">

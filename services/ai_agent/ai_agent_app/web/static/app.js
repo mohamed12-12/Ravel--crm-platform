@@ -1,6 +1,7 @@
 const state = {
   sessionId: null,
   session: null,
+  messagePending: false,
 };
 
 const PASSPORT_CHAT_STAGES = [
@@ -84,6 +85,77 @@ function safeMediaUrl(url) {
   return "";
 }
 
+function detectTextDirection(text) {
+  const value = String(text || "");
+  const arabicCount = (value.match(/[\u0600-\u06ff]/g) || []).length;
+  const latinCount = (value.match(/[A-Za-z]/g) || []).length;
+  if (arabicCount === 0 && latinCount === 0) return "auto";
+  return arabicCount >= latinCount ? "rtl" : "ltr";
+}
+
+function inlineDirection(token, parentDir) {
+  const value = String(token || "");
+  if (/[\u0600-\u06ff]/.test(value)) return "rtl";
+  if (/[A-Za-z]/.test(value) || /\d/.test(value) || /^https?:\/\//i.test(value)) return "ltr";
+  return parentDir || "auto";
+}
+
+function appendBidiText(parent, text, parentDir) {
+  const value = String(text || "");
+  const tokenPattern = /(https?:\/\/[^\s]+|[A-Z]{1,8}-[A-Z0-9-]{2,}[.!?]?|\+?\d[\d\s\-/:.]{2,}\d[.!?]?|[A-Za-z][A-Za-z0-9]*(?:[ '-][A-Za-z0-9]+)*[.!?]?)/g;
+  let cursor = 0;
+  for (const match of value.matchAll(tokenPattern)) {
+    if (match.index > cursor) {
+      parent.appendChild(document.createTextNode(value.slice(cursor, match.index)));
+    }
+    const token = match[0];
+    const bdi = document.createElement("bdi");
+    bdi.dir = inlineDirection(token, parentDir);
+    bdi.textContent = token;
+    parent.appendChild(bdi);
+    cursor = match.index + token.length;
+  }
+  if (cursor < value.length) {
+    parent.appendChild(document.createTextNode(value.slice(cursor)));
+  }
+}
+
+function appendMessageLine(container, line, dir) {
+  const p = document.createElement("p");
+  p.dir = dir;
+  appendBidiText(p, line, dir);
+  container.appendChild(p);
+}
+
+function renderMessageText(container, text, dir) {
+  const lines = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  let currentList = null;
+  lines.forEach((rawLine) => {
+    const line = rawLine.trimEnd();
+    if (!line.trim()) {
+      currentList = null;
+      return;
+    }
+    const match = line.match(/^\s*(\d+)[.)]\s+(.+)$/);
+    if (match) {
+      if (!currentList) {
+        currentList = document.createElement("ol");
+        currentList.dir = dir;
+        currentList.className = "chat-list";
+        container.appendChild(currentList);
+      }
+      const li = document.createElement("li");
+      li.value = Number(match[1]);
+      li.dir = dir;
+      appendBidiText(li, match[2], dir);
+      currentList.appendChild(li);
+      return;
+    }
+    currentList = null;
+    appendMessageLine(container, line, dir);
+  });
+}
+
 function renderStats(stats) {
   if (!stats) return;
   els.travelerCount.textContent = stats.travelerCount ?? 0;
@@ -127,10 +199,14 @@ function renderStats(stats) {
 function renderMessages(messages) {
   els.chatLog.innerHTML = "";
   (messages || []).forEach((message) => {
+    if (message.role === "assistant" && message.state && message.state !== "completed") {
+      return;
+    }
     const div = document.createElement("div");
-    div.className = `chat-bubble ${message.role}`;
-    const formattedText = escapeHtml(message.text).replaceAll("\n", "<br>");
-    div.innerHTML = `<p>${formattedText}</p>`;
+    const dir = detectTextDirection(message.text);
+    div.className = `chat-bubble ${message.role} dir-${dir}`;
+    div.dir = dir;
+    renderMessageText(div, message.text, dir);
     const mediaItems = Array.isArray(message.media) ? message.media : [];
     const safeMedia = mediaItems
       .map((item) => ({
@@ -188,7 +264,8 @@ function renderSession(session) {
     "awaiting_clarification",
     ...PASSPORT_CHAT_STAGES,
   ].includes(session.stage);
-  const isCompleted = ["completed", "handed_off", "cancelled"].includes(session.stage);
+  const hasActiveHandoff = ["handed_off", "handoff_created", "handoff_pending", "assigned"].includes(String(session.handoffState || "").toLowerCase());
+  const isCompleted = ["completed", "cancelled"].includes(session.stage) || (session.stage === "handed_off" && !hasActiveHandoff);
 
   if (session.rawPhone && !els.phoneInput.value) {
     els.phoneInput.value = session.rawPhone;
@@ -198,9 +275,9 @@ function renderSession(session) {
     els.phoneInput.value = phoneNormalization.normalized_e164;
   }
   els.intakeForm.hidden = isGeminiMode || isToolCallingMode || !canIntake;
-  els.messageInput.disabled = !canChat || isCompleted;
+  els.messageInput.disabled = state.messagePending || (!canChat && !hasActiveHandoff) || isCompleted;
   els.messageInput.placeholder = messagePlaceholder(session, runtimeMode);
-  els.sendBtn.disabled = !canChat || isCompleted;
+  els.sendBtn.disabled = state.messagePending || (!canChat && !hasActiveHandoff) || isCompleted;
   renderQuickActions(session);
   renderPassportUpload(session);
 
@@ -217,6 +294,8 @@ function messagePlaceholder(session, runtimeMode = "deterministic") {
   const passportAttachmentRef = session?.passportAttachmentRef || "";
   const isGeminiMode = runtimeMode === "gemini";
   const isToolCallingMode = runtimeMode === "tool_calling";
+  const hasActiveHandoff = ["handed_off", "handoff_created", "handoff_pending", "assigned"].includes(String(session?.handoffState || "").toLowerCase());
+  if (stage === "handed_off" && hasActiveHandoff) return "Your request is under review. You can add a note...";
   if (["completed", "handed_off", "cancelled"].includes(stage)) return "Session finished.";
   if (isGeminiMode || isToolCallingMode) {
     if (stage === "awaiting_passport_upload") {
@@ -247,9 +326,12 @@ function messagePlaceholder(session, runtimeMode = "deterministic") {
 function renderPassportUpload(session) {
   if (!els.passportUploadBtn || !els.passportFileInput) return;
   const isUploadStage = session.stage === "awaiting_passport_upload";
+  const uploadEnabled = session.passportUploadEnabled !== false;
+  const passportRequired = Boolean(session.passportRequired);
   const hasAttachment = Boolean(session.passportAttachmentRef);
-  els.passportUploadBtn.hidden = !isUploadStage;
-  els.passportUploadBtn.disabled = !isUploadStage || !state.sessionId;
+  const canUpload = uploadEnabled && state.sessionId && (isUploadStage || (passportRequired && !hasAttachment));
+  els.passportUploadBtn.hidden = !canUpload;
+  els.passportUploadBtn.disabled = !canUpload;
   els.passportUploadBtn.textContent = hasAttachment ? "Replace Passport" : "Attach Passport";
   els.passportUploadBtn.title = hasAttachment
     ? `Current file: ${session.passportAttachmentRef}`
@@ -288,16 +370,16 @@ function renderQuickActions(session) {
     else button.hidden = true;
 
       if (roomBtn) {
-      if (reply === "single") button.innerHTML = "🛏 Single room";
+      if (reply === "single") button.innerHTML = "Single room";
       if (reply === "double") {
         const boys = Number(trip?.boys_double || 0);
         const girls = Number(trip?.girls_double || 0);
-        button.innerHTML = `🛏 Double room <span class="btn-sub">Boys room: ${boys} | Girls room: ${girls}</span>`;
+        button.innerHTML = `Double room <span class="btn-sub">Boys room: ${boys} | Girls room: ${girls}</span>`;
       }
       if (reply === "triple") {
         const boys = Number(trip?.boys_triple || 0);
         const girls = Number(trip?.girls_triple || 0);
-        button.innerHTML = `🛏 Triple room <span class="btn-sub">Boys room: ${boys} | Girls room: ${girls}</span>`;
+        button.innerHTML = `Triple room <span class="btn-sub">Boys room: ${boys} | Girls room: ${girls}</span>`;
       }
     }
   });
@@ -351,7 +433,7 @@ function getAvailableRoomChoices(session) {
     choices.push({
       reply: "single room",
       title: "Single room",
-      subtitle: `${single} available`,
+      subtitle: "Currently available",
       roomGroup: "",
     });
   }
@@ -360,7 +442,7 @@ function getAvailableRoomChoices(session) {
       choices.push({
         reply: "double boys room",
         title: "Double boys room",
-        subtitle: `${doubleBoys} available`,
+        subtitle: "Currently available",
         roomGroup: "boys",
       });
     }
@@ -368,7 +450,7 @@ function getAvailableRoomChoices(session) {
       choices.push({
         reply: "double girls room",
         title: "Double girls room",
-        subtitle: `${doubleGirls} available`,
+        subtitle: "Currently available",
         roomGroup: "girls",
       });
     }
@@ -376,7 +458,7 @@ function getAvailableRoomChoices(session) {
       choices.push({
         reply: "double room",
         title: "Double room",
-        subtitle: `${double} available`,
+        subtitle: "Currently available",
         roomGroup: "",
       });
     }
@@ -386,7 +468,7 @@ function getAvailableRoomChoices(session) {
       choices.push({
         reply: "triple boys room",
         title: "Triple boys room",
-        subtitle: `${tripleBoys} available`,
+        subtitle: "Currently available",
         roomGroup: "boys",
       });
     }
@@ -394,7 +476,7 @@ function getAvailableRoomChoices(session) {
       choices.push({
         reply: "triple girls room",
         title: "Triple girls room",
-        subtitle: `${tripleGirls} available`,
+        subtitle: "Currently available",
         roomGroup: "girls",
       });
     }
@@ -402,7 +484,7 @@ function getAvailableRoomChoices(session) {
       choices.push({
         reply: "triple room",
         title: "Triple room",
-        subtitle: `${triple} available`,
+        subtitle: "Currently available",
         roomGroup: "",
       });
     }
@@ -575,7 +657,7 @@ function renderBookingResult(session) {
       <div class="meta-item"><span>Payment</span><strong>${escapeHtml(booking.payment_status || "Pending")}</strong></div>
       <div class="meta-item"><span>Trip</span><strong>${escapeHtml(booking.trip_name)}</strong></div>
       <div class="meta-item"><span>Room</span><strong>${escapeHtml(booking.room_choice_label || session.roomChoiceLabel || booking.room_type)}</strong></div>
-      <div class="meta-item"><span>After Draft</span><strong>${escapeHtml(booking.available_after_draft)} left</strong></div>
+      <div class="meta-item"><span>Availability</span><strong>Updated</strong></div>
     </div>
   `;
 }
@@ -687,8 +769,12 @@ els.intakeForm?.addEventListener("submit", async (event) => {
 els.messageForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = els.messageInput.value.trim();
-  if (!text || !state.sessionId) return;
+  if (!text || !state.sessionId || state.messagePending) return;
   els.messageInput.value = "";
+  state.messagePending = true;
+  els.messageInput.disabled = true;
+  els.sendBtn.disabled = true;
+  els.sendBtn.textContent = "Sending...";
   try {
     const data = await api(`/api/session/${state.sessionId}/message`, {
       method: "POST",
@@ -696,7 +782,12 @@ els.messageForm?.addEventListener("submit", async (event) => {
     });
     renderSession(data.session);
   } catch (err) {
+    els.messageInput.value = text;
     alert(err.message);
+  } finally {
+    state.messagePending = false;
+    els.sendBtn.textContent = "Send ↗";
+    renderSession(state.session);
   }
 });
 

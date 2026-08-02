@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nanovate Molecules</title>
+    <link rel="stylesheet" href="./molecules.css">
+  </head>
+  <body>
+    <main class="nv-page">
+      <div class="nv-demo-shell">
+        <header class="nv-demo-header">
+          <div>
+            <h1>Molecule Components</h1>
+            <p>Reusable HTML/CSS versions of cards, widgets, table shells, and dashboard summary components.</p>
+          </div>
+        </header>
+
+        <section class="nv-demo-section">
+          <h2>Stat Cards</h2>
+          <div class="nv-demo-grid">
+            <article class="nv-stat-card nv-stat-card--green">
+              <div class="nv-stat-card__inner">
+                <div class="nv-stat-card__top">
+                  <p class="nv-stat-card__label">Total<br>Active Agents</p>
+                  <span class="nv-stat-card__icon">AI</span>
+                </div>
+                <p class="nv-stat-card__value">24</p>
+              </div>
+            </article>
+            <article class="nv-stat-card nv-stat-card--purple">
+              <div class="nv-stat-card__inner">
+                <div class="nv-stat-card__top">
+                  <p class="nv-stat-card__label">Active<br>Chat Agents</p>
+                  <span class="nv-stat-card__icon">C</span>
+                </div>
+                <p class="nv-stat-card__value">18</p>
+              </div>
+            </article>
+            <article class="nv-stat-card nv-stat-card--yellow">
+              <div class="nv-stat-card__inner">
+                <div class="nv-stat-card__top">
+                  <p class="nv-stat-card__label">Active<br>Voice Agents</p>
+                  <span class="nv-stat-card__icon">V</span>
+                </div>
+                <p class="nv-stat-card__value">6</p>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="nv-demo-section">
+          <h2>Widgets</h2>
+          <div class="nv-demo-grid">
+            <aside class="nv-token-widget">
+              <h3 class="nv-token-widget__title">Free Tokens</h3>
+              <div class="nv-token-widget__line">
+                <span>Remaining Credits</span>
+                <strong>1,360</strong>
+              </div>
+              <div class="nv-progress" style="--progress: 68%;">
+                <div class="nv-progress__track"><div class="nv-progress__bar"></div></div>
+              </div>
+              <div class="nv-token-widget__line" style="margin-top: 12px;">
+                <span>640 used</span>
+                <span>2,000 total</span>
+              </div>
+              <button class="nv-button nv-button--primary nv-button--full nv-button--sm">Purchase Credits</button>
+            </aside>
+
+            <section class="nv-agents-widget nv-widget">
+              <div class="nv-widget__header">
+                <h3 class="nv-widget__title">Agents</h3>
+                <select class="nv-widget__select" aria-label="Agent filter">
+                  <option>Chat Agents</option>
+                  <option>Voice Agents</option>
+                </select>
+              </div>
+              <div class="nv-agent-list">
+                <button class="nv-agent-row">
+                  <span class="nv-agent-inline__avatar" aria-hidden="true"></span>
+                  <span class="nv-agent-inline__meta">
+                    <span class="nv-agent-inline__name">Ahmed Salem</span>
+                    <span class="nv-agent-inline__role">Customer Support</span>
+                  </span>
+                  <span class="nv-agent-row__credits">25k Credits</span>
+                </button>
+                <button class="nv-agent-row">
+                  <span class="nv-agent-inline__avatar" style="background: var(--nv-gradient-avatar-yellow);" aria-hidden="true"></span>
+                  <span class="nv-agent-inline__meta">
+                    <span class="nv-agent-inline__name">Ramy Mohamed</span>
+                    <span class="nv-agent-inline__role">Business Consultant</span>
+                  </span>
+                  <span class="nv-agent-row__credits">18k Credits</span>
+                </button>
+              </div>
+              <button class="nv-link-action" style="justify-self: end;">All Agents</button>
+            </section>
+          </div>
+        </section>
+
+        <section class="nv-demo-section">
+          <h2>Chart Widget</h2>
+          <section class="nv-widget nv-chart-widget">
+            <div class="nv-widget__header">
+              <h3 class="nv-widget__title">My usage</h3>
+              <select class="nv-widget__select" aria-label="Usage period">
+                <option>Yearly</option>
+                <option>Monthly</option>
+                <option>Weekly</option>
+              </select>
+            </div>
+            <div class="nv-chart" aria-label="Usage chart">
+              <svg viewBox="0 0 800 268" preserveAspectRatio="none" aria-hidden="true">
+                <defs>
+                  <linearGradient id="usage-fill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#38b98d" stop-opacity="0.35"/>
+                    <stop offset="100%" stop-color="#38b98d" stop-opacity="0"/>
+                  </linearGradient>
+                </defs>
+                <path d="M0 210 C80 190 120 130 190 150 C260 170 300 68 390 90 C480 112 520 52 610 74 C700 96 740 42 800 64 L800 268 L0 268 Z" fill="url(#usage-fill)"/>
+                <path d="M0 210 C80 190 120 130 190 150 C260 170 300 68 390 90 C480 112 520 52 610 74 C700 96 740 42 800 64" fill="none" stroke="#38b98d" stroke-width="3"/>
+              </svg>
+            </div>
+            <div class="nv-chart__axis">
+              <span>2022</span><span>2023</span><span>2024</span><span>2025</span><span>2026</span>
+            </div>
+            <div class="nv-chart__summaries">
+              <article class="nv-summary-card">
+                <p class="nv-summary-card__title">Top year</p>
+                <div>
+                  <p class="nv-summary-card__value">2026</p>
+                  <p class="nv-summary-card__subtitle">+82k Credits used</p>
+                </div>
+              </article>
+              <article class="nv-summary-card">
+                <p class="nv-summary-card__title">Top month</p>
+                <div>
+                  <p class="nv-summary-card__value">June</p>
+                  <p class="nv-summary-card__subtitle">2026</p>
+                </div>
+              </article>
+              <article class="nv-summary-card">
+                <p class="nv-summary-card__title">Most Active Agent</p>
+                <div class="nv-agent-inline">
+                  <span class="nv-agent-inline__avatar" aria-hidden="true"></span>
+                  <span class="nv-agent-inline__meta">
+                    <span class="nv-agent-inline__name">Sales Assistant</span>
+                    <span class="nv-agent-inline__role">Sales</span>
+                  </span>
+                </div>
+              </article>
+            </div>
+          </section>
+        </section>
+
+        <section class="nv-demo-section">
+          <h2>Recent And Usage Cards</h2>
+          <div class="nv-demo-grid">
+            <section class="nv-recent-card">
+              <h3 class="nv-recent-card__title">Recent Generations</h3>
+              <article class="nv-recent-item">
+                <div class="nv-recent-item__row">
+                  <p class="nv-recent-item__title">English voice sample</p>
+                  <button class="nv-button nv-button--text-secondary nv-button--sm">Actions</button>
+                </div>
+                <div class="nv-recent-item__row">
+                  <p class="nv-recent-item__meta">Sarah voice</p>
+                  <p class="nv-recent-item__meta">0:42</p>
+                </div>
+              </article>
+              <article class="nv-recent-item">
+                <div class="nv-recent-item__row">
+                  <p class="nv-recent-item__title">sales-call.wav</p>
+                  <button class="nv-button nv-button--text-secondary nv-button--sm">Actions</button>
+                </div>
+                <p class="nv-recent-item__meta">Customer asked for pricing and onboarding details.</p>
+              </article>
+            </section>
+
+            <section class="nv-usage-card">
+              <h3 class="nv-usage-card__title">Usage This Month</h3>
+              <div class="nv-usage-card__usage-line">
+                <span>Characters Used</span>
+                <span>64,000 / 100k</span>
+              </div>
+              <div class="nv-progress" style="--progress: 64%;">
+                <div class="nv-progress__track"><div class="nv-progress__bar"></div></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="nv-demo-section">
+          <h2>Paginated Table</h2>
+          <section class="nv-table-shell">
+            <input class="nv-table-search" type="search" placeholder="Search order...">
+            <table class="nv-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Status</th>
+                  <th>Credits</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Sales Assistant</td>
+                  <td>Active</td>
+                  <td>25k</td>
+                </tr>
+                <tr>
+                  <td>Support Agent</td>
+                  <td>Active</td>
+                  <td>18k</td>
+                </tr>
+              </tbody>
+            </table>
+            <nav class="nv-pagination" aria-label="Pagination">
+              <span>1 of 3 pages</span>
+              <span class="nv-pagination__pages">
+                <button class="nv-page-button">1</button>
+                <button class="nv-page-button" aria-current="page">2</button>
+                <button class="nv-page-button">3</button>
+              </span>
+            </nav>
+          </section>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

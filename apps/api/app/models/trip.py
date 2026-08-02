@@ -40,6 +40,10 @@ class Trip(db.Model):
     girls_double = db.Column(db.Integer, default=0)
     boys_triple = db.Column(db.Integer, default=0)
     girls_triple = db.Column(db.Integer, default=0)
+    draft_holds_boys_double = db.Column(db.Integer, default=0)
+    draft_holds_girls_double = db.Column(db.Integer, default=0)
+    draft_holds_boys_triple = db.Column(db.Integer, default=0)
+    draft_holds_girls_triple = db.Column(db.Integer, default=0)
     
     # Content Fields
     public_price = db.Column(db.String(200))
@@ -146,6 +150,10 @@ class Trip(db.Model):
             "girls_double": self.girls_double,
             "boys_triple": self.boys_triple,
             "girls_triple": self.girls_triple,
+            "draft_holds_boys_double": self.draft_holds_boys_double,
+            "draft_holds_girls_double": self.draft_holds_girls_double,
+            "draft_holds_boys_triple": self.draft_holds_boys_triple,
+            "draft_holds_girls_triple": self.draft_holds_girls_triple,
             "public_price": self.public_price,
             "public_description": self.public_description,
             "sales_notes": self.sales_notes

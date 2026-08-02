@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nanovate Dashboard Template</title>
+    <link rel="stylesheet" href="./dashboard.css">
+  </head>
+  <body>
+    <div class="nv-dashboard-layout">
+      <aside class="nv-sidebar">
+        <div class="nv-sidebar__header">
+          <img class="nv-sidebar__logo" src="../../assets/logo.svg" alt="Nanovate">
+          <button class="nv-icon-button" aria-label="Collapse sidebar">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 5h16M4 12h16M4 19h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <nav class="nv-sidebar__nav" aria-label="Dashboard navigation">
+          <a class="nv-nav-link" href="#" aria-current="page"><img src="../../assets/dashboard.svg" alt="">Dashboard</a>
+          <a class="nv-nav-link" href="#"><img src="../../assets/chat-agent.svg" alt="">Chat agent</a>
+          <a class="nv-nav-link" href="#"><img src="../../assets/voice-agent.svg" alt="">Voice agent</a>
+          <a class="nv-nav-link" href="#"><img src="../../assets/ai-automation.svg" alt="">Ai automation</a>
+          <a class="nv-nav-link" href="#"><img src="../../assets/text-to-speech.svg" alt="">Text to Speech</a>
+          <a class="nv-nav-link" href="#"><img src="../../assets/speech-to-text.svg" alt="">Speech to Text</a>
+          <a class="nv-nav-link" href="#"><img src="../../assets/billing.svg" alt="">Billing</a>
+          <a class="nv-nav-link" href="#"><img src="../../assets/documentation.svg" alt="">Documentation</a>
+          <a class="nv-nav-link" href="#"><img src="../../assets/settings.svg" alt="">Settings</a>
+        </nav>
+        <div class="nv-sidebar__footer">
+          <aside class="nv-token-widget">
+            <h3 class="nv-token-widget__title">Free Tokens</h3>
+            <div class="nv-token-widget__line"><span>Remaining Credits</span><strong>1,360</strong></div>
+            <div class="nv-progress" style="--progress: 68%;"><div class="nv-progress__track"><div class="nv-progress__bar"></div></div></div>
+            <div class="nv-token-widget__line" style="margin-top: 12px;"><span>640 used</span><span>2,000 total</span></div>
+            <button class="nv-button nv-button--primary nv-button--full nv-button--sm">Purchase Credits</button>
+          </aside>
+        </div>
+      </aside>
+
+      <div class="nv-dashboard-main">
+        <header class="nv-topbar">
+          <div class="nv-breadcrumb">
+            <button class="nv-icon-button nv-mobile-menu" aria-label="Open menu"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+            <span>Dashboard</span>
+            <strong>/ Dashboard</strong>
+          </div>
+          <div class="nv-topbar__actions">
+            <label class="nv-search">
+              <span class="nv-sr-only">Search</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="m21 21-4.35-4.35m1.35-5.65a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              <input type="search" placeholder="Search">
+            </label>
+            <button class="nv-icon-button" aria-label="Notifications"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5m6 0a3 3 0 0 1-6 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+            <button class="nv-profile-trigger"><span class="nv-avatar nv-avatar--xs">RS</span><span class="nv-profile-trigger__name">Ragad</span></button>
+          </div>
+        </header>
+
+        <main class="nv-dashboard-content">
+          <section class="nv-home-stack">
+            <h1 class="nv-home-title">Welcome back Ragad!</h1>
+
+            <div class="nv-stats-grid">
+              <article class="nv-stat-card nv-stat-card--green"><div class="nv-stat-card__inner"><div class="nv-stat-card__top"><p class="nv-stat-card__label">Total<br>Active Agents</p><span class="nv-stat-card__icon">AI</span></div><p class="nv-stat-card__value">24</p></div></article>
+              <article class="nv-stat-card nv-stat-card--purple"><div class="nv-stat-card__inner"><div class="nv-stat-card__top"><p class="nv-stat-card__label">Active<br>Chat Agents</p><span class="nv-stat-card__icon">C</span></div><p class="nv-stat-card__value">18</p></div></article>
+              <article class="nv-stat-card nv-stat-card--yellow"><div class="nv-stat-card__inner"><div class="nv-stat-card__top"><p class="nv-stat-card__label">Active<br>Voice Agents</p><span class="nv-stat-card__icon">V</span></div><p class="nv-stat-card__value">6</p></div></article>
+            </div>
+
+            <div class="nv-credits-header">
+              <h2>Credits usage</h2>
+              <p>Track how your credits are used over time with a clear visual breakdown.</p>
+            </div>
+
+            <div class="nv-dashboard-grid">
+              <section class="nv-widget nv-chart-widget">
+                <div class="nv-widget__header"><h3 class="nv-widget__title">My usage</h3><select class="nv-widget__select"><option>Yearly</option><option>Monthly</option></select></div>
+                <div class="nv-chart"><svg viewBox="0 0 800 268" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="usage-fill-template" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#38b98d" stop-opacity="0.35"/><stop offset="100%" stop-color="#38b98d" stop-opacity="0"/></linearGradient></defs><path d="M0 210 C80 190 120 130 190 150 C260 170 300 68 390 90 C480 112 520 52 610 74 C700 96 740 42 800 64 L800 268 L0 268 Z" fill="url(#usage-fill-template)"/><path d="M0 210 C80 190 120 130 190 150 C260 170 300 68 390 90 C480 112 520 52 610 74 C700 96 740 42 800 64" fill="none" stroke="#38b98d" stroke-width="3"/></svg></div>
+                <div class="nv-chart__axis"><span>2022</span><span>2023</span><span>2024</span><span>2025</span><span>2026</span></div>
+                <div class="nv-chart__summaries">
+                  <article class="nv-summary-card"><p class="nv-summary-card__title">Top year</p><div><p class="nv-summary-card__value">2026</p><p class="nv-summary-card__subtitle">+82k Credits used</p></div></article>
+                  <article class="nv-summary-card"><p class="nv-summary-card__title">Top month</p><div><p class="nv-summary-card__value">June</p><p class="nv-summary-card__subtitle">2026</p></div></article>
+                  <article class="nv-summary-card"><p class="nv-summary-card__title">Most Active Agent</p><div class="nv-agent-inline"><span class="nv-agent-inline__avatar"></span><span class="nv-agent-inline__meta"><span class="nv-agent-inline__name">Sales Assistant</span><span class="nv-agent-inline__role">Sales</span></span></div></article>
+                </div>
+              </section>
+
+              <section class="nv-agents-widget nv-widget">
+                <div class="nv-widget__header"><h3 class="nv-widget__title">Agents</h3><select class="nv-widget__select"><option>Chat Agents</option><option>Voice Agents</option></select></div>
+                <div class="nv-agent-list">
+                  <button class="nv-agent-row"><span class="nv-agent-inline__avatar"></span><span class="nv-agent-inline__meta"><span class="nv-agent-inline__name">Ahmed Salem</span><span class="nv-agent-inline__role">Customer Support</span></span><span class="nv-agent-row__credits">25k Credits</span></button>
+                  <button class="nv-agent-row"><span class="nv-agent-inline__avatar" style="background: var(--nv-gradient-avatar-yellow);"></span><span class="nv-agent-inline__meta"><span class="nv-agent-inline__name">Ramy Mohamed</span><span class="nv-agent-inline__role">Business Consultant</span></span><span class="nv-agent-row__credits">18k Credits</span></button>
+                  <button class="nv-agent-row"><span class="nv-agent-inline__avatar"></span><span class="nv-agent-inline__meta"><span class="nv-agent-inline__name">Ahmed Hany</span><span class="nv-agent-inline__role">Sales Assistant</span></span><span class="nv-agent-row__credits">15k Credits</span></button>
+                </div>
+                <button class="nv-link-action" style="align-self: end;">All Agents</button>
+              </section>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </body>
+</html>

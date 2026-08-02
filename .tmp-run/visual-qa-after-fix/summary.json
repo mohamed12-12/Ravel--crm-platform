@@ -1,0 +1,32 @@
+[
+  {
+    "mode": "desktop",
+    "status": 200,
+    "metrics": {
+      "statusText": "Admin Dashboard",
+      "sidebarWidth": 199,
+      "productBrand": "Olive",
+      "missingImgs": [],
+      "navIconImages": 10,
+      "footer": "This system is powered by Nanovate Agents. © 2026 Nanovate. All Rights Reserved.",
+      "overflowX": false,
+      "innerWidth": 1440,
+      "scrollWidth": 1440
+    }
+  },
+  {
+    "mode": "mobile",
+    "status": 200,
+    "metrics": {
+      "statusText": "Admin Dashboard",
+      "sidebarWidth": 199,
+      "productBrand": "Olive",
+      "missingImgs": [],
+      "navIconImages": 10,
+      "footer": "This system is powered by Nanovate Agents. © 2026 Nanovate. All Rights Reserved.",
+      "overflowX": false,
+      "innerWidth": 980,
+      "scrollWidth": 980
+    }
+  }
+]

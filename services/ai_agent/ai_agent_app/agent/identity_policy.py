@@ -17,7 +17,7 @@ class AgentIdentityPolicy:
     """Backend-owned answers for assistant identity and provider questions."""
 
     IDENTITY_AR = "أنا مساعد رحمة ترافل الذكي، تم تطويري وتخصيصي بواسطة nanovate.io."
-    IDENTITY_EN = "I’m Rahma Traveler’s AI assistant, built and customized by nanovate.io."
+    IDENTITY_EN = "I’m Ravel Traveler’s AI assistant, built and customized by nanovate.io."
     PROVIDER_AR = "تم تطوير هذا المساعد بواسطة nanovate.io ويعتمد على تقنيات الذكاء الاصطناعي."
     PROVIDER_EN = "This assistant was built and integrated by nanovate.io and is powered by an AI model."
 

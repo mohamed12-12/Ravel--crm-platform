@@ -31,10 +31,14 @@ VALID_ROOM_TYPES = {"Single", "Double", "Triple"}
 VALID_FLIGHT_OPTION_MAP = {
     "with flight": "With Flight",
     "with flights": "With Flight",
+    "withflight": "With Flight",
+    "withflights": "With Flight",
     "flight included": "With Flight",
     "include flights": "With Flight",
     "include flight": "With Flight",
     "with": "With Flight",
+    "yes flight": "With Flight",
+    "yes flights": "With Flight",
     "yes": "With Flight",
     "مع طيران": "With Flight",
     "شامل طيران": "With Flight",
@@ -44,11 +48,27 @@ VALID_FLIGHT_OPTION_MAP = {
     "أريد الرحلة شاملة الطيران": "With Flight",
     "without flight": "Without Flight",
     "without flights": "Without Flight",
+    "withoutflight": "Without Flight",
+    "withoutflights": "Without Flight",
     "without": "Without Flight",
     "witout": "Without Flight",
+    "withot": "Without Flight",
+    "whitout": "Without Flight",
+    "wihout": "Without Flight",
+    "wthout": "Without Flight",
+    "with out": "Without Flight",
+    "w out": "Without Flight",
+    "w/out": "Without Flight",
     "no flight": "Without Flight",
     "no flights": "Without Flight",
+    "noflight": "Without Flight",
+    "noflights": "Without Flight",
+    "no need flight": "Without Flight",
+    "no need flights": "Without Flight",
     "no": "Without Flight",
+    "not applicable": "Not Applicable",
+    "not needed": "Not Applicable",
+    "not available": "Not Applicable",
     "لا": "Without Flight",
     "exclude flights": "Without Flight",
     "بدون طيران": "Without Flight",
@@ -114,6 +134,9 @@ def normalize_flight_option(value: str | None) -> str:
         return ""
     if lowered in VALID_FLIGHT_OPTION_MAP:
         return VALID_FLIGHT_OPTION_MAP[lowered]
+    compact = re.sub(r"[^0-9a-z\u0600-\u06ff]+", "", lowered)
+    if compact in VALID_FLIGHT_OPTION_MAP:
+        return VALID_FLIGHT_OPTION_MAP[compact]
     return ""
 
 

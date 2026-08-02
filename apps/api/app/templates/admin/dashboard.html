@@ -1,36 +1,384 @@
 {% extends "base.html" %}
-{% block title %}Dashboard — Rahma CRM{% endblock %}
+{% block title %}Dashboard — Nanovate CRM{% endblock %}
 {% block topbar_title %}Admin Dashboard{% endblock %}
 
+{% block head %}
+<style>
+    :root {
+        --dashboard-purple: #8b5cf6;
+        --dashboard-purple-soft: #c4b5fd;
+    }
+    .nav-badge {
+        background: var(--dashboard-purple);
+    }
+    .dashboard-kpi-grid .kpi-card {
+        position: relative;
+        overflow: hidden;
+        background: #0d0d0d !important;
+        border-color: rgba(255, 255, 255, 0.10) !important;
+    }
+    .dashboard-kpi-grid .kpi-card::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+            radial-gradient(circle at 92% 8%, var(--kpi-glow), transparent 30%),
+            linear-gradient(135deg, rgba(255, 255, 255, 0.012), transparent 52%);
+        opacity: 0.55;
+        pointer-events: none;
+    }
+    .dashboard-kpi-grid .kpi-card > * {
+        position: relative;
+        z-index: 1;
+    }
+    .dashboard-kpi-green {
+        --kpi-glow: rgba(0, 208, 146, 0.10);
+    }
+    .dashboard-kpi-purple {
+        --kpi-glow: rgba(139, 92, 246, 0.10);
+    }
+    .dashboard-kpi-yellow {
+        --kpi-glow: rgba(234, 179, 8, 0.08);
+    }
+    .queue-board {
+        margin-bottom: 1.25rem;
+        overflow: hidden;
+    }
+    .queue-board.card {
+        background: transparent !important;
+        border: 0 !important;
+        padding: 0 !important;
+    }
+    .queue-board-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        flex-wrap: wrap;
+    }
+    .queue-board-title {
+        display: grid;
+        gap: 0.35rem;
+    }
+    .queue-board-title p {
+        margin: 0;
+        color: var(--text-muted);
+        font-size: 0.82rem;
+    }
+    .queue-summary-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.85rem;
+        margin-bottom: 1rem;
+    }
+    .queue-summary-card {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.9rem 1rem;
+        min-height: 96px;
+        display: grid;
+        gap: 0.35rem;
+        align-content: start;
+    }
+    .queue-summary-card strong {
+        color: var(--text-main);
+        font-size: 1.6rem;
+        line-height: 1;
+        font-weight: 800;
+    }
+    .queue-summary-card span {
+        color: var(--text-muted);
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+    }
+    .queue-summary-card p {
+        margin: 0;
+        color: var(--text-dim);
+        font-size: 0.76rem;
+        line-height: 1.45;
+    }
+    .queue-summary-card.is-alert strong,
+    .queue-summary-card.is-warning strong,
+    .queue-summary-card.is-ok strong {
+        color: var(--text-main);
+    }
+    .queue-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        align-items: start;
+        gap: 0.9rem;
+    }
+    .queue-column {
+        display: flex;
+        flex-direction: column;
+        gap: 0.9rem;
+        min-width: 0;
+    }
+    .queue-panel {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 1rem;
+        min-height: 168px;
+        max-height: 360px;
+        display: flex;
+        flex-direction: column;
+        gap: 0.8rem;
+    }
+    .queue-panel:has(.queue-empty) {
+        min-height: 148px;
+    }
+    .queue-panel-compact {
+        min-height: auto;
+    }
+    .queue-panel.is-accent {
+        border-color: var(--border);
+        background: rgba(255, 255, 255, 0.03);
+    }
+    .queue-panel.is-alert {
+        border-color: rgba(239, 68, 68, 0.24);
+        background: rgba(255, 255, 255, 0.03);
+    }
+    .queue-panel.is-warning {
+        border-color: rgba(234, 179, 8, 0.24);
+        background: rgba(255, 255, 255, 0.03);
+    }
+    .queue-panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+    }
+    .queue-panel-title {
+        margin: 0;
+        color: var(--text-main);
+        font-size: 0.95rem;
+        font-weight: 700;
+    }
+    .queue-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        padding: 0 0.55rem;
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text-main);
+        font-size: 0.75rem;
+        font-weight: 700;
+    }
+    .queue-panel.is-alert .queue-count,
+    .queue-panel.is-warning .queue-count {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text-main);
+    }
+    .queue-panel-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.55rem;
+        min-height: 0;
+        overflow-y: auto;
+        padding-right: 0.25rem;
+        scrollbar-gutter: stable;
+    }
+    .queue-item {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+        text-decoration: none;
+        color: inherit;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 8px;
+        padding: 0.75rem 0.85rem;
+        transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+    }
+    .queue-item:hover {
+        background: rgba(255, 255, 255, 0.05);
+        border-color: rgba(255, 255, 255, 0.14);
+        transform: translateY(-1px);
+    }
+    .queue-item-main {
+        min-width: 0;
+        display: grid;
+        gap: 0.25rem;
+    }
+    .queue-item-name {
+        color: var(--text-main);
+        font-size: 0.86rem;
+        font-weight: 600;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+    }
+    .queue-item-meta {
+        color: var(--text-muted);
+        font-size: 0.74rem;
+        line-height: 1.35;
+    }
+    .queue-item-date {
+        flex: 0 0 auto;
+        color: var(--text-dim);
+        font-size: 0.72rem;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+    .queue-item-date.is-alert {
+        color: var(--dashboard-purple-soft);
+    }
+    .queue-empty {
+        flex: 1;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        min-height: 58px;
+        padding: 0.8rem;
+        border: 1px dashed rgba(255, 255, 255, 0.08);
+        border-radius: 8px;
+        color: var(--text-muted);
+        font-size: 0.82rem;
+        line-height: 1.55;
+        background: rgba(255, 255, 255, 0.02);
+    }
+    .queue-footer {
+        margin-top: 1rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--border);
+        display: grid;
+        gap: 1rem;
+    }
+    .queue-footer-block {
+        display: grid;
+        gap: 0.7rem;
+    }
+    .queue-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+    }
+    .queue-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        min-height: 34px;
+        padding: 0.45rem 0.75rem;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--text-dim);
+        text-decoration: none;
+        font-size: 0.78rem;
+        font-weight: 600;
+        transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .queue-chip:hover {
+        background: rgba(255, 255, 255, 0.06);
+        border-color: rgba(255, 255, 255, 0.16);
+        color: var(--text-main);
+    }
+    .queue-chip b {
+        color: var(--text-main);
+        font-weight: 700;
+    }
+    .badge-red {
+        background: rgba(239, 68, 68, 0.14) !important;
+        border-color: rgba(239, 68, 68, 0.32) !important;
+        color: #fca5a5 !important;
+    }
+    @media (max-width: 1180px) {
+        .queue-summary-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .queue-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+    @media (max-width: 760px) {
+        .queue-summary-grid,
+        .queue-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+    .dashboard-secondary-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.25rem;
+        margin-bottom: 1.25rem;
+    }
+    .dashboard-action-row {
+        margin-top: 1.25rem;
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+    }
+    .dashboard-priority-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.6rem;
+    }
+    .dashboard-priority-card {
+        background: rgba(139, 92, 246, 0.08);
+        border: 1px solid rgba(139, 92, 246, 0.18);
+        border-radius: 8px;
+        padding: 0.75rem 1rem;
+        transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .dashboard-priority-card:hover {
+        background: rgba(139, 92, 246, 0.13);
+        border-color: rgba(139, 92, 246, 0.28);
+    }
+    .dashboard-priority-name {
+        font-weight: 600;
+        color: var(--text-main);
+        font-size: 0.83rem;
+    }
+    .dashboard-priority-meta {
+        color: var(--text-muted);
+        font-size: 0.72rem;
+        margin-top: 2px;
+    }
+    @media (max-width: 900px) {
+        .dashboard-secondary-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+{% endblock %}
+
 {% block topbar_actions %}
-<a href="{{ url_for('admin.import_data') }}" class="btn btn-ghost btn-sm">⬆ Import / Sync</a>
-<a href="{{ url_for('handoffs.index') }}" class="btn btn-primary btn-sm">🔔 Handoff Queue</a>
+<a href="{{ url_for('admin.import_data') }}" class="btn btn-ghost btn-sm">Import / Sync</a>
+<a href="{{ url_for('handoffs.index') }}" class="btn btn-primary btn-sm">Handoff Queue</a>
 {% endblock %}
 
 {% block content %}
 <!-- KPI Cards -->
-<div class="kpi-grid">
-    <div class="kpi-card" style="border-left:3px solid #6366f1">
+<div class="kpi-grid dashboard-kpi-grid">
+    <div class="kpi-card dashboard-kpi-green">
         <div class="kpi-label">Travelers</div>
         <div class="kpi-value">{{ traveler_count }}</div>
         <div class="kpi-sub">All registered travelers</div>
     </div>
-    <div class="kpi-card" style="border-left:3px solid #eab308">
+    <div class="kpi-card dashboard-kpi-purple">
         <div class="kpi-label">Active Leads</div>
         <div class="kpi-value">{{ active_lead_count }}</div>
         <div class="kpi-sub">Not Booked or Lost</div>
     </div>
-    <div class="kpi-card" style="border-left:3px solid #22c55e">
+    <div class="kpi-card dashboard-kpi-green">
         <div class="kpi-label">Open Trips</div>
         <div class="kpi-value">{{ open_trip_count }}</div>
         <div class="kpi-sub">Currently available</div>
     </div>
-    <div class="kpi-card" style="border-left:3px solid #ef4444">
+    <div class="kpi-card dashboard-kpi-purple">
         <div class="kpi-label">Pending Handoffs</div>
         <div class="kpi-value" id="kpi-handoffs">{{ pending_handoff_count }}</div>
         <div class="kpi-sub">Awaiting agent action</div>
     </div>
-    <div class="kpi-card" style="border-left:3px solid #a78bfa">
+    <div class="kpi-card dashboard-kpi-yellow">
         <div class="kpi-label">Draft Bookings</div>
         <div class="kpi-value">{{ draft_booking_count }}</div>
         <div class="kpi-sub">Awaiting confirmation</div>
@@ -38,95 +386,294 @@
 </div>
 
 <!-- Employee Work Queue -->
-<div class="card" style="margin-bottom:1.25rem">
-    <div class="card-header">
-        <span class="card-title">Employee Work Queue</span>
+<div class="card queue-board" style="margin-bottom:1.25rem">
+    <div class="queue-board-header">
+        <div class="queue-board-title">
+            <span class="card-title">Employee Work Queue</span>
+            <p>Prioritized follow-ups, booking tasks, and ownership gaps in one place.</p>
+        </div>
         <a href="{{ url_for('leads.index', queue='overdue') }}" class="btn btn-ghost btn-sm">Open follow-ups</a>
     </div>
-    {% if current_employee_role %}
-    <div class="grid-3" style="gap:1rem;margin-bottom:1rem">
-        <div>
-            <div class="form-label">My Leads</div>
-            {% for lead in my_leads %}
-            <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" style="display:block;color:var(--text-main);text-decoration:none;margin-bottom:0.45rem">{{ lead.customer_name or lead.lead_id }}</a>
-            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">No leads assigned to you.</div>{% endfor %}
+
+    <div class="queue-summary-grid">
+        <div class="queue-summary-card is-alert">
+            <strong>{{ overdue_followups|length }}</strong>
+            <span>Overdue follow-ups</span>
+            <p>Urgent leads that have already passed the planned follow-up date.</p>
         </div>
-        <div>
-            <div class="form-label">My Bookings</div>
-            {% for booking in my_bookings %}
-            <a href="{{ url_for('bookings.detail', booking_id=booking.booking_id) }}" style="display:block;color:var(--text-main);text-decoration:none;margin-bottom:0.45rem">{{ booking.traveler_name or booking.booking_id }}</a>
-            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">No bookings assigned to you.</div>{% endfor %}
+        <div class="queue-summary-card is-warning">
+            <strong>{{ due_today|length }}</strong>
+            <span>Due today</span>
+            <p>Conversations that should be handled before the workday closes.</p>
         </div>
-        <div>
-            <div class="form-label">My Overdue Follow-ups</div>
-            {% for lead in my_overdue_leads %}
-            <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" style="display:block;color:var(--red);text-decoration:none;margin-bottom:0.45rem">{{ lead.customer_name or lead.lead_id }}</a>
-            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">Nothing overdue.</div>{% endfor %}
+        <div class="queue-summary-card">
+            <strong>{{ new_unassigned|length }}</strong>
+            <span>Unassigned leads</span>
+            <p>Fresh leads waiting for ownership and first-touch follow-up.</p>
         </div>
+        <div class="queue-summary-card is-ok">
+            <strong>{{ deposit_followups|length + missing_documents|length }}</strong>
+            <span>Booking actions</span>
+            <p>Payment and document tasks that still need operational follow-up.</p>
+        </div>
+    </div>
+
+    {% if current_employee_role and (my_leads or my_bookings or my_overdue_leads) %}
+    <div class="queue-grid" style="margin-bottom:1.4rem">
+        <section class="queue-panel">
+            <div class="queue-panel-header">
+                <div>
+                    <div class="queue-panel-title">My Leads</div>
+                    <div class="queue-item-meta">Assigned leads currently on your desk.</div>
+                </div>
+                <span class="queue-count">{{ my_leads|length }}</span>
+            </div>
+            <div class="queue-panel-list">
+                {% for lead in my_leads %}
+                <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" class="queue-item">
+                    <div class="queue-item-main">
+                        <span class="queue-item-name">{{ lead.customer_name or lead.lead_id }}</span>
+                        <span class="queue-item-meta">{{ lead.lead_stage or 'Lead' }} - {{ lead.follow_up_status or lead.current_step or 'Open' }}</span>
+                    </div>
+                </a>
+                {% else %}
+                <div class="queue-empty">No leads are assigned to you right now.</div>
+                {% endfor %}
+            </div>
+        </section>
+
+        <section class="queue-panel">
+            <div class="queue-panel-header">
+                <div>
+                    <div class="queue-panel-title">My Bookings</div>
+                    <div class="queue-item-meta">Bookings that still need your attention.</div>
+                </div>
+                <span class="queue-count">{{ my_bookings|length }}</span>
+            </div>
+            <div class="queue-panel-list">
+                {% for booking in my_bookings %}
+                <a href="{{ url_for('bookings.detail', booking_id=booking.booking_id) }}" class="queue-item">
+                    <div class="queue-item-main">
+                        <span class="queue-item-name">{{ booking.traveler_name or booking.booking_id }}</span>
+                        <span class="queue-item-meta">{{ booking.booking_status or 'Booking' }} - {{ booking.payment_status or 'Pending' }}</span>
+                    </div>
+                </a>
+                {% else %}
+                <div class="queue-empty">No bookings are assigned to you.</div>
+                {% endfor %}
+            </div>
+        </section>
+
+        <section class="queue-panel is-alert">
+            <div class="queue-panel-header">
+                <div>
+                    <div class="queue-panel-title">My Overdue Follow-ups</div>
+                    <div class="queue-item-meta">Urgent items that belong to your queue.</div>
+                </div>
+                <span class="queue-count">{{ my_overdue_leads|length }}</span>
+            </div>
+            <div class="queue-panel-list">
+                {% for lead in my_overdue_leads %}
+                <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" class="queue-item">
+                    <div class="queue-item-main">
+                        <span class="queue-item-name">{{ lead.customer_name or lead.lead_id }}</span>
+                        <span class="queue-item-meta">{{ lead.follow_up_status or lead.current_step or 'Follow up pending' }}</span>
+                    </div>
+                </a>
+                {% else %}
+                <div class="queue-empty">Nothing overdue in your personal queue.</div>
+                {% endfor %}
+            </div>
+        </section>
     </div>
     {% endif %}
-    <div class="grid-3" style="gap:1rem">
-        <div>
-            <div class="form-label">Overdue Follow-ups</div>
-            {% for lead in overdue_followups %}
-            <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" style="display:block;color:var(--text-main);text-decoration:none;margin-bottom:0.45rem">{{ lead.customer_name or lead.lead_id }} <span style="color:var(--red)">{{ lead.follow_up_due_date.strftime('%d %b') if lead.follow_up_due_date else '' }}</span></a>
-            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">No overdue leads.</div>{% endfor %}
+
+    <div class="queue-grid">
+        <div class="queue-column">
+            <section class="queue-panel is-alert">
+                <div class="queue-panel-header">
+                    <div>
+                        <div class="queue-panel-title">Overdue Follow-ups</div>
+                        <div class="queue-item-meta">Customers waiting past their scheduled follow-up date.</div>
+                    </div>
+                    <span class="queue-count">{{ overdue_followups|length }}</span>
+                </div>
+                <div class="queue-panel-list">
+                    {% for lead in overdue_followups %}
+                    <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" class="queue-item">
+                        <div class="queue-item-main">
+                            <span class="queue-item-name">{{ lead.customer_name or lead.lead_id }}</span>
+                            <span class="queue-item-meta">{{ lead.current_step or lead.follow_up_status or 'Follow up' }}</span>
+                        </div>
+                        <span class="queue-item-date is-alert">{{ lead.follow_up_due_date.strftime('%d %b') if lead.follow_up_due_date else 'Overdue' }}</span>
+                    </a>
+                    {% else %}
+                    <div class="queue-empty">No overdue leads in the workspace.</div>
+                    {% endfor %}
+                </div>
+            </section>
+
+            <section class="queue-panel">
+                <div class="queue-panel-header">
+                    <div>
+                        <div class="queue-panel-title">Deposit Follow-ups</div>
+                        <div class="queue-item-meta">Bookings that still need payment confirmation.</div>
+                    </div>
+                    <span class="queue-count">{{ deposit_followups|length }}</span>
+                </div>
+                <div class="queue-panel-list">
+                    {% for booking in deposit_followups %}
+                    <a href="{{ url_for('bookings.detail', booking_id=booking.booking_id) }}" class="queue-item">
+                        <div class="queue-item-main">
+                            <span class="queue-item-name">{{ booking.traveler_name or booking.booking_id }}</span>
+                            <span class="queue-item-meta">{{ booking.payment_status or 'Pending' }}</span>
+                        </div>
+                    </a>
+                    {% else %}
+                    <div class="queue-empty">No deposit follow-ups are pending.</div>
+                    {% endfor %}
+                </div>
+            </section>
         </div>
-        <div>
-            <div class="form-label">Due Today</div>
-            {% for lead in due_today %}
-            <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" style="display:block;color:var(--text-main);text-decoration:none;margin-bottom:0.45rem">{{ lead.customer_name or lead.lead_id }} - {{ lead.current_step or lead.follow_up_status or 'Follow up' }}</a>
-            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">Nothing due today.</div>{% endfor %}
+
+        <div class="queue-column">
+            <section class="queue-panel is-warning">
+                <div class="queue-panel-header">
+                    <div>
+                        <div class="queue-panel-title">Due Today</div>
+                        <div class="queue-item-meta">Follow-ups that should be handled before the day ends.</div>
+                    </div>
+                    <span class="queue-count">{{ due_today|length }}</span>
+                </div>
+                <div class="queue-panel-list">
+                    {% for lead in due_today %}
+                    <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" class="queue-item">
+                        <div class="queue-item-main">
+                            <span class="queue-item-name">{{ lead.customer_name or lead.lead_id }}</span>
+                            <span class="queue-item-meta">{{ lead.current_step or lead.follow_up_status or 'Follow up' }}</span>
+                        </div>
+                        <span class="queue-item-date">Today</span>
+                    </a>
+                    {% else %}
+                    <div class="queue-empty">Nothing is due today.</div>
+                    {% endfor %}
+                </div>
+            </section>
+
+            <section class="queue-panel">
+                <div class="queue-panel-header">
+                    <div>
+                        <div class="queue-panel-title">Waiting Customer</div>
+                        <div class="queue-item-meta">Leads paused until the traveler responds.</div>
+                    </div>
+                    <span class="queue-count">{{ waiting_customer_leads|length }}</span>
+                </div>
+                <div class="queue-panel-list">
+                    {% for lead in waiting_customer_leads %}
+                    <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" class="queue-item">
+                        <div class="queue-item-main">
+                            <span class="queue-item-name">{{ lead.customer_name or lead.lead_id }}</span>
+                            <span class="queue-item-meta">{{ lead.follow_up_status or lead.lead_stage }}</span>
+                        </div>
+                    </a>
+                    {% else %}
+                    <div class="queue-empty">No leads are waiting on customer response.</div>
+                    {% endfor %}
+                </div>
+            </section>
+
+            {% if team_workload %}
+            <section class="queue-panel queue-panel-compact">
+                <div class="queue-panel-header">
+                    <div>
+                        <div class="queue-panel-title">Team Workload</div>
+                        <div class="queue-item-meta">Current ownership distribution.</div>
+                    </div>
+                </div>
+                <div class="queue-chip-row">
+                    {% for item in team_workload %}
+                    <a href="{{ url_for('leads.index', queue='employee', employee_id=item.employee.id) }}" class="queue-chip">
+                        <b>{{ item.employee.display_name }}</b> {{ item.leads }} leads ? {{ item.bookings }} bookings
+                    </a>
+                    {% endfor %}
+                </div>
+            </section>
+            {% endif %}
         </div>
-        <div>
-            <div class="form-label">New Unassigned Leads</div>
-            {% for lead in new_unassigned %}
-            <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" style="display:block;color:var(--text-main);text-decoration:none;margin-bottom:0.45rem">{{ lead.customer_name or lead.lead_id }} - {{ lead.channel or lead.lead_source or 'CRM' }}</a>
-            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">No unassigned new leads.</div>{% endfor %}
-        </div>
-        <div>
-            <div class="form-label">Waiting Customer</div>
-            {% for lead in waiting_customer_leads %}
-            <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" style="display:block;color:var(--text-main);text-decoration:none;margin-bottom:0.45rem">{{ lead.customer_name or lead.lead_id }} - {{ lead.follow_up_status or lead.lead_stage }}</a>
-            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">No waiting-customer leads.</div>{% endfor %}
-        </div>
-        <div>
-            <div class="form-label">Deposit Follow-ups</div>
-            {% for booking in deposit_followups %}
-            <a href="{{ url_for('bookings.detail', booking_id=booking.booking_id) }}" style="display:block;color:var(--text-main);text-decoration:none;margin-bottom:0.45rem">{{ booking.traveler_name or booking.booking_id }} - {{ booking.payment_status or 'Pending' }}</a>
-            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">No deposit follow-ups.</div>{% endfor %}
-        </div>
-        <div>
-            <div class="form-label">Missing Documents</div>
-            {% for booking in missing_documents %}
-            <a href="{{ url_for('bookings.detail', booking_id=booking.booking_id) }}" style="display:block;color:var(--text-main);text-decoration:none;margin-bottom:0.45rem">{{ booking.traveler_name or booking.booking_id }} - Passport pending</a>
-            {% else %}<div style="color:var(--text-muted);font-size:0.83rem">No missing documents flagged.</div>{% endfor %}
+
+        <div class="queue-column">
+            <section class="queue-panel is-accent">
+                <div class="queue-panel-header">
+                    <div>
+                        <div class="queue-panel-title">New Unassigned Leads</div>
+                        <div class="queue-item-meta">Fresh demand that still needs an owner.</div>
+                    </div>
+                    <span class="queue-count">{{ new_unassigned|length }}</span>
+                </div>
+                <div class="queue-panel-list">
+                    {% for lead in new_unassigned %}
+                    <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" class="queue-item">
+                        <div class="queue-item-main">
+                            <span class="queue-item-name">{{ lead.customer_name or lead.lead_id }}</span>
+                            <span class="queue-item-meta">{{ lead.channel or lead.lead_source or 'CRM' }}</span>
+                        </div>
+                    </a>
+                    {% else %}
+                    <div class="queue-empty">No new unassigned leads right now.</div>
+                    {% endfor %}
+                </div>
+            </section>
+
+            <section class="queue-panel">
+                <div class="queue-panel-header">
+                    <div>
+                        <div class="queue-panel-title">Missing Documents</div>
+                        <div class="queue-item-meta">Travel files waiting for passport or document upload.</div>
+                    </div>
+                    <span class="queue-count">{{ missing_documents|length }}</span>
+                </div>
+                <div class="queue-panel-list">
+                    {% for booking in missing_documents %}
+                    <a href="{{ url_for('bookings.detail', booking_id=booking.booking_id) }}" class="queue-item">
+                        <div class="queue-item-main">
+                            <span class="queue-item-name">{{ booking.traveler_name or booking.booking_id }}</span>
+                            <span class="queue-item-meta">Passport pending</span>
+                        </div>
+                    </a>
+                    {% else %}
+                    <div class="queue-empty">No missing documents are flagged.</div>
+                    {% endfor %}
+                </div>
+            </section>
         </div>
     </div>
-    {% if team_workload %}
-    <div style="margin-top:1rem;border-top:1px solid var(--border);padding-top:1rem">
-        <div class="form-label">Team Workload</div>
-        <div style="display:flex;flex-wrap:wrap;gap:0.6rem">
-            {% for item in team_workload %}
-            <a href="{{ url_for('leads.index', queue='employee', employee_id=item.employee.id) }}" class="btn btn-ghost btn-sm">{{ item.employee.display_name }} · {{ item.leads }} leads · {{ item.bookings }} bookings</a>
-            {% endfor %}
-        </div>
-    </div>
-    {% endif %}
+
     {% if inactive_owner_leads or inactive_owner_bookings %}
-    <div style="margin-top:1rem;border-top:1px solid var(--border);padding-top:1rem">
-        <div class="form-label">Assigned to Inactive Employees</div>
-        {% for lead in inactive_owner_leads %}<a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" style="display:inline-block;color:var(--text-main);margin:0 0.8rem 0.4rem 0">{{ lead.customer_name or lead.lead_id }}</a>{% endfor %}
-        {% for booking in inactive_owner_bookings %}<a href="{{ url_for('bookings.detail', booking_id=booking.booking_id) }}" style="display:inline-block;color:var(--text-main);margin:0 0.4rem 0.4rem 0">{{ booking.traveler_name or booking.booking_id }}</a>{% endfor %}
+    <div class="queue-footer">
+        <div class="queue-footer-block">
+            <div class="form-label">Assigned to Inactive Employees</div>
+            <div class="queue-chip-row">
+                {% for lead in inactive_owner_leads %}
+                <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" class="queue-chip">
+                    <b>{{ lead.customer_name or lead.lead_id }}</b> lead
+                </a>
+                {% endfor %}
+                {% for booking in inactive_owner_bookings %}
+                <a href="{{ url_for('bookings.detail', booking_id=booking.booking_id) }}" class="queue-chip">
+                    <b>{{ booking.traveler_name or booking.booking_id }}</b> booking
+                </a>
+                {% endfor %}
+            </div>
+        </div>
     </div>
     {% endif %}
 </div>
 
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem">
+<div class="dashboard-secondary-grid">
     <!-- Recent Leads -->
     <div class="card">
         <div class="card-header">
-            <span class="card-title">🎯 Recent Leads (7 days)</span>
+            <span class="card-title">Recent Leads (7 days)</span>
             <a href="{{ url_for('leads.index') }}" class="btn btn-ghost btn-sm">View all</a>
         </div>
         {% if recent_leads %}
@@ -139,18 +686,22 @@
             <tr onclick="window.location='{{ url_for('leads.detail', lead_id=lead.lead_id) }}'">
                 <td class="primary">{{ lead.customer_name or '—' }}</td>
                 <td>
-                    {% if lead.lead_stage in ['Qualified','Booking Draft','Won'] %}
+                    {% if lead.lead_stage in ['Qualified','Won'] %}
                         <span class="badge badge-green">{{ lead.lead_stage }}</span>
+                    {% elif lead.lead_stage in ['Booking Draft', 'Booking Draft Created'] %}
+                        <span class="badge badge-yellow">{{ lead.lead_stage }}</span>
                     {% elif lead.lead_stage == 'Handoff Needed' %}
                         <span class="badge badge-red">{{ lead.lead_stage }}</span>
                     {% elif lead.lead_stage == 'Lost' %}
                         <span class="badge badge-red">{{ lead.lead_stage }}</span>
+                    {% elif lead.lead_stage == 'New Lead' %}
+                        <span class="badge badge-gray">{{ lead.lead_stage }}</span>
                     {% else %}
                         <span class="badge badge-blue">{{ lead.lead_stage }}</span>
                     {% endif %}
                 </td>
                 <td>
-                    {% if lead.priority == 'High' %}<span class="badge badge-red">High</span>
+                    {% if lead.priority == 'High' %}<span class="badge badge-green">High</span>
                     {% elif lead.priority == 'Medium' %}<span class="badge badge-yellow">Medium</span>
                     {% else %}<span class="badge badge-gray">Low</span>{% endif %}
                 </td>
@@ -167,14 +718,14 @@
     <!-- Urgent Leads -->
     <div class="card">
         <div class="card-header">
-            <span class="card-title">🚨 High Priority Leads</span>
+            <span class="card-title">High Priority Leads</span>
             <a href="{{ url_for('leads.index', priority='High') }}" class="btn btn-ghost btn-sm">View all</a>
         </div>
         {% if urgent_leads %}
-        <div style="display:flex;flex-direction:column;gap:0.6rem">
+        <div class="dashboard-priority-list">
         {% for lead in urgent_leads %}
         <a href="{{ url_for('leads.detail', lead_id=lead.lead_id) }}" style="text-decoration:none">
-            <div style="background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.15);border-radius:0.6rem;padding:0.75rem 1rem;transition:background 0.15s" onmouseover="this.style.background='rgba(239,68,68,0.12)'" onmouseout="this.style.background='rgba(239,68,68,0.06)'">
+            <div class="dashboard-priority-card">
                 <div style="font-weight:600;color:var(--text-main);font-size:0.83rem">{{ lead.customer_name or '—' }}</div>
                 <div style="color:var(--text-muted);font-size:0.72rem;margin-top:2px">{{ lead.lead_stage }} · {{ lead.interested_trip_ids or 'No trip specified' }}</div>
             </div>
@@ -182,7 +733,7 @@
         {% endfor %}
         </div>
         {% else %}
-        <p style="color:var(--text-muted);font-size:0.83rem;text-align:center;padding:1.5rem">No urgent leads 🎉</p>
+        <p style="color:var(--text-muted);font-size:0.83rem;text-align:center;padding:1.5rem">No urgent leads.</p>
         {% endif %}
     </div>
 </div>
@@ -190,7 +741,7 @@
 <!-- Recent Handoffs -->
 <div class="card">
     <div class="card-header">
-        <span class="card-title">🔔 Recent Handoffs</span>
+        <span class="card-title">Recent Handoffs</span>
         <a href="{{ url_for('handoffs.index') }}" class="btn btn-ghost btn-sm">Manage queue</a>
     </div>
     {% if recent_handoffs %}
@@ -205,7 +756,7 @@
             <td class="primary">{{ h.traveler_id or h.lead_id or '—' }}</td>
             <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ h.reason or '—' }}</td>
             <td>
-                {% if h.priority == 'High' %}<span class="badge badge-red">High</span>
+                {% if h.priority == 'High' %}<span class="badge badge-green">High</span>
                 {% elif h.priority == 'Medium' %}<span class="badge badge-yellow">Medium</span>
                 {% else %}<span class="badge badge-gray">Low</span>{% endif %}
             </td>
@@ -225,12 +776,12 @@
 </div>
 
 <!-- Quick Actions -->
-<div style="margin-top:1.25rem;display:flex;gap:0.75rem;flex-wrap:wrap">
-    <a href="{{ url_for('travelers.index') }}" class="btn btn-ghost">👥 Manage Travelers</a>
-    <a href="{{ url_for('trips.index') }}" class="btn btn-ghost">✈️ Manage Trips</a>
-    <a href="{{ url_for('leads.index') }}" class="btn btn-ghost">🎯 View Pipeline</a>
-    <a href="{{ url_for('admin.import_data') }}" class="btn btn-ghost">⬆ Import Data</a>
-    <a href="{{ url_for('admin.sync_issues') }}" class="btn btn-ghost">🔄 Sync Issues</a>
-    <a href="{{ url_for('admin.duplicates') }}" class="btn btn-ghost">⚠ Check Duplicates</a>
+<div class="dashboard-action-row">
+    <a href="{{ url_for('travelers.index') }}" class="btn btn-ghost">Manage Travelers</a>
+    <a href="{{ url_for('trips.index') }}" class="btn btn-ghost">Manage Trips</a>
+    <a href="{{ url_for('leads.index') }}" class="btn btn-ghost">View Pipeline</a>
+    <a href="{{ url_for('admin.import_data') }}" class="btn btn-ghost">Import Data</a>
+    <a href="{{ url_for('admin.sync_issues') }}" class="btn btn-ghost">Sync Issues</a>
+    <a href="{{ url_for('admin.duplicates') }}" class="btn btn-ghost">Check Duplicates</a>
 </div>
 {% endblock %}

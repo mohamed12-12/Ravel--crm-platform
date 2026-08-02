@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nanovate Agent Panels</title>
+    <link rel="stylesheet" href="./agent-panels.css">
+  </head>
+  <body>
+    <main class="nv-page">
+      <div class="nv-demo-shell">
+        <header class="nv-demo-header">
+          <div>
+            <h1>Agent Panels</h1>
+            <p>Static versions of chat agent overview, voice agent overview, template picker, and agent test chat components.</p>
+          </div>
+        </header>
+
+        <section class="nv-demo-section">
+          <h2>Overview Side Panels</h2>
+          <div class="nv-demo-grid">
+            <aside class="nv-side-panel">
+              <header class="nv-side-panel__header">
+                <h3 class="nv-side-panel__title">Agent Overview</h3>
+                <button class="nv-icon-button" aria-label="Close">x</button>
+              </header>
+              <div class="nv-side-panel__body">
+                <section class="nv-panel-section nv-panel-identity">
+                  <span class="nv-panel-identity__mark">CS</span>
+                  <div class="nv-agent-inline__meta">
+                    <p class="nv-agent-inline__name">Customer Support Agent</p>
+                    <p class="nv-agent-inline__role">support</p>
+                  </div>
+                  <div class="nv-panel-actions">
+                    <button class="nv-icon-button" aria-label="Edit">E</button>
+                    <button class="nv-icon-button" aria-label="Delete">D</button>
+                  </div>
+                </section>
+                <section class="nv-panel-section">
+                  <p class="nv-summary-card__title">Overview</p>
+                  <div class="nv-panel-stats">
+                    <span>LLM Model: <strong>GPT-4o mini</strong></span>
+                    <span>Credit Usage: <strong class="is-accent">3 credits / message</strong></span>
+                  </div>
+                </section>
+                <section class="nv-panel-section">
+                  <div class="nv-test-callout">
+                    <div>
+                      <p class="nv-agent-inline__name">Test your agent here:</p>
+                      <p>Pick a ready-made template, then customize it to create an AI agent that fits your needs.</p>
+                    </div>
+                    <button class="nv-button nv-button--cta-primary">Test</button>
+                  </div>
+                </section>
+                <section class="nv-panel-section">
+                  <div class="nv-integration-list">
+                    <button class="nv-integration-item"><span class="nv-integration-item__icon">W</span><span><span class="nv-agent-inline__name">Integrate With WhatsApp</span><span class="nv-agent-inline__role">Connect WhatsApp Business via Twilio.</span></span></button>
+                    <button class="nv-integration-item"><span class="nv-integration-item__icon">T</span><span><span class="nv-agent-inline__name">Integrate With Telegram</span><span class="nv-agent-inline__role">Set up a Telegram bot.</span></span></button>
+                    <button class="nv-integration-item"><span class="nv-integration-item__icon">M</span><span><span class="nv-agent-inline__name">Integrate With Messenger</span><span class="nv-agent-inline__role">Connect a Messenger bot.</span></span></button>
+                  </div>
+                </section>
+                <section class="nv-panel-section">
+                  <p class="nv-help">Paste this code where you want the assistant to show up:</p>
+                  <div class="nv-code-box">
+                    <pre>&lt;iframe src='https://agents.nanovate.io/cagents/agent_123' width="100%" height="600px"&gt;&lt;/iframe&gt;</pre>
+                    <button class="nv-button nv-button--text-secondary nv-button--sm">Copy</button>
+                  </div>
+                </section>
+              </div>
+            </aside>
+
+            <aside class="nv-side-panel">
+              <header class="nv-side-panel__header">
+                <h3 class="nv-side-panel__title">Voice Agent Overview</h3>
+                <button class="nv-icon-button" aria-label="Close">x</button>
+              </header>
+              <div class="nv-side-panel__body">
+                <section class="nv-panel-section nv-panel-identity">
+                  <span class="nv-panel-identity__mark">SV</span>
+                  <div class="nv-agent-inline__meta">
+                    <p class="nv-agent-inline__name">Sales Voice Agent</p>
+                    <p class="nv-agent-inline__role">sales</p>
+                  </div>
+                </section>
+                <section class="nv-panel-section">
+                  <p class="nv-summary-card__title">Overview</p>
+                  <div class="nv-spec-grid">
+                    <div><p class="nv-spec__label">Real-Time Provider</p><p class="nv-spec__value">LiveKit</p></div>
+                    <div><p class="nv-spec__label">Voice Selection</p><p class="nv-spec__value">Sarah</p></div>
+                    <div><p class="nv-spec__label">Status</p><p class="nv-spec__value">Active</p></div>
+                    <div><p class="nv-spec__label">Call Type</p><p class="nv-spec__value">Inbound</p></div>
+                  </div>
+                </section>
+                <section class="nv-panel-section">
+                  <button class="nv-button nv-button--cta-tertiary nv-button--full">Start test call</button>
+                </section>
+                <section class="nv-panel-section">
+                  <button class="nv-integration-item"><span class="nv-integration-item__icon">P</span><span><span class="nv-agent-inline__name">Integrate With Twilio</span><span class="nv-agent-inline__role">Call through inbound and outbound calls.</span></span></button>
+                </section>
+                <section class="nv-panel-section">
+                  <div class="nv-code-box">
+                    <pre>&lt;iframe src='https://agents.nanovate.io/vagents/voice_123' width="100%" height="400" allow="microphone"&gt;&lt;/iframe&gt;</pre>
+                    <button class="nv-button nv-button--text-secondary nv-button--sm">Copy</button>
+                  </div>
+                </section>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="nv-demo-section">
+          <h2>Test Chat Panel</h2>
+          <section class="nv-chat-panel">
+            <div class="nv-chat-panel__messages">
+              <article class="nv-chat-message">
+                <span class="nv-avatar nv-avatar--sm">CS</span>
+                <div>
+                  <div class="nv-chat-message__name">Customer Support <span class="nv-chat-message__time">12:30</span></div>
+                  <div class="nv-chat-message__bubble">Hi, how can I help you today?</div>
+                </div>
+              </article>
+              <article class="nv-chat-message nv-chat-message--user">
+                <span class="nv-avatar nv-avatar--sm">U</span>
+                <div>
+                  <div class="nv-chat-message__name">You <span class="nv-chat-message__time">12:31</span></div>
+                  <div class="nv-attachment-chip">pricing.pdf</div>
+                  <div class="nv-chat-message__bubble">Can you summarize our pricing options?</div>
+                </div>
+              </article>
+              <article class="nv-chat-message">
+                <span class="nv-avatar nv-avatar--sm">CS</span>
+                <div>
+                  <div class="nv-chat-message__name">Customer Support <span class="nv-chat-message__time">12:31</span></div>
+                  <div class="nv-chat-message__bubble">Yes. The document shows a starter plan, a team plan, and enterprise pricing for higher usage.</div>
+                </div>
+              </article>
+            </div>
+            <div class="nv-chat-composer">
+              <button class="nv-icon-button" aria-label="Attach file">+</button>
+              <input type="text" placeholder="Ask Customer Support...">
+              <button class="nv-round-send" aria-label="Send">S</button>
+            </div>
+          </section>
+        </section>
+
+        <section class="nv-demo-section">
+          <h2>Template Picker</h2>
+          <div class="nv-template-list">
+            <button class="nv-template-option">
+              <span class="nv-template-option__icon">S</span>
+              <span class="nv-agent-inline__meta">
+                <span class="nv-agent-inline__name">Customer Support</span>
+                <span class="nv-agent-inline__role">Answer FAQs, escalate issues, and guide users through common tasks.</span>
+              </span>
+              <span class="nv-template-option__action">Try now</span>
+            </button>
+            <button class="nv-template-option">
+              <span class="nv-template-option__icon">B</span>
+              <span class="nv-agent-inline__meta">
+                <span class="nv-agent-inline__name">Business Consultant</span>
+                <span class="nv-agent-inline__role">Help prospects understand product fit and business value.</span>
+              </span>
+              <span class="nv-template-option__action">Try now</span>
+            </button>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

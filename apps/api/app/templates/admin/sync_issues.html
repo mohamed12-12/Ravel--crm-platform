@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Sync Issues — Rahma CRM{% endblock %}
+{% block title %}Sync Issues — Nanovate CRM{% endblock %}
 {% block topbar_title %}Sync Issues{% endblock %}
 
 {% block content %}
 <div class="card">
     <div class="card-header">
-        <span class="card-title">⚠️ Sheet Synchronization Issues</span>
+        <span class="card-title">Sheet Synchronization Issues</span>
         <span class="badge badge-red" style="font-size:0.75rem">{{ issues|length }} Failed</span>
     </div>
     
@@ -54,7 +54,7 @@
     </table>
     {% else %}
     <p style="color:var(--text-muted);font-size:0.83rem;text-align:center;padding:2.5rem">
-        🎉 No sync issues found. All records are safely mirrored.
+        No sync issues found. All records are safely mirrored.
     </p>
     {% endif %}
 <!-- Floating Toast Notification Container -->

@@ -69,21 +69,24 @@ class Phase4TravelerManagementTests(unittest.TestCase):
 
         from app import create_app
         from app.extensions import db
-        from app.models.booking import TripBooking
+        from app.models.booking import CEBooking, TripBooking
         from app.models.booking_event import BookingEventTrail
         from app.models.handoff import HandoffQueue
         from app.models.interaction import Interaction
         from app.models.lead import Lead
         from app.models.traveler import Traveler
+        from app.models.traveler_document import TravelerDocument
 
         self.service = UnifiedCRMService()
         self.db = db
         self.Traveler = Traveler
         self.Lead = Lead
         self.TripBooking = TripBooking
+        self.CEBooking = CEBooking
         self.Interaction = Interaction
         self.HandoffQueue = HandoffQueue
         self.BookingEventTrail = BookingEventTrail
+        self.TravelerDocument = TravelerDocument
 
         app = create_app()
         create_app_db_schema(app)
@@ -433,6 +436,128 @@ class Phase4TravelerManagementTests(unittest.TestCase):
             self.assertEqual(traveler.traveler_id, "TR01000")
             self.assertEqual(traveler.full_name, "Primary Traveler")
             self.assertEqual(traveler.status, "Active")
+
+    def test_delete_traveler_hard_deletes_related_records_and_reuses_highest_id(self) -> None:
+        app, db_path, workbook_path = self._build_app()
+        client = app.test_client()
+        uploads_root = self.tmp_path / "uploads"
+        traveler_dir = uploads_root / "TR00151"
+        traveler_dir.mkdir(parents=True, exist_ok=True)
+        passport_file = traveler_dir / "passport.pdf"
+        passport_file.write_bytes(b"passport")
+        app.config["TRAVELER_UPLOAD_ROOT"] = str(uploads_root)
+
+        with app.app_context():
+            self.db.session.add(self.Traveler(traveler_id="TR00150", full_name="Keep Traveler", status="Active"))
+            traveler = self.Traveler(
+                traveler_id="TR00151",
+                full_name="Delete Traveler",
+                status="Active",
+                last_lead_id="LD00151",
+            )
+            lead = self.Lead(
+                lead_id="LD00151",
+                customer_name="Delete Traveler",
+                traveler_id="TR00151",
+                lead_stage="Qualified",
+            )
+            booking = self.TripBooking(
+                booking_id="B00151",
+                trip_id="RT-LOC-26-900",
+                trip_name="Delete Trip",
+                traveler_id="TR00151",
+                traveler_name="Delete Traveler",
+                booking_status="Draft",
+                lead_id="LD00151",
+            )
+            ce_booking = self.CEBooking(
+                booking_id="CE00151",
+                event_id="EVT-1",
+                event_name="Camp",
+                traveler_id="TR00151",
+                traveler_name="Delete Traveler",
+                status="Draft",
+            )
+            interaction = self.Interaction(
+                interaction_id="INT00151",
+                traveler_id="TR00151",
+                customer_name="Delete Traveler",
+                raw_phone="01011111111",
+            )
+            handoff = self.HandoffQueue(
+                handoff_id="H00151",
+                traveler_id="TR00151",
+                lead_id="LD00151",
+                reason="delete-test",
+            )
+            event = self.BookingEventTrail(
+                event_id="BE00151",
+                traveler_id="TR00151",
+                lead_id="LD00151",
+                booking_id="B00151",
+                interaction_id="INT00151",
+                event_type="test",
+                event_label="Test Event",
+            )
+            document = self.TravelerDocument(
+                traveler_id="TR00151",
+                category="passport",
+                file_name="passport.pdf",
+                original_file_name="passport.pdf",
+                mime_type="application/pdf",
+                file_extension="pdf",
+                file_size=8,
+                storage_path=str(passport_file),
+            )
+            self.db.session.add_all([traveler, lead, booking, ce_booking, interaction, handoff, event, document])
+            self.db.session.commit()
+            self.service.sync_record_to_sheet("Travelers", "TR00150")
+            self.service.sync_record_to_sheet("Travelers", "TR00151")
+            self.service.sync_record_to_sheet("Leads", "LD00151")
+
+        response = client.delete("/travelers/TR00151")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["message"], "Traveler deleted permanently")
+
+        with app.app_context():
+            self.assertIsNone(self.db.session.get(self.Traveler, "TR00151"))
+            self.assertIsNone(self.db.session.get(self.Lead, "LD00151"))
+            self.assertIsNone(self.db.session.get(self.TripBooking, "B00151"))
+            self.assertIsNone(self.db.session.get(self.CEBooking, "CE00151"))
+            self.assertIsNone(self.db.session.get(self.Interaction, "INT00151"))
+            self.assertIsNone(self.db.session.get(self.HandoffQueue, "H00151"))
+            self.assertIsNone(self.db.session.get(self.BookingEventTrail, "BE00151"))
+            self.assertEqual(self.service.next_traveler_id(), "TR00151")
+
+        self.assertFalse(passport_file.exists())
+
+        wb = load_workbook(workbook_path, data_only=True)
+        ws = wb["Travelers"]
+        headers = {ws.cell(1, col).value: col for col in range(1, ws.max_column + 1)}
+        traveler_ids = [
+            str(ws.cell(row, headers["Traveler ID"]).value or "").strip()
+            for row in range(2, ws.max_row + 1)
+        ]
+        wb.close()
+        self.assertIn("TR00150", traveler_ids)
+        self.assertNotIn("TR00151", traveler_ids)
+
+        create_response = client.post(
+            "/travelers/",
+            data={
+                "full_name": "Replacement Traveler",
+                "whatsapp_raw": "01022221111",
+                "nationality": "Egyptian",
+                "status": "New",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(create_response.status_code, 302)
+
+        with app.app_context():
+            replacement = self.db.session.get(self.Traveler, "TR00151")
+            self.assertIsNotNone(replacement)
+            self.assertEqual(replacement.full_name, "Replacement Traveler")
 
 
 if __name__ == "__main__":

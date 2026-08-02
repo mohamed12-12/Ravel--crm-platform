@@ -1,68 +1,69 @@
-﻿{% extends "base.html" %}
-{% block title %}Leads - Rahma CRM{% endblock %}
+{% extends "base.html" %}
+{% block title %}Leads - Nanovate CRM{% endblock %}
 
 {% block head %}
 <style>
     /* Custom premium styles for Leads Pipeline */
-    .kpi-grid {
+    .leads-kpi-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        grid-template-columns: repeat(12, minmax(0, 1fr));
         gap: 1.25rem;
         margin-bottom: 1.75rem;
     }
-    .stat-card {
-        background: rgba(26, 34, 52, 0.35);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 1.25rem;
-        padding: 1.35rem;
-        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-        position: relative;
-        overflow: hidden;
-        box-shadow: 0 4px 30px rgba(0, 0, 0, 0.2);
+    .leads-kpi-grid .stat-card {
+        grid-column: span 3;
     }
-    .stat-card::before {
-        content: '';
-        position: absolute;
-        top: 0; left: 0; right: 0; height: 3px;
-        opacity: 0.8;
-        transition: height 0.3s ease;
+    .leads-kpi-grid .stat-card:nth-last-child(-n+3) {
+        grid-column: span 4;
+    }
+    .stat-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 1rem 1.1rem;
+        min-height: 120px;
+        display: grid;
+        align-content: start;
+        gap: 0.35rem;
+        box-shadow: none;
     }
     .stat-card:hover {
-        transform: translateY(-4px);
-        border-color: rgba(99, 102, 241, 0.25);
-        box-shadow: 0 12px 30px rgba(99, 102, 241, 0.12);
-        background: rgba(26, 34, 52, 0.55);
+        border-color: var(--border);
+        background: var(--bg-card);
+        transform: none;
+        box-shadow: none;
     }
-    .stat-card:hover::before {
-        height: 5px;
-    }
-    
-    /* Dynamic HSL colored card accents */
-    .stat-card.total-leads::before { background: linear-gradient(90deg, #6366f1, #a78bfa); }
-    .stat-card.new-today::before { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
-    .stat-card.qualified-leads::before { background: linear-gradient(90deg, #10b981, #34d399); }
-    .stat-card.booked-leads::before { background: linear-gradient(90deg, #059669, #10b981); }
-    .stat-card.handoff-req::before { background: linear-gradient(90deg, #ef4444, #fca5a5); }
-    .stat-card.overdue-leads::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
-    .stat-card.blocked-leads::before { background: linear-gradient(90deg, #7f1d1d, #ef4444); }
-
     .stat-value {
-        font-size: 2.2rem;
+        font-size: 2rem;
         font-weight: 800;
         line-height: 1.1;
-        margin-bottom: 0.35rem;
-        background: linear-gradient(135deg, #f1f5f9, #cbd5e1);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        margin: 0.15rem 0 0.1rem;
+        color: var(--text-main);
     }
     .stat-label {
         font-size: 0.72rem;
         font-weight: 700;
         color: var(--text-muted);
         text-transform: uppercase;
-        letter-spacing: 0.08em;
+        letter-spacing: 0.02em;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+    }
+
+    @media (max-width: 1100px) {
+        .leads-kpi-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .leads-kpi-grid .stat-card,
+        .leads-kpi-grid .stat-card:nth-last-child(-n+3) {
+            grid-column: auto;
+        }
+    }
+
+    @media (max-width: 640px) {
+        .leads-kpi-grid {
+            grid-template-columns: 1fr;
+        }
     }
 
     /* Filters and Layout */
@@ -91,55 +92,55 @@
         transform: translateY(-1px);
     }
     .stage-filter-link.active-all {
-        background: rgba(99, 102, 241, 0.15);
-        color: var(--accent-2);
-        border-color: rgba(99, 102, 241, 0.25);
-        box-shadow: 0 4px 15px rgba(99, 102, 241, 0.15);
+        background: rgba(0, 208, 146, 0.10);
+        color: var(--accent);
+        border-color: rgba(0, 208, 146, 0.26);
+        box-shadow: none;
     }
     .stage-filter-link.active-New {
-        background: rgba(59, 130, 246, 0.15);
-        color: #60a5fa;
-        border-color: rgba(59, 130, 246, 0.25);
-        box-shadow: 0 4px 15px rgba(59, 130, 246, 0.15);
+        background: rgba(0, 208, 146, 0.10);
+        color: var(--accent);
+        border-color: rgba(0, 208, 146, 0.26);
+        box-shadow: none;
     }
     .stage-filter-link.active-Contacted {
-        background: rgba(245, 158, 11, 0.15);
-        color: #fbbf24;
-        border-color: rgba(245, 158, 11, 0.25);
-        box-shadow: 0 4px 15px rgba(245, 158, 11, 0.15);
+        background: rgba(234, 179, 8, 0.12);
+        color: #fde047;
+        border-color: rgba(234, 179, 8, 0.26);
+        box-shadow: none;
     }
     .stage-filter-link.active-Interested {
-        background: rgba(167, 139, 250, 0.15);
-        color: #c4b5fd;
-        border-color: rgba(167, 139, 250, 0.25);
-        box-shadow: 0 4px 15px rgba(167, 139, 250, 0.15);
+        background: rgba(56, 185, 141, 0.10);
+        color: #b0e3d2;
+        border-color: rgba(56, 185, 141, 0.26);
+        box-shadow: none;
     }
     .stage-filter-link.active-Qualified {
         background: rgba(16, 185, 129, 0.15);
         color: #34d399;
         border-color: rgba(16, 185, 129, 0.25);
-        box-shadow: 0 4px 15px rgba(16, 185, 129, 0.15);
+        box-shadow: none;
     }
     .stage-filter-link.active-Booked {
         background: rgba(5, 150, 105, 0.15);
         color: #34d399;
         border-color: rgba(5, 150, 105, 0.25);
-        box-shadow: 0 4px 15px rgba(5, 150, 105, 0.15);
+        box-shadow: none;
     }
     .stage-filter-link.active-Lost {
-        background: rgba(239, 68, 68, 0.15);
-        color: #fca5a5;
-        border-color: rgba(239, 68, 68, 0.25);
-        box-shadow: 0 4px 15px rgba(239, 68, 68, 0.15);
+        background: rgba(139, 92, 246, 0.14);
+        color: #c4b5fd;
+        border-color: rgba(139, 92, 246, 0.32);
+        box-shadow: none;
     }
 
     /* Form and Search */
     .search-bar {
-        background: rgba(17, 24, 39, 0.4);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
+        background: rgba(25, 25, 25, 0.94);
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
         border: 1px solid rgba(255, 255, 255, 0.05);
-        border-radius: 1rem;
+        border-radius: 8px;
         padding: 0.85rem;
         display: flex;
         gap: 0.75rem;
@@ -157,7 +158,7 @@
     .search-input-wrap input:focus {
         background: rgba(255, 255, 255, 0.04) !important;
         border-color: var(--accent) !important;
-        box-shadow: 0 0 15px rgba(99, 102, 241, 0.15);
+        box-shadow: 0 0 0 3px rgba(0, 208, 146, 0.14);
     }
     .form-select-enhanced {
         background: rgba(255, 255, 255, 0.02);
@@ -171,19 +172,19 @@
     }
     .form-select-enhanced:focus {
         border-color: var(--accent);
-        box-shadow: 0 0 15px rgba(99, 102, 241, 0.15);
+        box-shadow: 0 0 0 3px rgba(0, 208, 146, 0.14);
     }
 
     /* Leads Card Table */
     .leads-card-container {
-        background: rgba(26, 34, 52, 0.2);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
+        background: rgba(25, 25, 25, 0.94);
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
         border: 1px solid rgba(255, 255, 255, 0.05);
-        border-radius: 1.25rem;
+        border-radius: 8px;
         padding: 0;
         overflow: hidden;
-        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+        box-shadow: none;
         margin-bottom: 1.5rem;
     }
     .data-table {
@@ -207,27 +208,30 @@
         background: transparent;
     }
     .data-table tbody tr:hover {
-        background: rgba(255, 255, 255, 0.03) !important;
+        background: rgba(255, 255, 255, 0.05) !important;
         transform: scale(1.001);
     }
     .data-table tbody td {
         padding: 1.1rem 1.25rem;
         vertical-align: middle;
     }
-
+    .data-table tbody td.mono,
+    .data-table tbody td.primary {
+        color: var(--text-main) !important;
+    }
     /* Modal Overlay & Box */
     .modal-overlay {
-        background: rgba(11, 15, 26, 0.75) !important;
+        background: rgba(0, 0, 0, 0.72) !important;
         backdrop-filter: blur(8px) !important;
         -webkit-backdrop-filter: blur(8px) !important;
     }
     .modal-box {
-        background: rgba(17, 24, 37, 0.95) !important;
+        background: rgba(25, 25, 25, 0.98) !important;
         backdrop-filter: blur(24px) !important;
         -webkit-backdrop-filter: blur(24px) !important;
         border: 1px solid rgba(255, 255, 255, 0.08) !important;
-        box-shadow: 0 30px 70px rgba(0, 0, 0, 0.6) !important;
-        border-radius: 1.5rem !important;
+        box-shadow: none !important;
+        border-radius: 8px !important;
         padding: 2.25rem !important;
     }
     .form-input, .form-select, .form-textarea {
@@ -240,7 +244,7 @@
     .form-input:focus, .form-select:focus, .form-textarea:focus {
         background: rgba(255, 255, 255, 0.04) !important;
         border-color: var(--accent) !important;
-        box-shadow: 0 0 15px rgba(99, 102, 241, 0.15) !important;
+        box-shadow: 0 0 0 3px rgba(0, 208, 146, 0.14) !important;
     }
 </style>
 {% endblock %}
@@ -253,34 +257,34 @@
 
 {% block content %}
 <!-- Lead Analytics Summary -->
-<div class="kpi-grid">
+<div class="leads-kpi-grid">
     <div class="stat-card total-leads">
-        <div class="stat-value">{{ analytics.total }}</div>
         <div class="stat-label">Total Leads</div>
+        <div class="stat-value">{{ analytics.total }}</div>
     </div>
     <div class="stat-card new-today">
-        <div class="stat-value">{{ analytics.new_today }}</div>
         <div class="stat-label">New Today</div>
+        <div class="stat-value">{{ analytics.new_today }}</div>
     </div>
     <div class="stat-card qualified-leads">
-        <div class="stat-value">{{ analytics.qualified }}</div>
         <div class="stat-label">Qualified</div>
+        <div class="stat-value">{{ analytics.qualified }}</div>
     </div>
     <div class="stat-card booked-leads">
-        <div class="stat-value">{{ analytics.booked }}</div>
         <div class="stat-label">Booked</div>
+        <div class="stat-value">{{ analytics.booked }}</div>
     </div>
     <div class="stat-card handoff-req">
-        <div class="stat-value">{{ analytics.handoff_required }}</div>
         <div class="stat-label">Handoff Req.</div>
+        <div class="stat-value">{{ analytics.handoff_required }}</div>
     </div>
     <div class="stat-card overdue-leads">
-        <div class="stat-value">{{ analytics.overdue }}</div>
         <div class="stat-label">Overdue Follow</div>
+        <div class="stat-value">{{ analytics.overdue }}</div>
     </div>
     <div class="stat-card blocked-leads">
-        <div class="stat-value">{{ analytics.blocked }}</div>
         <div class="stat-label">Blocked / Black</div>
+        <div class="stat-value">{{ analytics.blocked }}</div>
     </div>
 </div>
 
@@ -368,7 +372,7 @@
         {% for lead in leads %}
         {% set overdue = lead.follow_up_due_date and lead.follow_up_due_date < today %}
         <tr onclick="window.location='{{ url_for('leads.detail', lead_id=lead.lead_id) }}'"
-            style="{% if overdue %}background:rgba(239,68,68,0.02) !important;{% endif %}">
+            style="{% if overdue %}background:rgba(139,92,246,0.04) !important;{% endif %}">
             <td class="mono">{{ lead.lead_id }}</td>
             <td>
                 <div style="font-weight:700;color:var(--text-main);font-size:0.92rem">{{ display_text(lead.customer_name) }}</div>
@@ -399,14 +403,16 @@
             <td>{{ display_text(lead.assigned_user.display_name if lead.assigned_user else lead.assigned_to, 'Unassigned') }}</td>
             <td>
                 <div>
-                {% if lead.lead_stage in ['Qualified','Booking Draft','Won'] %}
+                {% if lead.lead_stage in ['Qualified','Won'] %}
                     <span class="badge badge-green">{{ lead.lead_stage }}</span>
+                {% elif lead.lead_stage in ['Booking Draft', 'Booking Draft Created'] %}
+                    <span class="badge badge-yellow">{{ lead.lead_stage }}</span>
                 {% elif lead.lead_stage == 'Handoff Needed' %}
                     <span class="badge badge-red">{{ lead.lead_stage }}</span>
                 {% elif lead.lead_stage == 'Lost' %}
                     <span class="badge badge-red">{{ lead.lead_stage }}</span>
                 {% elif lead.lead_stage == 'New Lead' %}
-                    <span class="badge badge-blue">{{ lead.lead_stage }}</span>
+                    <span class="badge badge-gray">{{ lead.lead_stage }}</span>
                 {% else %}
                     <span class="badge badge-yellow">{{ lead.lead_stage }}</span>
                 {% endif %}
@@ -424,7 +430,7 @@
             </td>
             <td>
                 {% if lead.priority == 'High' or lead.priority == 'Critical' %}
-                    <span class="badge badge-red" style="font-weight:800;letter-spacing:0.04em">{{ display_text(lead.priority) }}</span>
+                    <span class="badge badge-green" style="font-weight:800;letter-spacing:0.04em">{{ display_text(lead.priority) }}</span>
                 {% elif lead.priority == 'Medium' %}
                     <span class="badge badge-yellow" style="font-weight:700">Medium</span>
                 {% else %}
@@ -487,7 +493,7 @@
 </div>
 
 {% else %}
-<div class="card" style="text-align:center;padding:4rem 2rem; background: rgba(26, 34, 52, 0.2); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 1.25rem;">
+<div class="card" style="text-align:center;padding:4rem 2rem; background: rgba(25, 25, 25, 0.94); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px;">
     <div style="font-weight:800;font-size:1.2rem;color:var(--text-main);margin-bottom:0.5rem">No leads found</div>
     <div style="color:var(--text-muted);font-size:0.88rem;margin-bottom:1.5rem">Try adjusting your filters or search keywords.</div>
     <button onclick="openModal('createLead')" class="btn btn-primary" style="padding: 0.6rem 1.5rem;">+ Create Lead</button>
@@ -498,7 +504,7 @@
 <div id="createLead" class="modal-overlay">
     <div class="modal-box">
         <div class="modal-header">
-            <span class="modal-title" style="font-size: 1.25rem; font-weight: 800; background: linear-gradient(135deg, #6366f1, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Create New Lead</span>
+            <span class="modal-title" style="font-size: 1.25rem; font-weight: 800; background: linear-gradient(100deg, #38b98d, #fff); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Create New Lead</span>
             <button class="modal-close" onclick="closeModal('createLead')">Close</button>
         </div>
         <form action="{{ url_for('leads.create') }}" method="POST">

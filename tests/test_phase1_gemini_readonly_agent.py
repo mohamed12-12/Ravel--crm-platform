@@ -103,7 +103,7 @@ class StubProvider:
 
 class TestPhase1GeminiReadOnlyAgent(unittest.TestCase):
     def test_default_conversation_prompt_preserves_nanovate_branding(self) -> None:
-        self.assertIn("created by nanovate.io for Rahma Traveler", DEFAULT_AGENT_CONVERSATION_PROMPT)
+        self.assertIn("created by nanovate.io for Ravel Traveler", DEFAULT_AGENT_CONVERSATION_PROMPT)
         self.assertIn("do not attribute the assistant to any model provider", DEFAULT_AGENT_CONVERSATION_PROMPT)
 
     def setUp(self) -> None:
@@ -312,7 +312,7 @@ class TestPhase1GeminiReadOnlyAgent(unittest.TestCase):
 
         self.assertEqual(
             result["reply"],
-            "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed.",
+            "I cannot save changes automatically in this step. I can only check whether the action is allowed.",
         )
 
     def test_gemini_provider_retries_after_timeout(self) -> None:

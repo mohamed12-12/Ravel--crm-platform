@@ -303,12 +303,21 @@ class GeminiWriteToolExecutor:
         if not traveler_name and traveler:
             traveler_name = str(traveler.get("full_name") or "").strip()
         room_type = self._value(payload, session_context, "room_type")
+        room_group = self._value(payload, session_context, "room_group")
+        room_requirements = payload.get("room_requirements")
+        if room_requirements is None:
+            room_requirements = session_context.get("room_requirements")
+        boys_rooms_requested = self._value(payload, session_context, "boys_rooms_requested")
+        girls_rooms_requested = self._value(payload, session_context, "girls_rooms_requested")
         flight_option = normalize_flight_option(self._value(payload, session_context, "flight_option")) or self._value(
             payload, session_context, "flight_option"
         )
         passport_attachment_ref = self._value(payload, session_context, "passport_attachment_ref")
-        passport_required = bool(trip and str(trip.get("type") or trip.get("trip_type") or "").strip().lower() == "international")
-        passport_status = "provided" if passport_required and passport_attachment_ref else ("pending" if passport_required else "")
+        passport_required = self._passport_required_for_trip(
+            trip if isinstance(trip, dict) else {},
+            flight_option=flight_option,
+        )
+        passport_status = "uploaded" if passport_required and passport_attachment_ref else ("pending" if passport_required else "")
         lead_id = self._ensure_booking_lead(
             payload=payload,
             session_context=session_context,
@@ -322,6 +331,10 @@ class GeminiWriteToolExecutor:
             traveler_id=str((traveler or {}).get("traveler_id") or validation.traveler_id or ""),
             traveler_name=traveler_name or str((traveler or {}).get("full_name") or "").strip() or self._value(payload, session_context, "customer_name", "full_name") or "Traveler",
             room_type=room_type,
+            room_group=room_group,
+            boys_rooms_requested=boys_rooms_requested,
+            girls_rooms_requested=girls_rooms_requested,
+            room_requirements=room_requirements,
             channel=self._value(payload, session_context, "channel") or "web",
             lead_id=lead_id,
             flight_option=flight_option,
@@ -485,6 +498,14 @@ class GeminiWriteToolExecutor:
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+    def _passport_required_for_trip(self, trip: dict[str, Any], *, flight_option: str = "") -> bool:
+        for key in ("passport_required", "requires_passport"):
+            if key in trip:
+                return self._as_bool(trip.get(key))
+        if "passport_required_with_flight" in trip:
+            return str(flight_option or "").strip() == "With Flight" and self._as_bool(trip.get("passport_required_with_flight"))
+        return str(trip.get("type") or trip.get("trip_type") or "").strip().lower() == "international"
 
     @staticmethod
     def _as_int(value: Any, *, default: int = 0) -> int:

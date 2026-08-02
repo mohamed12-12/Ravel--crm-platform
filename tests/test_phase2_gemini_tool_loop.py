@@ -121,7 +121,7 @@ def function_call_response(
     )
 
 
-def text_response(text: str, response_id: str = "resp-text") -> GeminiProviderResponse:
+def text_response(text: str, response_id: str = "resp-text", *, finish_reason: str = "STOP") -> GeminiProviderResponse:
     return GeminiProviderResponse(
         text=text,
         response_id=response_id,
@@ -129,6 +129,7 @@ def text_response(text: str, response_id: str = "resp-text") -> GeminiProviderRe
             "responseId": response_id,
             "candidates": [
                 {
+                    "finishReason": finish_reason,
                     "content": {
                         "parts": [
                             {"text": text},
@@ -138,6 +139,7 @@ def text_response(text: str, response_id: str = "resp-text") -> GeminiProviderRe
             ],
         },
         usage_metadata={"inputTokens": 1, "outputTokens": 1},
+        finish_reason=finish_reason,
     )
 
 
@@ -275,6 +277,43 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
         first_parts = provider.calls[1]["messages"][-1]["parts"]
         self.assertEqual(first_parts[0]["functionResponse"]["id"], "call-1")
 
+    def test_token_limit_finish_retries_once_with_complete_replacement(self) -> None:
+        with self._patch_service():
+            agent, provider = self._build_agent(
+                [
+                    text_response("يمكنني مساعدتك في الاستفسار عن رحلة Today Demo أو", "resp-cut", finish_reason="MAX_TOKENS"),
+                    text_response("يمكنني مساعدتك في الاستفسار عن رحلة Today Demo. هل تريد متابعة الحجز الحالي؟", "resp-retry"),
+                ]
+            )
+            result = agent.respond(
+                user_message="كيف يمكنك مساعدتي؟",
+                session_context={"session_id": "sess-retry", "language": "ar", "selected_trip_name": "Today Demo"},
+            )
+
+        self.assertEqual(result["reply"], "يمكنني مساعدتك في الاستفسار عن رحلة Today Demo. هل تريد متابعة الحجز الحالي؟")
+        self.assertNotIn(" أو", result["reply"])
+        self.assertEqual(result["response_id"], "resp-retry")
+        self.assertEqual(len(provider.calls), 2)
+        retry_payload = json.loads(provider.calls[1]["messages"][0]["parts"][0]["text"])
+        self.assertEqual(retry_payload["task"], "replace_incomplete_customer_reply")
+        self.assertIn("partial_incomplete_reply", retry_payload)
+
+    def test_two_incomplete_model_attempts_return_language_fallback(self) -> None:
+        with self._patch_service():
+            agent, provider = self._build_agent(
+                [
+                    text_response("I can help you with Today Demo and", "resp-cut", finish_reason="MAX_TOKENS"),
+                    text_response("I can help you with Today Demo and", "resp-cut-2", finish_reason="MAX_TOKENS"),
+                ]
+            )
+            result = agent.respond(
+                user_message="how can you help?",
+                session_context={"session_id": "sess-fallback", "language": "en", "selected_trip_name": "Today Demo"},
+            )
+
+        self.assertEqual(result["reply"], "Sorry, I couldn\u2019t prepare that response properly. Could you try that again?")
+        self.assertEqual(len(provider.calls), 2)
+
     def test_thought_signature_is_preserved_in_followup_turn(self) -> None:
         with self._patch_service():
             agent, provider = self._build_agent(
@@ -322,7 +361,7 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
 
         self.assertEqual(
             result["reply"],
-            "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed.",
+            "I cannot save changes automatically in this step. I can only check whether the action is allowed.",
         )
         self.assertIn("Missing thought signature", result["error"])
 
@@ -359,7 +398,7 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
 
         self.assertEqual(
             result["reply"],
-            "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed.",
+            "I cannot save changes automatically in this step. I can only check whether the action is allowed.",
         )
         self.assertIn("Unsupported tool requested", result["error"])
 
@@ -370,7 +409,7 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
 
         self.assertEqual(
             result["reply"],
-            "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed.",
+            "I cannot save changes automatically in this step. I can only check whether the action is allowed.",
         )
         self.assertIn("Invalid tool input", result["error"])
 
@@ -381,7 +420,7 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
 
         self.assertEqual(
             result["reply"],
-            "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed.",
+            "I cannot save changes automatically in this step. I can only check whether the action is allowed.",
         )
         self.assertIn("Unsupported tool requested", result["error"])
 
@@ -398,7 +437,7 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
 
         self.assertEqual(
             result["reply"],
-            "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed.",
+            "I cannot save changes automatically in this step. I can only check whether the action is allowed.",
         )
         self.assertIn("Maximum Gemini tool-call limit reached", result["error"])
 
@@ -474,22 +513,30 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(result["reply"], "Please choose your room option. Current inventory: Single: 3 available.")
+        self.assertEqual(result["reply"], "Please choose your room option. Current inventory: Single available.")
         self.assertNotIn("disabled", result["reply"].lower())
 
     def test_flight_preference_normalization_is_shared_across_runtime_layers(self) -> None:
-        message = "لا اريد طيران"
+        cases = {
+            "\u0644\u0627 \u0627\u0631\u064a\u062f \u0637\u064a\u0631\u0627\u0646": "Without Flight",
+            "withot": "Without Flight",
+            "without": "Without Flight",
+            "without flight": "Without Flight",
+            "w/out": "Without Flight",
+            "with flight": "With Flight",
+        }
 
-        self.assertEqual(normalize_flight_option(message), "Without Flight")
-        self.assertEqual(
-            ToolCallingSessionRuntime._extract_hints(message)["candidate_flight_option"],
-            "Without Flight",
-        )
-        self.assertEqual(
-            _extract_gemini_message_hints(message, default_country_code="20")["candidate_flight_option"],
-            "Without Flight",
-        )
-
+        for message, expected in cases.items():
+            with self.subTest(message=message):
+                self.assertEqual(normalize_flight_option(message), expected)
+                self.assertEqual(
+                    ToolCallingSessionRuntime._extract_hints(message, stage="flight_option_required")["candidate_flight_option"],
+                    expected,
+                )
+                self.assertEqual(
+                    _extract_gemini_message_hints(message, default_country_code="20")["candidate_flight_option"],
+                    expected,
+                )
     def test_trip_type_normalization_is_shared_across_runtime_layers(self) -> None:
         cases = {
             "\u0645\u062d\u0644\u064a\u0647": "local",

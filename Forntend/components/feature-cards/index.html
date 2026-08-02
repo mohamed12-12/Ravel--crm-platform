@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nanovate Feature Components</title>
+    <link rel="stylesheet" href="./feature-cards.css">
+  </head>
+  <body>
+    <main class="nv-page">
+      <div class="nv-demo-shell">
+        <header class="nv-demo-header">
+          <div>
+            <h1>Feature Components</h1>
+            <p>Static equivalents for page-specific React components from chat agents, voice agents, workflows, speech, billing, and auth.</p>
+          </div>
+        </header>
+
+        <section class="nv-demo-section">
+          <h2>Agent Cards</h2>
+          <div class="nv-feature-grid">
+            <article class="nv-agent-card">
+              <header class="nv-feature-card__header">
+                <span class="nv-feature-card__icon" aria-hidden="true">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm7 8a7 7 0 0 0-14 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  </svg>
+                </span>
+                <div>
+                  <h3 class="nv-feature-card__title">Customer Support Agent</h3>
+                  <p class="nv-feature-card__subtitle">support</p>
+                </div>
+              </header>
+              <div class="nv-spec-grid">
+                <div><p class="nv-spec__label">LLM Model</p><p class="nv-spec__value">GPT-4o mini</p></div>
+                <div><p class="nv-spec__label">Credit Usage</p><p class="nv-spec__value">3 credits / message</p></div>
+                <div><p class="nv-spec__label">Integrated</p><p class="nv-spec__value">WhatsApp</p></div>
+                <div><p class="nv-spec__label">Status</p><p class="nv-spec__value">Active</p></div>
+              </div>
+              <button class="nv-button nv-button--cta-secondary nv-button--full">View</button>
+            </article>
+
+            <article class="nv-voice-card">
+              <header class="nv-feature-card__header">
+                <div style="display:flex;align-items:center;gap:12px;min-width:0;flex:1;">
+                  <span class="nv-feature-card__icon" aria-hidden="true">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <path d="M12 18a6 6 0 0 0 6-6V9a6 6 0 1 0-12 0v3a6 6 0 0 0 6 6Zm0 0v3m-4 0h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                  </span>
+                  <div>
+                    <h3 class="nv-feature-card__title">Inbound Sales Voice</h3>
+                    <p class="nv-feature-card__subtitle">sales</p>
+                  </div>
+                </div>
+                <span class="nv-call-badge">Inbound</span>
+              </header>
+              <div class="nv-spec-grid">
+                <div><p class="nv-spec__label">Real-Time Provider</p><p class="nv-spec__value">LiveKit</p></div>
+                <div><p class="nv-spec__label">Voice Selection</p><p class="nv-spec__value">Sarah</p></div>
+              </div>
+              <div class="nv-spec-grid nv-spec-grid--three">
+                <div><p class="nv-spec__label">Integrated</p><p class="nv-spec__value">WhatsApp</p></div>
+                <div><p class="nv-spec__label">Status</p><p class="nv-spec__value">Active</p></div>
+                <div><p class="nv-spec__label">Type</p><p class="nv-spec__value">Inbound</p></div>
+              </div>
+              <button class="nv-button nv-button--cta-secondary nv-button--full">View</button>
+            </article>
+          </div>
+        </section>
+
+        <section class="nv-demo-section">
+          <h2>Workflow Card</h2>
+          <article class="nv-workflow-card">
+            <div class="nv-workflow-card__main">
+              <div class="nv-feature-card__header">
+                <span class="nv-feature-card__icon" aria-hidden="true">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                    <path d="M6 4v6a2 2 0 0 0 2 2h8m0 0-3-3m3 3-3 3M18 20v-6a2 2 0 0 0-2-2H8m0 0 3-3m-3 3 3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </span>
+                <div>
+                  <h3 class="nv-feature-card__title">Lead qualification workflow</h3>
+                  <p class="nv-feature-card__subtitle">Score inbound leads and route hot prospects.</p>
+                </div>
+              </div>
+              <button class="nv-menu-button" aria-label="Workflow actions">...</button>
+            </div>
+            <footer class="nv-workflow-card__footer">
+              <span>6 Nodes</span>
+              <span class="nv-workflow-card__status">Active</span>
+            </footer>
+          </article>
+        </section>
+
+        <section class="nv-demo-section">
+          <h2>Speech And Billing</h2>
+          <div class="nv-feature-grid">
+            <div class="nv-speech-dropzone" role="button" tabindex="0">
+              <span class="nv-speech-dropzone__icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                  <path d="M12 16V4m0 0 5 5m-5-5-5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+              </span>
+              <div>
+                <p class="nv-feature-card__title">Drop your audio file here</p>
+                <p class="nv-feature-card__subtitle">or click to browse from your computer</p>
+              </div>
+              <button class="nv-button nv-button--cta-secondary nv-button--sm">Choose File</button>
+            </div>
+
+            <section class="nv-widget">
+              <h3 class="nv-type-h2" style="margin-bottom: 16px;">Your subscriptions</h3>
+              <div class="nv-subscription-list">
+                <article class="nv-subscription-row">
+                  <div>
+                    <strong>Active</strong>
+                    <span>Renews/ends: Jun 30, 2026</span>
+                  </div>
+                  <button class="nv-button nv-button--cta-secondary">Cancel</button>
+                </article>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="nv-demo-section">
+          <h2>Auth Preview Panel</h2>
+          <div class="nv-auth-preview">
+            <div class="nv-auth-preview__frame">
+              <img src="../../assets/AuthDashScreenshot.png" alt="Nanovate dashboard preview">
+            </div>
+            <div class="nv-auth-preview__shade" aria-hidden="true"></div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

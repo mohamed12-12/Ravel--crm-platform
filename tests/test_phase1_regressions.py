@@ -157,7 +157,8 @@ class Phase1AgentSessionTests(unittest.TestCase):
         client.post(f"/api/session/{session_id}/message", json={"text": "single"})
         client.post(f"/api/session/{session_id}/message", json={"text": "no"})
         session = client.post(f"/api/session/{session_id}/message", json={"text": "EGP"}).get_json()["session"]
-        self.assertEqual(session["stage"], "completed")
+        self.assertEqual(session["stage"], "post_booking_support")
+        self.assertTrue(session["bookingCompleted"])
 
 
 if __name__ == "__main__":

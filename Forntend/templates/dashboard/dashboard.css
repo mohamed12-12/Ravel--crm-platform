@@ -1,0 +1,64 @@
+@import "../../components/layout/layout.css";
+@import "../../components/feature-cards/feature-cards.css";
+@import "../../components/niva/niva.css";
+
+.nv-home-stack {
+  display: grid;
+  gap: 24px;
+}
+
+.nv-home-title {
+  margin: 0;
+  color: var(--nv-white);
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 650;
+}
+
+.nv-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.nv-credits-header {
+  display: grid;
+  gap: 8px;
+}
+
+.nv-credits-header h2 {
+  margin: 0;
+  color: var(--nv-white);
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 650;
+}
+
+.nv-credits-header p {
+  margin: 0;
+  color: var(--nv-text-muted);
+  font-size: 16px;
+}
+
+.nv-dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 347px;
+  gap: 24px;
+  align-items: stretch;
+}
+
+@media (max-width: 1080px) {
+  .nv-dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .nv-agents-widget {
+    width: 100%;
+  }
+}
+
+@media (max-width: 760px) {
+  .nv-stats-grid {
+    grid-template-columns: 1fr;
+  }
+}

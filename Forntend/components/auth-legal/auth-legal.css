@@ -1,0 +1,115 @@
+@import "../../styles/base.css";
+@import "../atoms/atoms.css";
+@import "../feature-cards/feature-cards.css";
+
+.nv-auth-layout {
+  display: grid;
+  grid-template-columns: minmax(360px, 45%) minmax(0, 55%);
+  min-height: 720px;
+  overflow: hidden;
+  border: 1px solid var(--nv-border);
+  border-radius: var(--nv-radius-xl);
+  background: var(--nv-bg);
+}
+
+.nv-auth-card {
+  display: grid;
+  align-content: center;
+  gap: 20px;
+  padding: 48px;
+}
+
+.nv-auth-card__logo {
+  height: 18px;
+  width: max-content;
+}
+
+.nv-auth-card h2 {
+  margin: 0;
+  color: var(--nv-white);
+  font-size: 32px;
+  line-height: 1.15;
+}
+
+.nv-auth-card p {
+  margin: 0;
+  color: var(--nv-text-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.nv-auth-actions {
+  display: grid;
+  gap: 12px;
+}
+
+.nv-legal-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 32px;
+  width: min(1100px, 100%);
+  margin: 0 auto;
+}
+
+.nv-legal-nav {
+  position: sticky;
+  top: 24px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.nv-legal-nav a {
+  border-radius: var(--nv-radius-md);
+  padding: 10px 12px;
+  color: var(--nv-text-muted);
+  font-size: 14px;
+}
+
+.nv-legal-nav a[aria-current="page"],
+.nv-legal-nav a:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--nv-white);
+}
+
+.nv-legal-content {
+  display: grid;
+  gap: 20px;
+  border: 1px solid var(--nv-border);
+  border-radius: var(--nv-radius-xl);
+  padding: 32px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.nv-legal-content h1,
+.nv-legal-content h2 {
+  margin: 0;
+  color: var(--nv-white);
+}
+
+.nv-legal-content p,
+.nv-legal-content li {
+  color: var(--nv-text-soft);
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.nv-settings-section {
+  display: grid;
+  gap: 16px;
+  border: 1px solid var(--nv-border);
+  border-radius: var(--nv-radius-xl);
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+@media (max-width: 900px) {
+  .nv-auth-layout,
+  .nv-legal-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .nv-auth-preview {
+    display: none;
+  }
+}

@@ -181,7 +181,8 @@ class Phase5AgentFlowTests(unittest.TestCase):
 
     def test_happy_path_completes_after_booking_draft_creation(self):
         self._drive_to_booking_completion(self.session, self.gateway)
-        self.assertEqual(self.session.stage, "completed")
+        self.assertEqual(self.session.stage, "post_booking_support")
+        self.assertTrue(self.session.booking_completed)
         self.assertEqual(self.session.booking_status, "Draft")
         self.assertEqual(self.session.handoff_state, "completed")
 
@@ -195,7 +196,8 @@ class Phase5AgentFlowTests(unittest.TestCase):
         self._drive_phone(self.session, self.gateway)
         self.assertEqual(self.session.stage, "awaiting_trip_type")
         self.assertEqual(self.session.customer_name, "Amina Hassan")
-        self.assertIn("Traveler ID: TR001", self.session.messages[-2]["text"])
+        self.assertNotIn("Traveler ID", self.session.messages[-2]["text"])
+        self.assertIn("traveler profile", self.session.messages[-2]["text"])
         self.assertIn("Status: VIP", self.session.messages[-2]["text"])
         self.assertIn("VIP discount", self.session.messages[-2]["text"])
 
@@ -203,6 +205,11 @@ class Phase5AgentFlowTests(unittest.TestCase):
         self.manager.handle_message(self.session, "what?", self.gateway)
         self.assertEqual(self.session.stage, "awaiting_phone")
         self.assertIn("WhatsApp number", self.session.messages[-1]["text"])
+
+    def test_invalid_long_phone_is_rejected_before_lookup(self):
+        self.manager.handle_message(self.session, "012922823692000", self.gateway)
+        self.assertEqual(self.session.stage, "awaiting_phone")
+        self.assertIn("valid WhatsApp number", self.session.messages[-1]["text"])
 
     def test_repeated_phone_clarification_uses_different_persona_copy(self):
         self.manager.handle_message(self.session, "why?", self.gateway)
@@ -319,7 +326,8 @@ class Phase5AgentFlowTests(unittest.TestCase):
 
     def test_session_closes_after_booking_draft_creation(self):
         self._drive_to_booking_completion(self.session, self.gateway)
-        self.assertEqual(self.session.stage, "completed")
+        self.assertEqual(self.session.stage, "post_booking_support")
+        self.assertTrue(self.session.booking_completed)
 
     def test_lead_and_booking_stages_preserve_traveler_identity(self):
         self._drive_to_booking_completion(self.session, self.gateway)
@@ -351,7 +359,37 @@ class Phase5AgentFlowTests(unittest.TestCase):
         self.assertIn("Double boys room", prompt)
         self.assertIn("Double girls room", prompt)
         self.assertIn("Triple boys room", prompt)
+        self.assertNotIn("1 available", prompt)
+        self.assertNotIn("2 available", prompt)
         self.assertIn("group", prompt.lower())
+
+    def test_international_trip_collects_flight_before_passport(self):
+        self._drive_phone(self.session, self.gateway)
+        self.manager.handle_message(self.session, "international", self.gateway)
+        self.manager.handle_message(self.session, "1", self.gateway)
+
+        self.assertEqual(self.session.stage, "awaiting_room_type")
+        self.assertNotIn("passport", self.session.messages[-1]["text"].lower())
+
+    def test_domestic_trip_without_flight_support_skips_flight_prompt(self):
+        original_preview = self.gateway.preview_customer
+
+        def preview_customer(**kwargs):
+            result = original_preview(**kwargs)
+            trip = result["trip_result"]["open_trips"][0]
+            trip["supports_flights"] = False
+            trip["type"] = "Local"
+            return result
+
+        self.gateway.preview_customer = preview_customer  # type: ignore[method-assign]
+        self._drive_phone(self.session, self.gateway)
+        self.manager.handle_message(self.session, "local", self.gateway)
+        self.manager.handle_message(self.session, "1", self.gateway)
+        self.manager.handle_message(self.session, "single room", self.gateway)
+
+        self.assertEqual(self.session.flight_option, "Not Applicable")
+        self.assertEqual(self.session.stage, "awaiting_currency")
+        self.assertNotIn("flight request", self.session.messages[-1]["text"].lower())
 
     def test_group_booking_message_captures_group_size_before_room_choice(self):
         self._drive_phone(self.session, self.gateway)

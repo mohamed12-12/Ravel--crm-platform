@@ -1,0 +1,45 @@
+@import "../../styles/base.css";
+
+.nv-empty-state {
+  display: grid;
+  place-items: center;
+  min-height: 384px;
+  padding: 40px 16px;
+  text-align: center;
+}
+
+.nv-empty-state__content {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+}
+
+.nv-empty-state__icon {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 6px;
+  border: 1px solid rgba(26, 204, 150, 0.20);
+  border-radius: var(--nv-radius-lg);
+  background: rgba(26, 204, 150, 0.10);
+  color: var(--nv-success);
+}
+
+.nv-empty-state__title,
+.nv-empty-state__description {
+  margin: 0;
+}
+
+.nv-empty-state__title {
+  color: var(--nv-white);
+  font-size: 18px;
+  line-height: 1.35;
+  font-weight: 650;
+}
+
+.nv-empty-state__description {
+  color: rgba(255, 255, 255, 0.40);
+  font-size: 14px;
+  line-height: 1.5;
+}

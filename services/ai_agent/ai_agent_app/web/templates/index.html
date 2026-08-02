@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Rahma Traveler AI Sales Agent Demo</title>
+    <title>Nanovate Sales AI Demo</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=trip-media-inline-1">
@@ -14,10 +14,10 @@
     <!-- SIDEBAR: Controls & Stats -->
     <aside class="sidebar">
         <div class="brand-block">
-            <div class="brand-logo">☪</div>
+            <img class="brand-wordmark" src="{{ url_for('static', filename='nanovate-logo.svg') }}" alt="Nanovate">
             <div>
                 <p class="eyebrow">Client Demonstration Portal</p>
-                <h1>Rahma Sales AI</h1>
+                <h1>Nanovate Sales AI</h1>
                 <p class="subcopy">Autonomous lead intake, CRM matching, and reservation system simulation.</p>
             </div>
         </div>
@@ -27,7 +27,7 @@
                 <h2>Demo Controls</h2>
             </div>
             <div class="button-row">
-                <button id="new-session-btn" class="btn btn-primary">⚡ Start New Session</button>
+                <button id="new-session-btn" class="btn btn-primary">Start New Session</button>
                 <button id="reset-demo-btn" class="btn btn-danger">↺ Reset Demo DB</button>
             </div>
             <p class="hint" style="margin-top:0.75rem">Resetting restores the runtime sheet back to the clean benchmark state.</p>
@@ -36,19 +36,19 @@
         <!-- Scenario Presets -->
         <section class="panel glass-panel">
             <div class="panel-header">
-                <h2>🧪 Scenario Presets</h2>
+                <h2>Scenario Presets</h2>
             </div>
             <p class="hint" style="margin-bottom:0.75rem">Pre-fill the phone-first flow to test specific AI behavioral guardrails:</p>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
-                <button type="button" class="btn btn-preset" onclick="setPreset('new')">🌱 New Customer</button>
-                <button type="button" class="btn btn-preset" onclick="setPreset('returning')">👑 Returning (TR001)</button>
-                <button type="button" class="btn btn-preset" onclick="setPreset('duplicate')">👯 Duplicate Phone</button>
+                <button type="button" class="btn btn-preset" onclick="setPreset('new')">New Customer</button>
+                <button type="button" class="btn btn-preset" onclick="setPreset('returning')">Returning (TR001)</button>
+                <button type="button" class="btn btn-preset" onclick="setPreset('duplicate')">Duplicate Phone</button>
             </div>
         </section>
 
         <section class="panel glass-panel">
             <div class="panel-header">
-                <h2>📊 Sheet & CRM Health</h2>
+                <h2>Sheet & CRM Health</h2>
             </div>
             <div class="status-band">
                 <div><span class="label">Backend</span><strong id="sheet-backend" class="value text-glow">Loading…</strong></div>
@@ -64,7 +64,7 @@
 
         <section class="panel glass-panel">
             <div class="panel-header">
-                <h2>🎯 Pipeline Intelligence</h2>
+                <h2>Pipeline Intelligence</h2>
             </div>
             <div class="stats-grid">
                 <div class="stat-box"><span class="label">Active Leads</span><strong id="lead-count">0</strong></div>
@@ -78,7 +78,7 @@
 
         <section class="panel glass-panel">
             <div class="panel-header">
-                <h2>📋 Bookings & Revenue</h2>
+                <h2>Bookings & Revenue</h2>
             </div>
             <div class="stats-grid">
                 <div class="stat-box"><span class="label">Draft Bookings</span><strong id="booking-draft-count">0</strong></div>
@@ -89,7 +89,7 @@
 
         <section class="panel glass-panel">
             <div class="panel-header">
-                <h2>👥 CRM Lookup Browser</h2>
+                <h2>CRM Lookup Browser</h2>
             </div>
             <p class="hint" style="margin-bottom:0.75rem">Live index of travelers available for matching tests.</p>
             <div class="detail-stack" id="crm-browser" style="max-height:220px;overflow-y:auto">
@@ -114,7 +114,7 @@
 
             <div class="chat-log" id="chat-log">
                 <div class="empty-state">
-                    <div style="font-size:3rem;margin-bottom:1rem">🤖</div>
+                    <div style="font-size:3rem;margin-bottom:1rem"></div>
                     <h3>Ready for Interactive Demonstration</h3>
                     <p style="color:var(--text-dim);font-size:0.85rem;max-width:380px;margin:0 auto">
                         Click <strong style="color:var(--accent)">Start New Session</strong> on the left to activate the AI agent and test intake, qualification, and booking flows.
@@ -125,13 +125,13 @@
             <!-- Intake Form -->
             <form id="intake-form" class="intake-form glass-card" hidden>
                 <div style="margin-bottom:1rem">
-                    <h3 style="font-size:1.05rem;color:var(--text-main);margin-bottom:4px">📋 Customer Intake Form</h3>
+                    <h3 style="font-size:1.05rem;color:var(--text-main);margin-bottom:4px">Customer Intake Form</h3>
                     <p style="color:var(--text-muted);font-size:0.8rem">Displayed only when the WhatsApp number is not found in the traveler database.</p>
                 </div>
                 <div class="form-grid">
                     <label><span>Full Name *</span><input id="full-name-input" type="text" required placeholder="e.g. Omar Mansour"></label>
                     <label><span>WhatsApp Number *</span><input id="phone-input" type="tel" required placeholder="e.g. 201012345678"></label>
-                    <label><span>Birthday</span><input id="birthday-input" type="date" required></label>
+                    <label><span>Birthday</span><input id="birthday-input" type="text" required placeholder="e.g. 21/08/1995 or 21 Aug 1995"></label>
                     <label><span>Gender</span>
                         <select id="gender-input" required>
                             <option value="Male" selected>Male</option>
@@ -148,17 +148,17 @@
 
             <!-- Quick Action Reply Buttons -->
             <div id="quick-actions" class="quick-actions" hidden>
-                <button type="button" class="btn btn-quick" data-reply="local">🏠 Local Trip</button>
-                <button type="button" class="btn btn-quick" data-reply="international">🌍 International Trip</button>
-                <button type="button" class="btn btn-quick btn-confirm" data-reply="yes">✅ Confirm Lead</button>
-                <button type="button" class="btn btn-quick" data-reply="no">✕ Not Now</button>
-                <button type="button" class="btn btn-quick" data-reply="single">🛏 Single Room</button>
-                <button type="button" class="btn btn-quick" data-reply="double">🛏 Double Room</button>
-                <button type="button" class="btn btn-quick" data-reply="triple">🛏 Triple Room</button>
-                <button type="button" class="btn btn-quick" data-reply="with flights">✈️ With Flights</button>
-                <button type="button" class="btn btn-quick" data-reply="no flights">🚗 No Flights</button>
-                <button type="button" class="btn btn-quick" data-reply="egp">💵 EGP</button>
-                <button type="button" class="btn btn-quick" data-reply="usd">💵 USD</button>
+                <button type="button" class="btn btn-quick" data-reply="local">Local Trip</button>
+                <button type="button" class="btn btn-quick" data-reply="international">International Trip</button>
+                <button type="button" class="btn btn-quick btn-confirm" data-reply="yes">Confirm Lead</button>
+                <button type="button" class="btn btn-quick" data-reply="no">Not Now</button>
+                <button type="button" class="btn btn-quick" data-reply="single">Single Room</button>
+                <button type="button" class="btn btn-quick" data-reply="double">Double Room</button>
+                <button type="button" class="btn btn-quick" data-reply="triple">Triple Room</button>
+                <button type="button" class="btn btn-quick" data-reply="with flights">With Flights</button>
+                <button type="button" class="btn btn-quick" data-reply="no flights">No Flights</button>
+                <button type="button" class="btn btn-quick" data-reply="egp">EGP</button>
+                <button type="button" class="btn btn-quick" data-reply="usd">USD</button>
             </div>
 
             <!-- Message Composer -->
@@ -174,7 +174,7 @@
         <section class="inspector">
             <div class="panel glass-panel">
                 <div class="panel-header">
-                    <h2>🔍 Live CRM Snapshot</h2>
+                    <h2>Live CRM Snapshot</h2>
                 </div>
                 <p class="hint" style="margin-bottom:0.75rem">Real-time lookup output when agent identifies a traveler.</p>
                 <div id="crm-snapshot" class="detail-stack">
@@ -184,7 +184,7 @@
 
             <div class="panel glass-panel">
                 <div class="panel-header">
-                    <h2>🎯 Trip Matching Engine</h2>
+                    <h2>Trip Matching Engine</h2>
                 </div>
                 <p class="hint" style="margin-bottom:0.75rem">Dynamic inventory query results based on preferences.</p>
                 <div id="trip-result" class="detail-stack">
@@ -194,7 +194,7 @@
 
             <div class="panel glass-panel">
                 <div class="panel-header">
-                    <h2>⚡ CRM Write Activity</h2>
+                    <h2>CRM Write Activity</h2>
                 </div>
                 <p class="hint" style="margin-bottom:0.75rem">Controlled DB writes executed by the agent.</p>
                 <div id="write-result" class="detail-stack">
@@ -204,19 +204,19 @@
 
             <div class="panel glass-panel">
                 <div class="panel-header">
-                    <h2>🎯 Lead Intelligence</h2>
+                    <h2>Lead Intelligence</h2>
                 </div>
                 <div id="lead-result" class="detail-stack">
                     <p class="muted">Pipeline stage and priority will populate upon session completion.</p>
                 </div>
                 <div id="lead-actions" style="margin-top:1rem;display:none">
-                    <button id="qualify-lead-btn" class="btn btn-success" style="width:100%;justify-content:center">✓ Mark Lead as Qualified</button>
+                    <button id="qualify-lead-btn" class="btn btn-success" style="width:100%;justify-content:center">Mark Lead as Qualified</button>
                 </div>
             </div>
 
             <div class="panel glass-panel">
                 <div class="panel-header">
-                    <h2>📋 Create Booking Draft</h2>
+                    <h2>Create Booking Draft</h2>
                 </div>
                 <div id="booking-form-panel" class="detail-stack">
                     <p class="muted">When open trips are confirmed, booking reservation options will appear here.</p>
@@ -225,7 +225,7 @@
 
             <div class="panel glass-panel">
                 <div class="panel-header">
-                    <h2>🎉 Booking Result</h2>
+                    <h2>Booking Result</h2>
                 </div>
                 <div id="booking-result" class="detail-stack">
                     <p class="muted">Reservation details and room deductions will display here.</p>
@@ -265,7 +265,7 @@ function setPreset(type) {
     // Highlighting flash effect
     [fn, ph].forEach(el => {
         el.style.transition = 'box-shadow 0.3s';
-        el.style.boxShadow = '0 0 15px rgba(99,102,241,0.8)';
+        el.style.boxShadow = '0 0 0 3px rgba(0,208,146,0.18)';
         setTimeout(() => el.style.boxShadow = 'none', 800);
     });
     const messageInput = document.getElementById('message-input');

@@ -1,0 +1,152 @@
+@import "../../components/atoms/atoms.css";
+@import "../../components/molecules/molecules.css";
+
+body {
+  background: #0d0d0d;
+}
+
+.nv-landing {
+  min-height: 100vh;
+  background: #0d0d0d;
+  color: var(--nv-white);
+}
+
+.nv-landing-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 20px 0;
+}
+
+.nv-landing-nav img {
+  height: 15px;
+}
+
+.nv-landing-nav__links {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  color: var(--nv-text-soft);
+  font-size: 14px;
+}
+
+.nv-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(420px, 1.1fr);
+  gap: 40px;
+  align-items: center;
+  width: min(1180px, calc(100% - 32px));
+  min-height: calc(100vh - 96px);
+  margin: 0 auto;
+  padding: 40px 0 80px;
+}
+
+.nv-hero__copy {
+  display: grid;
+  gap: 20px;
+}
+
+.nv-hero__eyebrow {
+  width: max-content;
+  border: 1px solid rgba(0, 208, 146, 0.24);
+  border-radius: var(--nv-radius-full);
+  padding: 6px 10px;
+  background: rgba(0, 208, 146, 0.08);
+  color: var(--nv-accent-bright);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.nv-hero h1 {
+  margin: 0;
+  color: var(--nv-white);
+  font-size: clamp(40px, 6vw, 76px);
+  line-height: 0.98;
+  font-weight: 760;
+}
+
+.nv-hero p {
+  max-width: 560px;
+  margin: 0;
+  color: var(--nv-text-soft);
+  font-size: 18px;
+  line-height: 1.65;
+}
+
+.nv-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.nv-hero__media {
+  position: relative;
+  min-height: 520px;
+  overflow: hidden;
+  border: 1px solid var(--nv-border);
+  border-radius: var(--nv-radius-xl);
+  background: var(--nv-bg);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32);
+}
+
+.nv-hero__media img {
+  width: 100%;
+  height: 100%;
+  min-height: 520px;
+  object-fit: cover;
+  object-position: left top;
+}
+
+.nv-hero__media::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(13,13,13,0) 50%, rgba(13,13,13,0.70));
+}
+
+.nv-landing-section {
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 72px 0;
+}
+
+.nv-landing-section h2 {
+  margin: 0 0 24px;
+  font-size: 32px;
+  line-height: 1.15;
+}
+
+.nv-feature-band {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 980px) {
+  .nv-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .nv-feature-band {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .nv-landing-nav__links {
+    display: none;
+  }
+
+  .nv-hero {
+    min-height: auto;
+    padding: 24px 0 56px;
+  }
+
+  .nv-hero__media,
+  .nv-hero__media img {
+    min-height: 360px;
+  }
+}

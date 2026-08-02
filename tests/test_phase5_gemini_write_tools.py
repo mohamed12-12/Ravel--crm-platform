@@ -8,8 +8,25 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from services.ai_agent.ai_agent_app.agent.gemini_agent import GeminiAgent
+from services.ai_agent.ai_agent_app.agent.tool_registry import build_agent_tool_registry
 
 from test_phase2_gemini_tool_loop import LoopProviderStub, function_call_response, text_response, FakeCRMService
+
+
+def _array_paths_without_items(schema: dict, path: str = "$") -> list[str]:
+    missing: list[str] = []
+    if not isinstance(schema, dict):
+        return missing
+    if schema.get("type") == "array" and "items" not in schema:
+        missing.append(path)
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        for key, value in properties.items():
+            missing.extend(_array_paths_without_items(value, f"{path}.properties.{key}"))
+    items = schema.get("items")
+    if isinstance(items, dict):
+        missing.extend(_array_paths_without_items(items, f"{path}.items"))
+    return missing
 
 
 class WriteCRMService(FakeCRMService):
@@ -227,6 +244,18 @@ class WriteCRMService(FakeCRMService):
 
 
 class TestPhase5GeminiWriteTools(unittest.TestCase):
+    def test_write_tool_schemas_are_gemini_compatible(self) -> None:
+        registry = build_agent_tool_registry(include_write_tools=True, include_validation_tool=False)
+        missing = {
+            name: paths
+            for name, spec in registry.items()
+            if (paths := _array_paths_without_items(spec.input_schema))
+        }
+        self.assertEqual(missing, {})
+        room_requirements = registry["create_booking_draft"].input_schema["properties"]["room_requirements"]
+        self.assertEqual(room_requirements["type"], "object")
+        self.assertEqual(room_requirements["properties"]["requirements"]["items"]["type"], "object")
+
     def setUp(self) -> None:
         self.conn = sqlite3.connect(":memory:")
         self.conn.row_factory = sqlite3.Row
@@ -599,7 +628,7 @@ class TestPhase5GeminiWriteTools(unittest.TestCase):
 
         booking = result["write_results"][0]["result"]["booking_result"]
         self.assertTrue(booking["passport_required"])
-        self.assertEqual(booking["passport_status"], "provided")
+        self.assertEqual(booking["passport_status"], "uploaded")
         self.assertEqual(len(self.service.created_bookings), 1)
 
     def test_approved_handoff_creates_handoff(self) -> None:
@@ -679,7 +708,7 @@ class TestPhase5GeminiWriteTools(unittest.TestCase):
 
         self.assertEqual(result["mode"], "gemini")
         self.assertEqual(result["tool_requests"], [])
-        self.assertIn("automatic crm writes are disabled", result["reply"].lower())
+        self.assertIn("cannot save changes automatically", result["reply"].lower())
 
     def test_read_only_tools_still_work(self) -> None:
         with self._patched_service():

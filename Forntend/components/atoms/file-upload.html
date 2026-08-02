@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>File Upload Atom</title>
+    <link rel="stylesheet" href="./atoms.css">
+  </head>
+  <body>
+    <main class="nv-page">
+      <section class="nv-demo-shell">
+        <header class="nv-demo-header">
+          <div>
+            <h1>FileUpload</h1>
+            <p>Static version of `FileUpload.tsx`, with empty and selected-file states.</p>
+          </div>
+        </header>
+        <div class="nv-demo-grid">
+          <div class="nv-upload" role="button" tabindex="0">
+            <span class="nv-upload__icon" aria-hidden="true">U</span>
+            <p class="nv-upload__title">No documents found</p>
+            <p class="nv-upload__meta">PDF, TXT, DOCX supported</p>
+            <button class="nv-button nv-button--cta-secondary nv-button--sm">Select File</button>
+          </div>
+          <div class="nv-demo-panel nv-row">
+            <span class="nv-upload__icon" aria-hidden="true">F</span>
+            <div style="min-width:0; flex:1;">
+              <p class="nv-upload__title">knowledge-base.pdf</p>
+              <p class="nv-upload__meta">Selected file</p>
+            </div>
+            <button class="nv-button nv-button--text-secondary nv-button--sm">Remove</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

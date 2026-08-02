@@ -63,6 +63,8 @@ class PromptBuilder:
                     "Use plain text only: no Markdown emphasis, asterisks, backticks, or code fences.",
                     "Put each list item on its own line and use 1), 2), 3) numbering.",
                     "Ask one question per turn.",
+                    "Complete every sentence, question, and list item.",
+                    "For Arabic replies, use Arabic wording except exact names, IDs, dates, prices, phones, and URLs.",
                 ],
             },
         }
@@ -101,6 +103,8 @@ class PromptBuilder:
                 "plain_text_customer_format": True,
                 "numbered_lists_use_parenthesis": True,
                 "one_question_per_turn": True,
+                "complete_final_response_required": True,
+                "arabic_replies_use_arabic_except_exact_dynamic_values": True,
             },
             "available_tools": list(self.tool_registry.keys()),
             "output_contract": {

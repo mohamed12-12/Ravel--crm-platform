@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}{{ traveler.full_name }} - Rahma CRM{% endblock %}
+{% block title %}{{ traveler.full_name }} - Nanovate CRM{% endblock %}
 {% block topbar_title %}Traveler 360 Profile{% endblock %}
 
 {% block topbar_actions %}
 <div style="display:flex;gap:0.75rem">
-    <button onclick="markInactive('{{ traveler.traveler_id }}')" class="btn btn-ghost btn-sm" style="color:var(--red);border-color:rgba(239,68,68,0.3)">
-        Archive / Inactivate
+    <button onclick="deleteTraveler('{{ traveler.traveler_id }}')" class="btn btn-ghost btn-sm" style="color:var(--red);border-color:rgba(239,68,68,0.3)">
+        Delete Traveler
     </button>
     <button onclick="openModal('editModal')" class="btn btn-primary btn-sm">
         Edit Profile
@@ -15,9 +15,9 @@
 
 {% block content %}
 <div style="display:flex;flex-direction:column;gap:1.5rem">
-    <div class="card" style="position:relative;overflow:hidden;background:linear-gradient(135deg, rgba(99,102,241,0.1), rgba(16,185,129,0.05));border:1px solid rgba(99,102,241,0.3)">
+    <div class="card" style="position:relative;overflow:hidden;background:linear-gradient(135deg, rgba(0,208,146,0.10), rgba(255,255,255,0.02));border:1px solid rgba(0,208,146,0.26)">
         <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap">
-            <div style="width:72px;height:72px;border-radius:1rem;background:linear-gradient(135deg, var(--accent), var(--accent-2));display:flex;align-items:center;justify-content:center;font-size:2rem;font-weight:800;color:#fff;box-shadow:0 10px 25px rgba(99,102,241,0.4)">
+            <div style="width:72px;height:72px;border-radius:8px;background:linear-gradient(134deg, #38b98d 6%, #ffffff 96%);display:flex;align-items:center;justify-content:center;font-size:2rem;font-weight:800;color:#06120f;border:1px solid rgba(0,208,146,0.30);box-shadow:none">
                 {{ traveler.full_name[0] if traveler.full_name else '?' }}
             </div>
             <div style="flex:1;min-width:240px">
@@ -128,7 +128,7 @@
                     </div>
                 </div>
                 {% if not passport_document and not traveler.passport_number %}
-                <div style="padding:0.75rem 0.9rem;border-radius:0.6rem;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);color:#fbbf24;font-size:0.85rem;margin-bottom:1rem">
+                <div style="padding:0.75rem 0.9rem;border-radius:0.6rem;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.28);color:#fca5a5;font-size:0.85rem;margin-bottom:1rem">
                     Passport is missing. International bookings should stay pending until passport data or a handoff note is added.
                 </div>
                 {% endif %}
@@ -194,7 +194,7 @@
                                     <strong style="font-size:0.88rem;color:var(--text-main)">{{ lead.lead_stage or 'Lead' }}</strong>
                                     <div class="mono" style="font-size:0.72rem;color:var(--text-muted)">{{ lead.lead_id }}</div>
                                 </div>
-                                <span class="badge {% if lead.priority == 'High' %}badge-red{% elif lead.priority == 'Medium' %}badge-yellow{% else %}badge-blue{% endif %}">
+                                <span class="badge {% if lead.priority == 'High' %}badge-green{% elif lead.priority == 'Medium' %}badge-yellow{% else %}badge-blue{% endif %}">
                                     {{ lead.priority or 'Medium' }}
                                 </span>
                             </div>
@@ -216,21 +216,21 @@
 
         <div style="display:flex;flex-direction:column;gap:1.5rem">
             <!-- Trip Stats Summary -->
-            <div class="card" style="background:linear-gradient(135deg,rgba(99,102,241,0.07),rgba(16,185,129,0.05));border:1px solid rgba(99,102,241,0.2)">
+            <div class="card" style="background:linear-gradient(135deg,rgba(0,208,146,0.08),rgba(255,255,255,0.02));border:1px solid rgba(0,208,146,0.22)">
                 <div class="card-header">
                     <h3 class="card-title">Travel Summary</h3>
                     <span style="font-size:0.75rem;color:var(--text-muted)">Auto-calculated from bookings</span>
                 </div>
                 <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem">
-                    <div style="text-align:center;padding:1rem;background:rgba(59,130,246,0.1);border-radius:0.75rem;border:1px solid rgba(59,130,246,0.2)">
-                        <div style="font-size:1.8rem;font-weight:800;color:#60a5fa">{{ traveler.local_trips_count or 0 }}</div>
+                    <div style="text-align:center;padding:1rem;background:rgba(0,208,146,0.08);border-radius:8px;border:1px solid rgba(0,208,146,0.22)">
+                        <div style="font-size:1.8rem;font-weight:800;color:#00d092">{{ traveler.local_trips_count or 0 }}</div>
                         <div style="font-size:0.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-top:0.25rem">Local Trips</div>
                     </div>
-                    <div style="text-align:center;padding:1rem;background:rgba(139,92,246,0.1);border-radius:0.75rem;border:1px solid rgba(139,92,246,0.2)">
-                        <div style="font-size:1.8rem;font-weight:800;color:#a78bfa">{{ traveler.international_trips_count or 0 }}</div>
+                    <div style="text-align:center;padding:1rem;background:rgba(56,185,141,0.08);border-radius:8px;border:1px solid rgba(56,185,141,0.22)">
+                        <div style="font-size:1.8rem;font-weight:800;color:#38b98d">{{ traveler.international_trips_count or 0 }}</div>
                         <div style="font-size:0.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-top:0.25rem">Int'l Trips</div>
                     </div>
-                    <div style="text-align:center;padding:1rem;background:rgba(16,185,129,0.1);border-radius:0.75rem;border:1px solid rgba(16,185,129,0.2)">
+                    <div style="text-align:center;padding:1rem;background:rgba(0,208,146,0.08);border-radius:8px;border:1px solid rgba(0,208,146,0.22)">
                         <div style="font-size:1.8rem;font-weight:800;color:#34d399">{{ traveler.community_events_count or 0 }}</div>
                         <div style="font-size:0.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-top:0.25rem">CE Events</div>
                     </div>
@@ -268,9 +268,9 @@
                             </td>
                             <td>
                                 {% if ttype == 'Local' %}
-                                    <span class="badge badge-blue" style="font-size:0.68rem">🏠 Local</span>
+                                    <span class="badge badge-blue" style="font-size:0.68rem">Local</span>
                                 {% elif ttype == 'International' %}
-                                    <span class="badge badge-purple" style="font-size:0.68rem">✈️ Int'l</span>
+                                    <span class="badge badge-purple" style="font-size:0.68rem">Int'l</span>
                                 {% else %}
                                     <span style="color:var(--text-muted);font-size:0.8rem">—</span>
                                 {% endif %}
@@ -290,7 +290,7 @@
                         </tr>
                         {% else %}
                         <tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--text-muted)">
-                            <div style="font-size:1.5rem;margin-bottom:0.5rem">🗺️</div>
+                            <div style="font-size:1.5rem;margin-bottom:0.5rem"></div>
                             No trip reservations recorded for this traveler.
                         </td></tr>
                         {% endfor %}
@@ -334,7 +334,7 @@
                 </table>
                 {% else %}
                 <div style="text-align:center;padding:2rem;color:var(--text-muted)">
-                    <div style="font-size:1.5rem;margin-bottom:0.5rem">🎪</div>
+                    <div style="font-size:1.5rem;margin-bottom:0.5rem"></div>
                     No community events recorded for this traveler.
                 </div>
                 {% endif %}
@@ -438,7 +438,7 @@
                             {{ interaction.action_taken or 'Message received via WhatsApp.' }}
                         </p>
                         {% if interaction.agent_notes %}
-                        <div style="background:rgba(99,102,241,0.1);border-left:2px solid var(--accent);padding:0.4rem 0.6rem;border-radius:0 0.4rem 0.4rem 0;font-size:0.78rem;color:var(--accent-2);margin-top:0.25rem">
+                        <div style="background:rgba(0,208,146,0.10);border-left:2px solid var(--accent);padding:0.4rem 0.6rem;border-radius:0 0.4rem 0.4rem 0;font-size:0.78rem;color:var(--accent);margin-top:0.25rem">
                             <strong>Agent Note:</strong> {{ interaction.agent_notes }}
                         </div>
                         {% endif %}
@@ -457,7 +457,7 @@
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem;padding-bottom:0.75rem;border-bottom:1px solid var(--border)">
             <h3 style="font-size:1.25rem;font-weight:800;color:var(--text-main);margin:0">Edit Traveler Profile</h3>
             <div style="font-size:0.8rem;color:var(--text-muted);margin-left:auto;padding-right:1rem">Traveler ID stays fixed: <strong class="mono">{{ traveler.traveler_id }}</strong></div>
-            <button onclick="closeModal('editModal')" style="background:transparent;border:none;color:var(--text-muted);font-size:1.25rem;cursor:pointer">✕</button>
+            <button onclick="closeModal('editModal')" style="background:transparent;border:none;color:var(--text-muted);font-size:0.85rem;cursor:pointer">Close</button>
         </div>
 
         <!-- Live Validation Alert Box -->
@@ -636,8 +636,8 @@ async function saveChanges() {
     }
 }
 
-async function markInactive(id) {
-    if (!confirm('Are you sure you want to mark this traveler as Inactive?')) return;
+async function deleteTraveler(id) {
+    if (!confirm('Are you sure you want to permanently delete this traveler and related CRM records?')) return;
     try {
         const response = await fetch(`/travelers/${id}`, {
             method: 'DELETE',
@@ -645,9 +645,9 @@ async function markInactive(id) {
             headers: { 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN }
         });
         if (response.ok) {
-            location.reload();
+            window.location.href = '/travelers/';
         } else {
-            alert('Failed to update status.');
+            alert('Failed to delete traveler.');
         }
     } catch (error) {
         alert('An error occurred.');

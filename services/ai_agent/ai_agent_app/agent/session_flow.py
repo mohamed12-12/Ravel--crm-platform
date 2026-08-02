@@ -7,6 +7,8 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from services.ai_agent.ai_agent_app.logger import agent_logger
+from services.ai_agent.ai_agent_app.agent.date_parsing import normalize_birthdate_input
+from services.ai_agent.ai_agent_app.agent.response_format import sanitize_traveler_reply
 from scripts.phase1_readonly_agent import normalize_trip_type
 from services.ai_agent.ai_agent_app.agent.gemini_agent import GeminiAgent
 from services.crm.system_services import UnifiedCRMService
@@ -78,6 +80,7 @@ class SessionState:
     phone_normalization: dict[str, Any] = field(default_factory=dict)
     pending_raw_phone: str = ""
     trip_type: str = ""
+    trip_query: str = ""
     messages: list[dict[str, Any]] = field(default_factory=list)
     preview: dict[str, Any] | None = None
     final_result: dict[str, Any] | None = None
@@ -86,6 +89,7 @@ class SessionState:
     selected_trip_name: str = ""
     room_type: str = ""
     room_group: str = ""
+    room_requirements: dict[str, Any] = field(default_factory=dict)
     group_size: int = 1
     preferred_date: str = ""
     flight_option: str = ""
@@ -93,6 +97,8 @@ class SessionState:
     lead_status: str = ""
     booking_status: str = ""
     handoff_state: str = ""
+    booking_completed: bool = False
+    previous_booking_result: dict[str, Any] = field(default_factory=dict)
     booking_confirmation_requested: bool = False
     booking_confirmed: bool = False
     # Passport fields (populated for international trips)
@@ -125,7 +131,7 @@ class SessionFlowManager:
     ) -> None:
         self._sessions: dict[str, SessionState] = {}
         self.human_handoff_phone = human_handoff_phone
-        self.agent_persona_name = agent_persona_name or "Rahvel Agent"
+        self.agent_persona_name = agent_persona_name or "Ravel Agent"
         self.website_url = website_url
         self.post_trip_handoff_enabled = post_trip_handoff_enabled
         self.handoff_keywords = [part.strip().lower() for part in str(handoff_keywords or "").split(",") if part.strip()]
@@ -143,6 +149,15 @@ class SessionFlowManager:
         digits = re.sub(r"\D", "", phone or "")
         return bool(re.fullmatch(r"0?(10|11|12|15)\d{8}", digits))
 
+    @staticmethod
+    def _invalid_phone_prompt(*, arabic: bool = False) -> str:
+        return (
+            "من فضلك أرسل رقم واتساب صحيح.\n"
+            "يجب أن يكون رقم موبايل حقيقي وبصيغة مناسبة لبلده، مثل +201012345678 أو +966512345678."
+            if arabic
+            else "Please send a valid WhatsApp number. It should be a real mobile number in a valid country format, for example +201012345678 or +966512345678."
+        )
+
     def create_session(self, gateway=None) -> SessionState:
         session = SessionState(id=uuid.uuid4().hex)
         self._active_session = session
@@ -153,8 +168,8 @@ class SessionFlowManager:
                 "text": self._copy_text(
                     gateway,
                     "session.ask_phone_first",
-                    f"Hello. I am {self.agent_persona_name}, Rahma Traveler's sales agent. "
-                    "Please share your WhatsApp number so I can check your profile safely.",
+                    f"Hello. I am {self.agent_persona_name}, Ravel Traveler's sales agent. "
+                    "Please share a valid WhatsApp number so I can check your profile safely.",
                     language=session.language,
                     agent_name=self.agent_persona_name,
                 ),
@@ -170,6 +185,85 @@ class SessionFlowManager:
         if session.stage != stage:
             session.previous_stage = session.stage
             session.stage = stage
+
+    @staticmethod
+    def _is_post_booking_booking_intent(text: str) -> bool:
+        lowered = " ".join(str(text or "").strip().casefold().split())
+        return any(term in lowered for term in (
+            "\u0639\u0627\u064a\u0632 \u0627\u062d\u062c\u0632",
+            "\u0639\u0627\u064a\u0632 \u0623\u062d\u062c\u0632",
+            "\u062d\u062c\u0632 \u062c\u062f\u064a\u062f",
+            "\u062d\u062c\u0632 \u062a\u0627\u0646\u064a",
+            "\u0631\u062d\u0644\u0629 \u062a\u0627\u0646\u064a\u0629",
+            "i want to book",
+            "book again",
+            "another booking",
+            "start a new booking",
+            "another trip",
+        ))
+
+    @staticmethod
+    def _is_post_booking_status_intent(text: str) -> bool:
+        lowered = " ".join(str(text or "").strip().casefold().split())
+        return any(term in lowered for term in (
+            "\u062d\u0627\u0644\u0629 \u0627\u0644\u062d\u062c\u0632",
+            "\u062d\u062c\u0632\u064a",
+            "\u0627\u062a\u0633\u062c\u0644",
+            "booking status",
+            "was my booking created",
+        ))
+
+    @staticmethod
+    def _is_post_booking_ack(text: str) -> bool:
+        normalized = " ".join(str(text or "").strip().casefold().split())
+        return normalized in {"\u062a\u0645\u0627\u0645", "\u0645\u0627\u0634\u064a", "\u0627\u0648\u0643\u064a", "\u0634\u0643\u0631\u0627", "ok", "okay", "thanks", "thank you", "understood"}
+
+    @staticmethod
+    def _is_post_booking_unclear_negative(text: str) -> bool:
+        normalized = " ".join(str(text or "").strip().casefold().split())
+        return normalized in {"\u0644\u0627", "\u0645\u0641\u064a\u0634", "no", "nothing"}
+
+    def _reset_for_new_booking_after_completion(self, session: SessionState) -> None:
+        if isinstance(session.booking_result, dict) and session.booking_result:
+            session.previous_booking_result = dict(session.booking_result)
+        session.trip_type = ""
+        session.trip_query = ""
+        session.selected_trip_id = ""
+        session.selected_trip_name = ""
+        self._clear_booking_dependent_state(session)
+        self._set_stage(session, "new_booking_intent")
+
+    def _handle_post_booking_message(self, session: SessionState, text: str) -> bool:
+        if session.stage not in {"completed", "booking_created", "handoff_created", "post_booking_support", "new_booking_intent"} and not session.booking_completed:
+            return False
+        if self._is_post_booking_status_intent(text):
+            booking = session.booking_result if isinstance(session.booking_result, dict) else {}
+            booking_id = str(booking.get("booking_id") or "booking").strip()
+            status = str(booking.get("booking_status") or session.booking_status or "Draft").strip()
+            reply = (
+                f"\u0623\u064a\u0648\u0647\u060c {booking_id} \u0645\u062a\u0633\u062c\u0644 \u0648\u062d\u0627\u0644\u062a\u0647 {status}. \u0641\u0631\u064a\u0642 Ravel \u0647\u064a\u062a\u0648\u0627\u0635\u0644 \u0645\u0639\u0627\u0643."
+                if session.language.startswith("ar")
+                else f"Yes, {booking_id} is created and its status is {status}. The Ravel team will follow up with you."
+            )
+        elif self._is_post_booking_ack(text):
+            reply = "\u062a\u0645\u0627\u0645\u060c \u0623\u0646\u0627 \u0645\u0639\u0627\u0643 \u0644\u0648 \u0627\u062d\u062a\u062c\u062a \u0623\u064a \u0645\u0633\u0627\u0639\u062f\u0629." if session.language.startswith("ar") else "All good. I’m here if you need anything else."
+        elif self._is_post_booking_unclear_negative(text):
+            reply = "\u0647\u0644 \u062a\u0642\u0635\u062f \u0623\u0646\u0643 \u0644\u0627 \u062a\u0631\u064a\u062f \u0628\u062f\u0621 \u062d\u062c\u0632 \u062c\u062f\u064a\u062f\u061f" if session.language.startswith("ar") else "Do you mean you don’t want to start a new booking?"
+        elif self._is_post_booking_booking_intent(text):
+            explicit_new = any(term in " ".join(str(text or "").casefold().split()) for term in ("\u062a\u0627\u0646\u064a", "\u062c\u062f\u064a\u062f", "again", "another", "new"))
+            if explicit_new:
+                self._reset_for_new_booking_after_completion(session)
+                reply = "\u0628\u0627\u0644\u062a\u0623\u0643\u064a\u062f\u060c \u064a\u0645\u0643\u0646\u0646\u0627 \u0628\u062f\u0621 \u062d\u062c\u0632 \u062c\u062f\u064a\u062f. \u0647\u0644 \u062a\u0631\u064a\u062f \u0627\u0644\u062d\u062c\u0632 \u0641\u064a \u0646\u0641\u0633 \u0627\u0644\u0631\u062d\u0644\u0629 \u0623\u0645 \u062a\u0628\u062d\u062b \u0639\u0646 \u0631\u062d\u0644\u0629 \u0623\u062e\u0631\u0649\u061f" if session.language.startswith("ar") else "Of course. We can start a new booking. Would you like the same trip, or are you looking for another trip?"
+            else:
+                self._set_stage(session, "post_booking_support")
+                reply = "\u0647\u0644 \u062a\u0631\u064a\u062f \u0628\u062f\u0621 \u062d\u062c\u0632 \u062c\u062f\u064a\u062f\u060c \u0623\u0645 \u062a\u0631\u064a\u062f \u0645\u062a\u0627\u0628\u0639\u0629 \u0627\u0644\u062d\u062c\u0632 \u0627\u0644\u062d\u0627\u0644\u064a\u061f" if session.language.startswith("ar") else "Do you want to start a new booking, or follow up on the current booking?"
+        else:
+            return False
+        session.booking_completed = True
+        if session.stage not in {"new_booking_intent"}:
+            self._set_stage(session, "post_booking_support")
+        session.messages.append({"role": "assistant", "text": reply})
+        return True
 
     def submit_intake(self, session: SessionState, payload: dict[str, Any], gateway) -> SessionState:
         self._active_session = session
@@ -197,7 +291,8 @@ class SessionFlowManager:
             return session
 
         full_name = str(payload.get("fullName", "")).strip()
-        birthday = str(payload.get("birthday", "")).strip()
+        raw_birthday = str(payload.get("birthday", "")).strip()
+        birthday = normalize_birthdate_input(raw_birthday) if raw_birthday else ""
         gender = str(payload.get("gender", "")).strip()
         nationality = str(payload.get("nationality", "")).strip()
         raw_phone = str(payload.get("rawPhone", "")).strip() or session.raw_phone
@@ -208,7 +303,7 @@ class SessionFlowManager:
             label
             for label, value in {
                 "full name": full_name,
-                "birthday": birthday,
+                "birthday": raw_birthday,
                 "gender": gender,
                 "nationality": nationality,
                 "WhatsApp number": raw_phone,
@@ -217,6 +312,14 @@ class SessionFlowManager:
         ]
         if missing:
             session.messages.append({"role": "assistant", "text": f"Please complete: {', '.join(missing)}."})
+            return session
+        if raw_birthday and not birthday:
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "text": "Please enter a valid date of birth, for example 21/08/1995, 1995-08-21, or 21 Aug 1995.",
+                }
+            )
             return session
 
         session.customer_name = full_name
@@ -232,6 +335,14 @@ class SessionFlowManager:
             country_code or self.default_country_code,
             default_country_is_explicit=explicit_local,
         )
+        if not parsed.is_valid:
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "text": self._invalid_phone_prompt(arabic=language.startswith("ar")),
+                }
+            )
+            return session
         if not country_code and parsed.requires_country_confirmation:
             session.messages.append({"role": "assistant", "text": "Please confirm the country code for this WhatsApp number before I continue."})
             self._set_stage(session, "awaiting_country_code")
@@ -316,11 +427,18 @@ class SessionFlowManager:
 
         session.messages.append({"role": "user", "text": clean_text})
 
+        if self._handle_post_booking_message(session, clean_text):
+            return session
         if session.stage == "completed":
+            self._set_stage(session, "post_booking_support")
             session.messages.append(
                 {
                     "role": "assistant",
-                    "text": self._copy_text(gateway, "session.completed", "This session is already completed. Start a new session to continue.", language=session.language),
+                    "text": (
+                        "\u0627\u0644\u062d\u062c\u0632 \u0627\u0644\u0633\u0627\u0628\u0642 \u0645\u062d\u0641\u0648\u0638. \u0647\u0644 \u062a\u0631\u064a\u062f \u0628\u062f\u0621 \u062d\u062c\u0632 \u062c\u062f\u064a\u062f \u0623\u0645 \u0645\u062a\u0627\u0628\u0639\u0629 \u0627\u0644\u062d\u062c\u0632 \u0627\u0644\u062d\u0627\u0644\u064a\u061f"
+                        if session.language.startswith("ar")
+                        else "The previous booking is saved. Do you want to start a new booking, or follow up on the current booking?"
+                    ),
                 }
             )
             return session
@@ -336,6 +454,9 @@ class SessionFlowManager:
                     ),
                 }
             )
+            return session
+
+        if self._handle_navigation_intent(session, clean_text, gateway):
             return session
 
         # --- Website intent detection (works in any stage) ---
@@ -394,6 +515,15 @@ class SessionFlowManager:
             )
             session.raw_phone = clean_text
             session.phone_normalization = detected.to_dict()
+            if not detected.is_valid:
+                session.pending_raw_phone = ""
+                session.messages.append(
+                    {
+                        "role": "assistant",
+                        "text": self._invalid_phone_prompt(arabic=session.language.startswith("ar")),
+                    }
+                )
+                return session
             if detected.requires_country_confirmation:
                 session.pending_raw_phone = clean_text
                 self._set_stage(session, "awaiting_country_code")
@@ -486,7 +616,7 @@ class SessionFlowManager:
                         "text": self._copy_text(
                             gateway,
                             "session.explain_country_code",
-                            "I need the country code for the WhatsApp number so I can format it correctly in the CRM. For example, Egypt is 20 and Saudi Arabia is 966. Please send only the code.",
+                            "I need the country code for the WhatsApp number so I can format it correctly. For example, Egypt is 20 and Saudi Arabia is 966. Please send only the code.",
                             language=session.language,
                         ),
                     }
@@ -510,6 +640,17 @@ class SessionFlowManager:
 
             source_phone = session.pending_raw_phone or session.raw_phone
             detected = normalize_phone_input(source_phone, confirmed, default_country_is_explicit=True)
+            if not detected.is_valid:
+                session.pending_raw_phone = ""
+                session.raw_phone = ""
+                self._set_stage(session, "awaiting_phone")
+                session.messages.append(
+                    {
+                        "role": "assistant",
+                        "text": self._invalid_phone_prompt(arabic=session.language.startswith("ar")),
+                    }
+                )
+                return session
             if detected.requires_country_confirmation and not detected.normalized_e164:
                 session.messages.append(
                     {
@@ -590,10 +731,18 @@ class SessionFlowManager:
 
         if session.stage == "awaiting_passport_upload":
             lowered = clean_text.lower()
+            changed_flight = self._flight_option_from_text(clean_text)
+            if changed_flight:
+                session.flight_option = changed_flight
+                self._clear_passport_state(session)
+                return self._advance_after_flight_decision(session, gateway)
+            if not self._passport_required_for_session(session):
+                self._clear_passport_state(session)
+                return self._advance_after_flight_decision(session, gateway)
             if session.passport_attachment_ref and lowered in {"done", "continue", "uploaded", "sent", "تمام", "جاهز", "next", "ok", "okay"}:
                 # Passport collection complete — proceed to room type
-                self._set_stage(session, "awaiting_room_type")
-                session.messages.append({"role": "assistant", "text": self._room_type_prompt(gateway, session)})
+                self._set_stage(session, "awaiting_currency")
+                session.messages.append({"role": "assistant", "text": self._currency_prompt(gateway, session.language)})
             else:
                 session.messages.append(
                     {
@@ -601,7 +750,7 @@ class SessionFlowManager:
                         "text": self._copy_text(
                             gateway,
                             "session.passport_upload_pending",
-                            "I still need the passport as an attachment for this international trip. Please upload the file using the attachment button, then type 'done' so I can continue.",
+                            "I still need the passport as an attachment for this trip. Please upload the file using the attachment button, then type 'done' so I can continue.",
                             language=session.language,
                         ),
                     }
@@ -693,14 +842,18 @@ class SessionFlowManager:
                     opts = " / ".join(f"{i+1}. {r}" for i, r in enumerate(available))
                     text = f"{room} is not available for this trip. Available options: {opts}."
                 else:
-                    text = "There is no remaining draftable room capacity for this trip. I will keep this as a follow-up for the sales team."
+                    text = "Accommodation is currently unavailable for this trip. I will keep this as a follow-up for the sales team."
                 session.room_type = ""
                 session.room_group = ""
+                session.room_requirements = {}
                 session.messages.append({"role": "assistant", "text": text})
                 return session
 
             session.room_type = room
             session.room_group = room_group
+            if not self._trip_supports_flights(self._selected_trip(session)):
+                session.flight_option = "Not Applicable"
+                return self._advance_after_flight_decision(session, gateway)
             self._set_stage(session, "awaiting_flight")
             session.messages.append(
                 {
@@ -721,19 +874,7 @@ class SessionFlowManager:
             else:
                 session.flight_option = "Without Flight"
 
-            self._set_stage(session, "awaiting_currency")
-            session.messages.append(
-                {
-                    "role": "assistant",
-                    "text": self._copy_text(
-                        gateway,
-                        "session.ask_currency",
-                        "What is your preferred currency for payment?\n1. EGP\n2. USD",
-                        language=session.language,
-                    ),
-                }
-            )
-            return session
+            return self._advance_after_flight_decision(session, gateway)
 
         if session.stage == "awaiting_currency":
             curr = clean_text.upper()
@@ -767,7 +908,7 @@ class SessionFlowManager:
                 session.handoff_state = "cancelled"
                 return session
 
-            if session.trip_type == "international" and not session.passport_attachment_ref:
+            if self._passport_required_for_session(session) and not session.passport_attachment_ref:
                 self._set_stage(session, "awaiting_passport_upload")
                 session.messages.append(
                     {
@@ -775,7 +916,7 @@ class SessionFlowManager:
                         "text": self._copy_text(
                             gateway,
                             "session.passport_upload_pending",
-                            "I still need the passport as an attachment for this international trip. Please upload the file using the attachment button, then type 'done' so I can continue.",
+                            "I still need the passport as an attachment for this trip. Please upload the file using the attachment button, then type 'done' so I can continue.",
                             language=session.language,
                         ),
                     }
@@ -785,13 +926,15 @@ class SessionFlowManager:
             room_choice_label = self._room_choice_label(session.room_type, session.room_group)
             agent_logger.info(f"Finalizing booking: traveler={session.customer_name}, trip={trip_id}, room={room_choice_label}, flight={session.flight_option}, currency={session.currency}")
 
-            passport_required = session.trip_type == 'international'
-            passport_status = 'provided' if session.passport_attachment_ref else ('pending' if passport_required else '')
+            passport_required = self._passport_required_for_session(session)
+            passport_status = 'uploaded' if session.passport_attachment_ref else ('pending' if passport_required else '')
             booking = gateway.create_booking(
                 traveler_id=(session.final_result.get("traveler") or {}).get("traveler_id", "TBD"),
                 traveler_name=session.customer_name,
                 trip_id=trip_id,
                 room_type=session.room_type,
+                room_group=session.room_group,
+                room_requirements=session.room_requirements,
                 flight_option=session.flight_option,
                 currency=session.currency,
                 channel="web-demo",
@@ -808,7 +951,8 @@ class SessionFlowManager:
             session.booking_result = booking
             session.booking_status = str(booking.get("booking_status") or "Draft")
             session.handoff_state = "completed"
-            self._set_stage(session, "completed")
+            session.booking_completed = True
+            self._set_stage(session, "post_booking_support")
 
             booking_id = (booking.get("write_result") or {}).get("booking_draft", {}).get("booking_id", "NEW")
             booking_status = booking.get("booking_status") or "Draft"
@@ -940,12 +1084,30 @@ class SessionFlowManager:
 
     def _handle_trip_confirmation(self, session: SessionState, clean_text: str, gateway) -> SessionState:
         if self._is_negative_confirmation(clean_text):
-            self._set_stage(session, "cancelled")
-            session.handoff_state = "cancelled"
+            self._set_stage(session, "awaiting_confirmation")
             session.messages.append(
                 {
                     "role": "assistant",
-                    "text": "No lead was written. The customer can be added to waitlist follow-up in the next automation phase.",
+                    "text": self._copy_text(
+                        gateway,
+                        "session.trip_rejected",
+                        "No problem. I will not continue with that trip. If you want another option, tell me the destination, date, or trip name you are interested in.",
+                        language=session.language,
+                    ),
+                }
+            )
+            return session
+
+        if self._is_explanation_or_need_request(clean_text):
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "text": self._copy_text(
+                        gateway,
+                        "session.explain_trip_selection_needed",
+                        "I only need you to choose one of the listed trips by number or name. If none of those trips works for you, tell me what destination, date, or budget you prefer.",
+                        language=session.language,
+                    ),
                 }
             )
             return session
@@ -968,6 +1130,7 @@ class SessionFlowManager:
 
         session.selected_trip_id = selected_trip["trip_id"]
         session.selected_trip_name = selected_trip["trip_name"]
+        self._clear_booking_dependent_state(session)
 
         result = gateway.run_sales_cycle(
             full_name=session.customer_name,
@@ -984,23 +1147,6 @@ class SessionFlowManager:
         )
         session.final_result = result
         session.lead_status = str(((result.get("write_result") or {}).get("lead_update") or {}).get("lead_stage") or "")
-
-        if session.trip_type == "international":
-            self._set_stage(session, "awaiting_passport_upload")
-            session._passport_step = "attachment"
-            session.messages.append(
-                {
-                    "role": "assistant",
-                    "text": self._copy_text(
-                        gateway,
-                        "session.ask_passport_upload",
-                        "For international trips, please send a clear passport photo or PDF using the attachment button. "
-                        "Once it is uploaded, type 'done' and I will continue.",
-                        language=session.language,
-                    ),
-                }
-            )
-            return session
 
         self._set_stage(session, "awaiting_room_type")
         session.messages.append(
@@ -1044,11 +1190,258 @@ class SessionFlowManager:
         return None
 
     @staticmethod
+    def _is_explanation_or_need_request(text: str) -> bool:
+        normalized = SessionFlowManager._normalize_choice_text(text)
+        return normalized in {
+            "whatdouneed",
+            "whatdoyouneed",
+            "whatneed",
+            "whatdouwant",
+            "whatdoyouwant",
+            "what",
+            "why",
+            "help",
+            "explain",
+            "مش فاهم",
+            "مش فاهمة",
+            "محتاجايه",
+            "محتاجاية",
+            "عايزايه",
+            "ايهالمطلوب",
+        } or any(
+            phrase in str(text or "").strip().casefold()
+            for phrase in (
+                "what do u need",
+                "what do you need",
+                "what do u want",
+                "what do you want",
+                "what should i",
+                "what next",
+            )
+        )
+
+    @staticmethod
     def _offered_trips(session: SessionState) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         trip_result = ((session.preview or {}).get("trip_result") or {}) if isinstance(session.preview, dict) else {}
         open_trips = list(trip_result.get("open_trips") or [])
         date_tbd = list(trip_result.get("date_tbd_trips") or [])
         return open_trips, date_tbd, open_trips + date_tbd
+
+    def _handle_navigation_intent(self, session: SessionState, text: str, gateway) -> bool:
+        if self._is_start_over_intent(text):
+            self._reset_booking_state(session)
+            self._set_stage(session, "awaiting_trip_type")
+            session.messages.append({"role": "assistant", "text": self._trip_type_prompt(gateway, session.language)})
+            return True
+        if self._is_cancel_intent(text):
+            self._reset_booking_state(session)
+            session.handoff_state = "cancelled"
+            self._set_stage(session, "cancelled")
+            session.messages.append({"role": "assistant", "text": "No problem. I cancelled this booking flow. You can start a new request whenever you are ready."})
+            return True
+
+        changed_flight = self._flight_option_from_text(text)
+        if changed_flight and session.stage in {"awaiting_passport_upload", "awaiting_currency", "awaiting_flight"}:
+            session.flight_option = changed_flight
+            self._clear_passport_state(session)
+            return self._advance_after_flight_decision(session, gateway)
+
+        if not self._is_back_intent(text):
+            return False
+        if session.stage == "awaiting_passport_upload":
+            self._clear_passport_state(session)
+            if self._trip_supports_flights(self._selected_trip(session)):
+                session.flight_option = ""
+                self._set_stage(session, "awaiting_flight")
+                session.messages.append({"role": "assistant", "text": self._flight_prompt(gateway, session.language)})
+            else:
+                self._set_stage(session, "awaiting_room_type")
+                session.messages.append({"role": "assistant", "text": self._room_type_prompt(gateway, session)})
+            return True
+        if session.stage == "awaiting_currency":
+            session.currency = ""
+            if self._trip_supports_flights(self._selected_trip(session)):
+                session.flight_option = ""
+                self._set_stage(session, "awaiting_flight")
+                session.messages.append({"role": "assistant", "text": self._flight_prompt(gateway, session.language)})
+            else:
+                self._set_stage(session, "awaiting_room_type")
+                session.messages.append({"role": "assistant", "text": self._room_type_prompt(gateway, session)})
+            return True
+        if session.stage == "awaiting_flight":
+            session.flight_option = ""
+            session.room_type = ""
+            session.room_group = ""
+            session.room_requirements = {}
+            self._set_stage(session, "awaiting_room_type")
+            session.messages.append({"role": "assistant", "text": self._room_type_prompt(gateway, session)})
+            return True
+        if session.stage == "awaiting_room_type":
+            session.room_type = ""
+            session.room_group = ""
+            session.room_requirements = {}
+            self._set_stage(session, "awaiting_confirmation")
+            session.messages.append({"role": "assistant", "text": "Sure. Please choose the trip again by its number or name."})
+            return True
+        return False
+
+    @staticmethod
+    def _is_back_intent(text: str) -> bool:
+        normalized = SessionFlowManager._normalize_choice_text(text)
+        return normalized in {
+            "back",
+            "goback",
+            "previous",
+            "changemychoice",
+            "changechoice",
+            "changeanswer",
+            "رجوع",
+            "ارجع",
+            "السابق",
+            "غيراختياري",
+        }
+
+    @staticmethod
+    def _is_cancel_intent(text: str) -> bool:
+        normalized = SessionFlowManager._normalize_choice_text(text)
+        return normalized in {"cancel", "stop", "end", "nevermind", "لا", "الغاء", "إلغاء", "وقف"}
+
+    @staticmethod
+    def _is_start_over_intent(text: str) -> bool:
+        normalized = SessionFlowManager._normalize_choice_text(text)
+        return normalized in {"startover", "restart", "startagain", "newrequest", "ابدأمنجديد", "منالأول"}
+
+    @staticmethod
+    def _flight_option_from_text(text: str) -> str:
+        normalized = " ".join(str(text or "").strip().casefold().split())
+        compact = SessionFlowManager._normalize_choice_text(text)
+        without_terms = {
+            "withoutflight",
+            "withoutflights",
+            "noflight",
+            "noflights",
+            "idontwantaflight",
+            "idontwantflight",
+            "donotwantaflight",
+            "donotwantflight",
+            "بدونطيران",
+            "منغيرطيران",
+            "مشعايزطيران",
+            "مشعايزةطيران",
+        }
+        with_terms = {
+            "withflight",
+            "withflights",
+            "iwantaflight",
+            "iwantflight",
+            "flightinstead",
+            "withflightinstead",
+            "معطيران",
+            "عايزطيران",
+            "عايزةطيران",
+        }
+        if compact in without_terms or "without flight" in normalized or "no flight" in normalized or "do not want a flight" in normalized or "do not want flight" in normalized:
+            return "Without Flight"
+        if compact in with_terms or "with flight" in normalized:
+            return "With Flight"
+        return ""
+
+    def _advance_after_flight_decision(self, session: SessionState, gateway) -> SessionState:
+        if self._passport_required_for_session(session) and not session.passport_attachment_ref:
+            self._set_stage(session, "awaiting_passport_upload")
+            session._passport_step = "attachment"
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "text": self._copy_text(
+                        gateway,
+                        "session.ask_passport_upload",
+                        "Please send a clear passport photo or PDF using the attachment button. Once it is uploaded, type 'done' and I will continue.",
+                        language=session.language,
+                    ),
+                }
+            )
+            return session
+        self._set_stage(session, "awaiting_currency")
+        session.messages.append({"role": "assistant", "text": self._currency_prompt(gateway, session.language)})
+        return session
+
+    def _currency_prompt(self, gateway, language: str) -> str:
+        return self._copy_text(
+            gateway,
+            "session.ask_currency",
+            "What is your preferred currency for payment?\n1. EGP\n2. USD",
+            language=language,
+        )
+
+    def _flight_prompt(self, gateway, language: str) -> str:
+        return self._copy_text(
+            gateway,
+            "session.ask_flight",
+            "Most of our trips are offered without flights by default. Would you like me to note a flight request for this booking?\n1. Yes\n2. No",
+            language=language,
+        )
+
+    def _passport_required_for_session(self, session: SessionState) -> bool:
+        trip = self._selected_trip(session) or {}
+        for key in ("passport_required", "requires_passport"):
+            if key in trip:
+                return self._as_bool(trip.get(key))
+        if "passport_required_with_flight" in trip:
+            return session.flight_option == "With Flight" and self._as_bool(trip.get("passport_required_with_flight"))
+        trip_type = str(trip.get("type") or trip.get("trip_type") or session.trip_type or "").strip().lower()
+        return trip_type == "international"
+
+    @classmethod
+    def _trip_supports_flights(cls, trip: dict[str, Any] | None) -> bool:
+        trip = dict(trip or {})
+        for key in ("supports_flights", "flights_supported", "flight_supported", "flight_available", "customer_can_request_flights"):
+            if key in trip:
+                return cls._as_bool(trip.get(key))
+        policy = trip.get("flight_policy") if isinstance(trip.get("flight_policy"), dict) else {}
+        mode = str(policy.get("mode") or "").strip().lower()
+        if mode in {"not_supported", "no_flights", "without_flights_only"}:
+            return False
+        if "customer_can_request_flights" in policy:
+            return cls._as_bool(policy.get("customer_can_request_flights"))
+        return True
+
+    @staticmethod
+    def _as_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        return str(value or "").strip().casefold() in {"1", "true", "yes", "y", "supported", "available"}
+
+    @staticmethod
+    def _clear_passport_state(session: SessionState) -> None:
+        session.passport_name = ""
+        session.passport_number = ""
+        session.passport_expiry = ""
+        session.passport_nationality = ""
+        session.passport_attachment_ref = ""
+        session._passport_step = ""
+
+    def _clear_booking_dependent_state(self, session: SessionState) -> None:
+        session.room_type = ""
+        session.room_group = ""
+        session.room_requirements = {}
+        session.group_size = 1
+        session.flight_option = ""
+        session.currency = ""
+        session.booking_confirmation_requested = False
+        session.booking_confirmed = False
+        self._clear_passport_state(session)
+
+    def _reset_booking_state(self, session: SessionState) -> None:
+        session.trip_type = ""
+        session.preview = None
+        session.final_result = None
+        session.booking_result = None
+        session.selected_trip_id = ""
+        session.selected_trip_name = ""
+        self._clear_booking_dependent_state(session)
 
     # ---------------------------------------------------------------------------
     # Public helpers
@@ -1056,8 +1449,20 @@ class SessionFlowManager:
 
     def handle_passport_attachment(self, session: SessionState, attachment_ref: str) -> None:
         """Record an uploaded passport attachment reference on the session."""
-        session.passport_attachment_ref = attachment_ref
-        agent_logger.info(f"Session {session.id}: passport attachment recorded -> {attachment_ref}")
+        ref = str(attachment_ref or "").strip()
+        if session.stage != "awaiting_passport_upload" or not self._passport_required_for_session(session):
+            agent_logger.warning("Session %s: ignored passport attachment outside required passport step", session.id)
+            return
+        if not self._allowed_passport_attachment_ref(ref):
+            agent_logger.warning("Session %s: ignored unsupported passport attachment -> %s", session.id, ref)
+            return
+        session.passport_attachment_ref = ref
+        agent_logger.info(f"Session {session.id}: passport attachment uploaded pending review -> {ref}")
+
+    @staticmethod
+    def _allowed_passport_attachment_ref(attachment_ref: str) -> bool:
+        lowered = str(attachment_ref or "").strip().lower()
+        return lowered.endswith((".jpg", ".jpeg", ".png", ".webp", ".pdf"))
 
     # ---------------------------------------------------------------------------
     # Internal helpers
@@ -1090,7 +1495,7 @@ class SessionFlowManager:
             return self._copy_text(
                 gateway,
                 "handoff.phone_name_conflict",
-                "This WhatsApp number already exists for another traveler name in the CRM. I paused automation so the sales team can review it safely.",
+                "This WhatsApp number already exists for another traveler name. I paused the automated flow so the sales team can review it safely.",
                 language=language,
             )
         if reason == "blacklisted_customer":
@@ -1104,7 +1509,7 @@ class SessionFlowManager:
             return self._copy_text(
                 gateway,
                 "handoff.duplicate_phone_match",
-                "This phone number is linked to multiple traveler profiles in our CRM. I have paused automation to ensure your record is updated correctly.",
+                "This phone number is linked to multiple traveler profiles. I have paused the automated flow so the team can update the right record.",
                 language=language,
             )
 
@@ -1201,7 +1606,7 @@ class SessionFlowManager:
     def _trip_type_prompt(self, gateway, language: str, *, existing_traveler: bool = False) -> str:
         if existing_traveler:
             fallback = (
-                "I found your traveler profile in the CRM. "
+                "I found your traveler profile. "
                 "Is this inquiry for a local trip or an international trip?\n1. Local\n2. International"
             )
         else:
@@ -1219,11 +1624,10 @@ class SessionFlowManager:
             return self._copy_text(
                 gateway,
                 "session.profile_found_generic",
-                "I found your traveler profile in the CRM.",
+                "I found your traveler profile.",
                 language=language,
             )
 
-        traveler_id = str(traveler.get("traveler_id") or "").strip() or "unknown ID"
         full_name = str(traveler.get("full_name") or "").strip() or "existing traveler"
         status = str(traveler.get("status") or "").strip() or "Active"
         local_trips = int(traveler.get("local_trips_count") or 0)
@@ -1236,15 +1640,13 @@ class SessionFlowManager:
             gateway,
             "session.profile_found_existing",
             (
-                "I found your traveler profile in the CRM:\n"
+                "I found your traveler profile:\n"
                 "Name: {full_name}\n"
-                "Traveler ID: {traveler_id}\n"
                 "Status: {status}\n"
                 "History: {local_trips} local, {international_trips} international, {total_trips} total{vip_tail}"
             ),
             language=language,
             full_name=full_name,
-            traveler_id=traveler_id,
             status=status,
             local_trips=local_trips,
             international_trips=international_trips,
@@ -1300,7 +1702,7 @@ class SessionFlowManager:
                             "room_type": room_type,
                             "room_group": "boys",
                             "reply": f"{room_type.lower()} boys room",
-                            "label": f"{room_type} boys room ({boys} available)",
+                            "label": f"{room_type} boys room",
                         }
                     )
                 if girls > 0:
@@ -1309,7 +1711,7 @@ class SessionFlowManager:
                             "room_type": room_type,
                             "room_group": "girls",
                             "reply": f"{room_type.lower()} girls room",
-                            "label": f"{room_type} girls room ({girls} available)",
+                            "label": f"{room_type} girls room",
                         }
                     )
             else:
@@ -1579,6 +1981,7 @@ class SessionFlowManager:
         text = re.sub(r"\{[a-zA-Z0-9_]+\}", "", text or "")
         text = " ".join(str(text or "").split())
         text = self._maybe_rewrite_with_ai(message_key, text, language)
+        text = sanitize_traveler_reply(text)
         agent_logger.debug(f"Resolved copy: {message_key} [{language}] -> {text}")
         agent_logger.info(f"OUTGOING: {text}")
         return text
@@ -1616,7 +2019,7 @@ class SessionFlowManager:
                     "currency": session.currency,
                     "booking_status": session.booking_status,
                     "has_passport_attachment": bool(session.passport_attachment_ref),
-                    "passport_required": session.trip_type == "international",
+                    "passport_required": self._passport_required_for_session(session),
                     "customer_message_intent": self._classify_customer_message(self._active_user_text),
                     "persona_intent_repeat_count": session._persona_intent_repeat_count,
                     "conversation_history": session.messages[-12:],
@@ -1697,21 +2100,21 @@ class SessionFlowManager:
         if intent == "greeting":
             if repeat_count > 1:
                 return (
-                    f"I am here with you. I am {self.agent_persona_name} from Rahma Traveler. "
+                    f"I am here with you. I am {self.agent_persona_name} from Ravel Traveler. "
                     "Please send your WhatsApp number so I can open the right traveler profile."
                 )
             return (
-                f"Hi, I am {self.agent_persona_name}, Rahma Traveler's sales agent. "
+                f"Hi, I am {self.agent_persona_name}, Ravel Traveler's sales agent. "
                 "Please share your WhatsApp number so I can check your traveler profile safely."
             )
         if intent == "privacy_concern":
             if repeat_count > 1:
                 return (
-                    "I understand the concern. I only use the number to match the correct Rahma Traveler profile "
+                    "I understand the concern. I only use the number to match the correct Ravel Traveler profile "
                     "and avoid mixing your details with another traveler. Please send your WhatsApp number when ready."
                 )
             return (
-                "Your WhatsApp number is used only to check or create your Rahma Traveler profile safely. "
+                "Your WhatsApp number is used only to check or create your Ravel Traveler profile safely. "
                 "Please send the number so I can continue."
             )
         if intent == "clarification":
@@ -1721,7 +2124,7 @@ class SessionFlowManager:
                     "before we talk about trips or reservations. Please send your WhatsApp number."
                 )
             return (
-                "Of course. I ask for your WhatsApp number so I can find your Rahma Traveler profile safely "
+                "Of course. I ask for your WhatsApp number so I can find your Ravel Traveler profile safely "
                 "before checking trips or reservations. Please send the number when ready."
             )
         if intent == "negative":
@@ -1794,19 +2197,9 @@ class SessionFlowManager:
             top = open_trips[:3]
             trip_lines = []
             for i, item in enumerate(top, start=1):
-                remaining = item.get("remaining_places")
-                if remaining is None:
-                    availability = "remaining places not configured"
-                else:
-                    availability = f"{remaining} places remaining"
+                availability = "currently available"
                 price = item.get("public_price") or "price not set"
-                room_bits = []
-                if item.get("boys_double") is not None or item.get("girls_double") is not None:
-                    room_bits.append(f"double: boys {item.get('boys_double') or 0}, girls {item.get('girls_double') or 0}")
-                if item.get("boys_triple") is not None or item.get("girls_triple") is not None:
-                    room_bits.append(f"triple: boys {item.get('boys_triple') or 0}, girls {item.get('girls_triple') or 0}")
-                room_note = f", {'; '.join(room_bits)}" if room_bits else ""
-                trip_lines.append(f"{i}. {item['trip_name']} ({item['start_date']} to {item['end_date']}, {availability}, {price}{room_note})")
+                trip_lines.append(f"{i}. {item['trip_name']} ({item['start_date']} to {item['end_date']}, {availability}, {price})")
             return self._copy_text(
                 gateway,
                 "session.preview_open_trips",

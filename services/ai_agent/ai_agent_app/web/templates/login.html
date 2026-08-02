@@ -2,11 +2,12 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>Login | Rahma Traveler</title>
+    <title>Login | Nanovate</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='crm.css') }}">
     <style>
         body { display: flex; align-items: center; justify-content: center; height: 100vh; background: var(--bg-primary); }
-        .login-card { width: 400px; padding: 2.5rem; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        .login-card { width: 400px; padding: 2.5rem; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: none; }
+        .brand-logo { display:block; width:127px; height:auto; margin:0 auto 2rem; }
         .form-group { margin-bottom: 1.5rem; }
         .form-group label { display: block; margin-bottom: 0.5rem; }
         .form-control { width: 100%; padding: 0.75rem; background: var(--bg-accent); border: 1px solid var(--border-color); border-radius: 8px; color: #fff; font-family: inherit; }
@@ -15,7 +16,8 @@
 </head>
 <body>
     <div class="login-card animate-fade-in">
-        <h1 style="text-align: center; margin-bottom: 2rem;">CRM Login</h1>
+        <img class="brand-logo" src="{{ url_for('static', filename='nanovate-logo.svg') }}" alt="Nanovate">
+        <h1 style="text-align: center; margin-bottom: 2rem;">Nanovate Login</h1>
         <form method="POST">
             <div class="form-group">
                 <label class="label">Access Password</label>

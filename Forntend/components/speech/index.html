@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nanovate Speech Components</title>
+    <link rel="stylesheet" href="./speech.css">
+  </head>
+  <body>
+    <main class="nv-page">
+      <div class="nv-demo-shell">
+        <header class="nv-demo-header">
+          <div>
+            <h1>Speech Components</h1>
+            <p>Static TTS and STT forms, upload states, recent item cards, usage cards, and generation/transcript tables.</p>
+          </div>
+        </header>
+
+        <section class="nv-speech-layout">
+          <div class="nv-stack">
+            <section class="nv-form-panel">
+              <h2 class="nv-form-panel__title">Text to Speech</h2>
+              <label class="nv-field">
+                <span class="nv-label">Text</span>
+                <textarea class="nv-textarea">Welcome to Nanovate. This is a generated voice preview.</textarea>
+              </label>
+              <div class="nv-form-grid">
+                <label class="nv-field"><span class="nv-label">Language</span><span class="nv-select"><select class="nv-select-native"><option>English</option><option>Arabic</option></select></span></label>
+                <label class="nv-field"><span class="nv-label">Voice</span><span class="nv-select"><select class="nv-select-native"><option>Sarah</option><option>Adam</option></select></span></label>
+              </div>
+              <label class="nv-slider">
+                <span class="nv-slider__top"><span class="nv-label">Stability</span><span class="nv-slider__value">0.7</span></span>
+                <input type="range" min="0" max="1" step="0.1" value="0.7">
+              </label>
+              <button class="nv-button nv-button--cta-tertiary">Generate speech</button>
+              <div class="nv-audio-preview">
+                <button class="nv-audio-preview__play" aria-label="Play">P</button>
+                <div class="nv-agent-inline__meta">
+                  <p class="nv-agent-inline__name">Generated audio</p>
+                  <p class="nv-agent-inline__role">0:42 duration</p>
+                </div>
+              </div>
+            </section>
+
+            <section class="nv-table-shell">
+              <h2 class="nv-form-panel__title">TTS Generations</h2>
+              <table class="nv-speech-table">
+                <thead><tr><th>Language</th><th>Voice</th><th>Duration</th><th>Status</th></tr></thead>
+                <tbody>
+                  <tr><td>English</td><td>Sarah</td><td>0:42</td><td><span class="nv-badge nv-badge--green">Ready</span></td></tr>
+                  <tr><td>Arabic</td><td>Adam</td><td>1:08</td><td><span class="nv-badge nv-badge--yellow">Processing</span></td></tr>
+                </tbody>
+              </table>
+            </section>
+          </div>
+
+          <aside class="nv-stack">
+            <section class="nv-usage-card">
+              <h3 class="nv-usage-card__title">Usage This Month</h3>
+              <div class="nv-usage-card__usage-line"><span>Characters Used</span><span>64,000 / 100k</span></div>
+              <div class="nv-progress" style="--progress: 64%;"><div class="nv-progress__track"><div class="nv-progress__bar"></div></div></div>
+            </section>
+            <section class="nv-recent-card">
+              <h3 class="nv-recent-card__title">Recent Generations</h3>
+              <article class="nv-recent-item"><div class="nv-recent-item__row"><p class="nv-recent-item__title">English voice sample</p><button class="nv-button nv-button--text-secondary nv-button--sm">Actions</button></div><div class="nv-recent-item__row"><p class="nv-recent-item__meta">Sarah voice</p><p class="nv-recent-item__meta">0:42</p></div></article>
+            </section>
+          </aside>
+        </section>
+
+        <section class="nv-demo-section">
+          <h2>Speech to Text</h2>
+          <div class="nv-speech-layout">
+            <section class="nv-form-panel">
+              <h3 class="nv-form-panel__title">Upload Audio</h3>
+              <div class="nv-speech-dropzone" role="button" tabindex="0">
+                <span class="nv-speech-dropzone__icon">U</span>
+                <div><p class="nv-feature-card__title">Drop your audio file here</p><p class="nv-feature-card__subtitle">or click to browse from your computer</p></div>
+                <button class="nv-button nv-button--cta-secondary nv-button--sm">Choose File</button>
+              </div>
+              <button class="nv-button nv-button--cta-tertiary">Transcribe</button>
+              <div class="nv-result-box">
+                <p>The caller asked about available plans, onboarding time, and whether WhatsApp integration is supported.</p>
+              </div>
+            </section>
+
+            <section class="nv-recent-card">
+              <h3 class="nv-recent-card__title">Recent Transcripts</h3>
+              <article class="nv-recent-item"><div class="nv-recent-item__row"><p class="nv-recent-item__title">sales-call.wav</p><button class="nv-button nv-button--text-secondary nv-button--sm">Actions</button></div><p class="nv-recent-item__meta">Customer asked for pricing and onboarding details.</p></article>
+              <article class="nv-recent-item"><div class="nv-recent-item__row"><p class="nv-recent-item__title">support-note.mp3</p><button class="nv-button nv-button--text-secondary nv-button--sm">Actions</button></div><p class="nv-recent-item__meta">User reported a billing issue.</p></article>
+            </section>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

@@ -3,15 +3,15 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{% block title %}Rahma Traveler CRM{% endblock %}</title>
+    <title>{% block title %}Nanovate CRM{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='crm.css') }}">
-    <link rel="icon" type="image/png" href="{{ url_for('static', filename='logo.png') }}">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='nanovate-logo.svg') }}">
     {% block head %}{% endblock %}
 </head>
 <body>
     <div class="crm-shell">
         <aside class="crm-sidebar">
-            <h1>Rahma Traveler</h1>
+            <img class="crm-brand-logo" src="{{ url_for('static', filename='nanovate-logo.svg') }}" alt="Nanovate">
             
             <div style="margin-top: auto; padding-top: 1rem; border-top: 1px solid var(--border-color);">
                 <button onclick="handleReset()" class="btn btn-outline" style="width: 100%; text-align: left; display: flex; align-items: center;">

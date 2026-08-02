@@ -4,6 +4,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 import csv
 import io
+import shutil
 
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, Response, current_app, send_file, abort
 from werkzeug.utils import secure_filename
@@ -192,6 +193,38 @@ def _sync_traveler_sheet(traveler_id: str) -> None:
         UnifiedCRMService().sync_record_to_sheet("Travelers", traveler_id)
     except Exception:
         pass
+
+
+def _remove_sheet_record(mapping_name: str, record_id: str) -> None:
+    try:
+        UnifiedCRMService().remove_record_from_sheet(mapping_name, record_id)
+    except Exception:
+        pass
+
+
+def _delete_traveler_document_files(documents: list[TravelerDocument]) -> None:
+    docs_root = _documents_root().resolve()
+    for document in documents:
+        try:
+            storage_path = Path(document.storage_path)
+            if not storage_path.is_absolute():
+                storage_path = (_documents_root() / storage_path).resolve()
+            else:
+                storage_path = storage_path.resolve()
+            if docs_root not in storage_path.parents and storage_path != docs_root:
+                continue
+            if storage_path.exists():
+                storage_path.unlink()
+        except OSError:
+            continue
+
+
+def _delete_traveler_document_directory(traveler_id: str) -> None:
+    docs_root = _documents_root().resolve()
+    traveler_dir = (docs_root / traveler_id).resolve()
+    if docs_root not in traveler_dir.parents:
+        return
+    shutil.rmtree(traveler_dir, ignore_errors=True)
 
 
 @travelers_bp.route('/')
@@ -445,11 +478,37 @@ def update(traveler_id):
 @travelers_bp.route('/<traveler_id>', methods=['DELETE'])
 def delete(traveler_id):
     traveler = db.get_or_404(Traveler, traveler_id)
-    traveler.status = 'Inactive'
-    traveler.last_contacted_at = datetime.now(timezone.utc)
+    lead_ids = [row[0] for row in db.session.query(Lead.lead_id).filter(Lead.traveler_id == traveler_id).all() if row[0]]
+    interaction_ids = [row[0] for row in db.session.query(Interaction.interaction_id).filter(Interaction.traveler_id == traveler_id).all() if row[0]]
+    booking_ids = [row[0] for row in db.session.query(TripBooking.booking_id).filter(TripBooking.traveler_id == traveler_id).all() if row[0]]
+    documents = TravelerDocument.query.filter_by(traveler_id=traveler_id).all()
+
+    _delete_traveler_document_files(documents)
+    _delete_traveler_document_directory(traveler_id)
+
+    event_filters = [BookingEventTrail.traveler_id == traveler_id]
+    handoff_filters = [HandoffQueue.traveler_id == traveler_id]
+    if lead_ids:
+        event_filters.append(BookingEventTrail.lead_id.in_(lead_ids))
+        handoff_filters.append(HandoffQueue.lead_id.in_(lead_ids))
+    if interaction_ids:
+        event_filters.append(BookingEventTrail.interaction_id.in_(interaction_ids))
+    if booking_ids:
+        event_filters.append(BookingEventTrail.booking_id.in_(booking_ids))
+
+    BookingEventTrail.query.filter(or_(*event_filters)).delete(synchronize_session=False)
+    HandoffQueue.query.filter(or_(*handoff_filters)).delete(synchronize_session=False)
+    TripBooking.query.filter(TripBooking.traveler_id == traveler_id).delete(synchronize_session=False)
+    CEBooking.query.filter(CEBooking.traveler_id == traveler_id).delete(synchronize_session=False)
+    Interaction.query.filter(Interaction.traveler_id == traveler_id).delete(synchronize_session=False)
+    Lead.query.filter(Lead.traveler_id == traveler_id).delete(synchronize_session=False)
+    db.session.delete(traveler)
     db.session.commit()
-    _sync_traveler_sheet(traveler_id)
-    return jsonify({"status": "success", "message": "Traveler marked as Inactive"})
+
+    _remove_sheet_record("Travelers", traveler_id)
+    for lead_id in lead_ids:
+        _remove_sheet_record("Leads", lead_id)
+    return jsonify({"status": "success", "message": "Traveler deleted permanently"})
 
 @travelers_bp.route('/<traveler_id>/documents', methods=['POST'])
 def upload_document(traveler_id):

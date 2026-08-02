@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Textarea Atom</title>
+    <link rel="stylesheet" href="./atoms.css">
+  </head>
+  <body>
+    <main class="nv-page">
+      <section class="nv-demo-shell">
+        <header class="nv-demo-header">
+          <div>
+            <h1>Textarea</h1>
+            <p>Static version of `Textarea.tsx`, including label, description, and error states.</p>
+          </div>
+        </header>
+        <div class="nv-demo-grid">
+          <label class="nv-field">
+            <span class="nv-label">Instructions</span>
+            <span class="nv-help">Tell the agent how it should answer.</span>
+            <textarea class="nv-textarea">Answer customer questions using the approved knowledge base.</textarea>
+          </label>
+          <label class="nv-field nv-field--error">
+            <span class="nv-label">System prompt</span>
+            <textarea class="nv-textarea"></textarea>
+            <span class="nv-error">Prompt is required.</span>
+          </label>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

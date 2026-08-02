@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="/webchat.css">
+  </head>
+  <body>
+    <main class="nv-webchat-app">
+      <div class="nv-webchat-shell">
+        <header class="nv-webchat-header">
+          <img class="nv-webchat-logo" src="/assets/logo.svg" alt="Nanovate">
+          <nav class="nv-webchat-nav" aria-label="Nanovate sections">
+            <span>Home</span>
+            <span>About us</span>
+            <span>Contact us</span>
+          </nav>
+        </header>
+
+        <section class="nv-webchat-workspace">
+          <div class="nv-webchat-hero">
+            <h1>Visual Orchestration for AI and Automation</h1>
+            <p>Empower your team to innovate and scale with a real-time chat interface that simplifies building and managing AI-driven automations.</p>
+            <div class="nv-webchat-actions">
+              <a class="nv-webchat-button" href="#message">Start chatting</a>
+              <div class="nv-webchat-status" id="status">Ready</div>
+            </div>
+          </div>
+
+          <section class="nv-niva-panel nv-webchat-panel" aria-label="{{ title }} chat">
+            <header class="nv-niva-panel__header">
+              <div class="nv-webchat-brand">
+                <span class="nv-webchat-mark" aria-hidden="true">
+                  <svg viewBox="0 0 21 15" focusable="false">
+                    <path d="M9.35758 2.63323C9.65512 2.60757 9.95137 2.71156 10.1755 2.91549L14.0859 7.34513C14.1169 7.35053 14.171 7.25599 14.1916 7.23303C15.0056 6.3309 15.8467 5.44902 16.6736 4.55769C17.1115 4.08502 17.5469 3.55697 17.999 3.10456C19.4145 1.69058 21.5733 4.13769 20.481 5.46523L14.0859 12.1556L7.87506 5.3896C7.04685 4.33351 8.26404 2.73047 9.35758 2.63323Z" />
+                    <path d="M6.68618 5.18592C6.92318 5.3993 7.12411 5.65319 7.3405 5.88818C8.9982 7.6884 10.6572 9.48726 12.302 11.3023C12.8378 11.8925 13.3736 12.2477 13.1135 13.1809C12.8906 13.9844 11.9555 14.8555 11.1157 14.6921C10.7873 14.6286 10.6108 14.4355 10.3906 14.1978C9.16822 12.8703 8.02444 11.4549 6.81369 10.1139C6.79437 10.0923 6.7055 9.991 6.68618 9.9937C5.54241 11.2308 4.40894 12.4759 3.25872 13.7049C2.85428 14.137 2.53356 14.6259 1.89727 14.6664C0.68266 14.7448 -0.596356 12.9607 0.30269 11.8749L6.68747 5.18457L6.68618 5.18592Z" />
+                  </svg>
+                </span>
+                <div>
+                  <p>Nanovate</p>
+                  <h2>{{ title }}</h2>
+                </div>
+              </div>
+            </header>
+
+            <section id="messages" class="nv-niva-panel__messages" aria-live="polite"></section>
+
+            <footer class="nv-niva-panel__composer">
+              <form id="chat-form" class="nv-niva-composer">
+                <textarea id="message" name="message" rows="1" placeholder="Type a message..." autocomplete="off"></textarea>
+                <button id="send" type="submit" aria-label="Send message">
+                  <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                    <path d="m22 2-7 20-4-9-9-4 20-7Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>
+                  </svg>
+                </button>
+              </form>
+            </footer>
+          </section>
+        </section>
+      </div>
+    </main>
+    <script src="/webchat.js"></script>
+  </body>
+</html>

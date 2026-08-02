@@ -560,6 +560,14 @@ class TestPassportCollection(unittest.TestCase):
         sess = client.post(
             f"/api/session/{sess['id']}/message", json={"text": "1"}
         ).get_json()["session"]
+        self.assertEqual(sess["stage"], "awaiting_room_type")
+        sess = client.post(
+            f"/api/session/{sess['id']}/message", json={"text": "single room"}
+        ).get_json()["session"]
+        self.assertEqual(sess["stage"], "awaiting_flight")
+        sess = client.post(
+            f"/api/session/{sess['id']}/message", json={"text": "with flight"}
+        ).get_json()["session"]
         self.assertEqual(sess["stage"], "awaiting_passport_upload")
 
     def test_passport_upload_is_required_before_room_selection(self):
@@ -586,6 +594,13 @@ class TestPassportCollection(unittest.TestCase):
         sess = client.post(
             f"/api/session/{sess['id']}/message", json={"text": "1"}
         ).get_json()["session"]
+        self.assertEqual(sess["stage"], "awaiting_room_type")
+        sess = client.post(
+            f"/api/session/{sess['id']}/message", json={"text": "single room"}
+        ).get_json()["session"]
+        sess = client.post(
+            f"/api/session/{sess['id']}/message", json={"text": "with flight"}
+        ).get_json()["session"]
         self.assertEqual(sess["stage"], "awaiting_passport_upload")
 
         sess = client.post(
@@ -606,7 +621,7 @@ class TestPassportCollection(unittest.TestCase):
         sess = client.post(
             f"/api/session/{sess['id']}/message", json={"text": "done"}
         ).get_json()["session"]
-        self.assertEqual(sess["stage"], "awaiting_room_type")
+        self.assertEqual(sess["stage"], "awaiting_currency")
 
     def test_passport_upload_endpoint_saves_metadata(self):
         client, _ = _make_app_with_db(self.tmp)
@@ -653,6 +668,13 @@ class TestPassportCollection(unittest.TestCase):
             f"/api/session/{sess['id']}/message", json={"text": "1"}
         ).get_json()["session"]
         traveler_id = sess["finalResult"]["traveler"]["traveler_id"]
+        self.assertEqual(sess["stage"], "awaiting_room_type")
+        sess = client.post(
+            f"/api/session/{sess['id']}/message", json={"text": "single room"}
+        ).get_json()["session"]
+        sess = client.post(
+            f"/api/session/{sess['id']}/message", json={"text": "with flight"}
+        ).get_json()["session"]
         self.assertEqual(sess["stage"], "awaiting_passport_upload")
 
         with closing(sqlite3.connect(os.environ["RAHMA_SYSTEM_DB_PATH"])) as conn:
