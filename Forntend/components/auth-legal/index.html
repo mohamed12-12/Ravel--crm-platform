@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nanovate Auth Legal Components</title>
+    <link rel="stylesheet" href="./auth-legal.css">
+  </head>
+  <body>
+    <main class="nv-page">
+      <div class="nv-demo-shell">
+        <header class="nv-demo-header">
+          <div>
+            <h1>Auth, Legal, And Settings Components</h1>
+            <p>Static login/register/reset forms, auth preview panel, legal layout, and account settings sections.</p>
+          </div>
+        </header>
+
+        <section class="nv-auth-layout">
+          <form class="nv-auth-card">
+            <img class="nv-auth-card__logo" src="../../assets/logo.svg" alt="Nanovate">
+            <div>
+              <h2>Welcome back</h2>
+              <p>Sign in to manage your agents, workflows, billing, and speech tools.</p>
+            </div>
+            <label class="nv-field"><span class="nv-label">Email</span><input class="nv-input" type="email" placeholder="you@example.com"></label>
+            <label class="nv-field"><span class="nv-label">Password</span><input class="nv-input" type="password" placeholder="Password"></label>
+            <div class="nv-auth-actions">
+              <button class="nv-button nv-button--cta-tertiary nv-button--full">Login</button>
+              <button class="nv-button nv-button--cta-secondary nv-button--full">Continue with Google</button>
+            </div>
+          </form>
+          <div class="nv-auth-preview">
+            <div class="nv-auth-preview__frame"><img src="../../assets/AuthDashScreenshot.png" alt="Nanovate dashboard preview"></div>
+            <div class="nv-auth-preview__shade"></div>
+          </div>
+        </section>
+
+        <section class="nv-demo-section">
+          <h2>Register And Reset Forms</h2>
+          <div class="nv-demo-grid">
+            <form class="nv-settings-section">
+              <h3 class="nv-form-panel__title">Create account</h3>
+              <label class="nv-field"><span class="nv-label">Full name</span><input class="nv-input" value="Ragad Salem"></label>
+              <label class="nv-field"><span class="nv-label">Email</span><input class="nv-input" value="ragad@example.com"></label>
+              <label class="nv-field"><span class="nv-label">Password</span><input class="nv-input" type="password" value="password"></label>
+              <button class="nv-button nv-button--cta-tertiary">Register</button>
+            </form>
+            <form class="nv-settings-section">
+              <h3 class="nv-form-panel__title">Reset password</h3>
+              <p class="nv-help">Enter your email and verification code to update your password.</p>
+              <label class="nv-field"><span class="nv-label">Verification code</span><input class="nv-input" placeholder="123456"></label>
+              <label class="nv-field"><span class="nv-label">New password</span><input class="nv-input" type="password"></label>
+              <button class="nv-button nv-button--cta-primary">Update password</button>
+            </form>
+          </div>
+        </section>
+
+        <section class="nv-demo-section">
+          <h2>Settings Sections</h2>
+          <div class="nv-demo-grid">
+            <section class="nv-settings-section">
+              <h3 class="nv-form-panel__title">Profile</h3>
+              <label class="nv-field"><span class="nv-label">Display name</span><input class="nv-input" value="Ragad"></label>
+              <label class="nv-field"><span class="nv-label">Email</span><input class="nv-input" value="ragad@example.com"></label>
+              <button class="nv-button nv-button--cta-secondary">Save changes</button>
+            </section>
+            <section class="nv-settings-section">
+              <h3 class="nv-form-panel__title">Danger zone</h3>
+              <p class="nv-help">Delete your account and all linked dashboard data.</p>
+              <button class="nv-button nv-button--delete">Delete account</button>
+            </section>
+          </div>
+        </section>
+
+        <section class="nv-demo-section">
+          <h2>Legal Layout</h2>
+          <div class="nv-legal-layout">
+            <nav class="nv-legal-nav" aria-label="Legal pages">
+              <a href="#" aria-current="page">Privacy Policy</a>
+              <a href="#">Terms of Service</a>
+              <a href="#">Data Deletion</a>
+            </nav>
+            <article class="nv-legal-content">
+              <h1>Privacy Policy</h1>
+              <p>This static layout mirrors the legal content pages from the React app. Use it for policy, terms, and data deletion pages.</p>
+              <h2>Information We Process</h2>
+              <p>Account data, agent configuration, usage history, and billing state can be represented in this content layout.</p>
+              <ul>
+                <li>Use section headings for scannability.</li>
+                <li>Keep body text constrained for readability.</li>
+                <li>Use the legal side navigation for related documents.</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

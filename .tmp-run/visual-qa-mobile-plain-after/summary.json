@@ -1,0 +1,13 @@
+{
+  "status": 200,
+  "metrics": {
+    "innerWidth": 390,
+    "scrollWidth": 390,
+    "overflowX": false,
+    "sidebarTransform": "matrix(1, 0, 0, 1, -199, 0)",
+    "toggleVisible": "flex",
+    "kpiGrid": "358px",
+    "missingImgs": []
+  },
+  "issues": []
+}

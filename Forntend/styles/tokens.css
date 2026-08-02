@@ -1,0 +1,74 @@
+:root,
+:root[data-theme="dark"] {
+  --nv-white: #ffffff;
+  --nv-black: #000000;
+
+  --nv-primary-50: #e5faf4;
+  --nv-primary-100: #ccf6e9;
+  --nv-primary-200: #99ecd3;
+  --nv-primary-300: #66e3be;
+  --nv-primary-400: #33d9a8;
+  --nv-primary-500: #00d092;
+  --nv-primary-600: #00a675;
+  --nv-primary-700: #007d58;
+  --nv-primary-800: #00533a;
+  --nv-primary-900: #002a1d;
+
+  --nv-secondary-500: #6e2996;
+  --nv-third-500: #050628;
+
+  --nv-neutral-50: #fafafa;
+  --nv-neutral-100: #f5f5f5;
+  --nv-neutral-200: #e5e5e5;
+  --nv-neutral-300: #d4d4d4;
+  --nv-neutral-400: #a3a3a3;
+  --nv-neutral-500: #737373;
+  --nv-neutral-600: #525252;
+  --nv-neutral-700: #404040;
+  --nv-neutral-800: #262626;
+  --nv-neutral-900: #171717;
+  --nv-neutral-950: #0a0a0a;
+
+  --nv-error: #ef4444;
+  --nv-warning: #eab308;
+  --nv-success: #22c55e;
+
+  --nv-bg: #121212;
+  --nv-bg-card: #191919;
+  --nv-bg-sidebar: #0d0d0d;
+  --nv-bg-elevated: #161616;
+  --nv-bg-panel: #0d0d0d;
+  --nv-border: #262626;
+  --nv-border-strong: #404040;
+  --nv-text: #ffffff;
+  --nv-text-muted: #737373;
+  --nv-text-soft: #a3a3a3;
+  --nv-accent: #38b98d;
+  --nv-accent-bright: #00d092;
+
+  --nv-space-1: 4px;
+  --nv-space-2: 8px;
+  --nv-space-3: 12px;
+  --nv-space-4: 16px;
+  --nv-space-5: 20px;
+  --nv-space-6: 24px;
+  --nv-space-8: 32px;
+  --nv-space-10: 40px;
+  --nv-space-12: 48px;
+  --nv-space-16: 64px;
+
+  --nv-radius-sm: 6px;
+  --nv-radius-md: 8px;
+  --nv-radius-lg: 10px;
+  --nv-radius-xl: 16px;
+  --nv-radius-full: 9999px;
+
+  --nv-font-sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --nv-font-display: "Bricolage Grotesque", var(--nv-font-sans);
+
+  --nv-shadow-menu: 0 21px 42px -10px rgba(0, 0, 0, 0.25);
+  --nv-shadow-soft: 0 12px 24px rgba(0, 0, 0, 0.22);
+  --nv-gradient-card-green: linear-gradient(135deg, rgba(0, 208, 146, 0.10), rgba(0, 208, 146, 0.02));
+  --nv-gradient-avatar-green: linear-gradient(134deg, #38b98d 6%, #ffffff 96%, #000000 181%);
+  --nv-gradient-avatar-yellow: linear-gradient(135deg, #ffffff 11%, #fce26a 166%);
+}

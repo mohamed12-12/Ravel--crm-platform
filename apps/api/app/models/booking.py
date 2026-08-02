@@ -21,6 +21,10 @@ class TripBooking(db.Model):
     
     # Booking Details
     room_type = db.Column(db.String(50))
+    room_group = db.Column(db.String(50))
+    boys_rooms_requested = db.Column(db.Integer, default=0)
+    girls_rooms_requested = db.Column(db.Integer, default=0)
+    room_requirements_json = db.Column(db.Text)
     flight_option = db.Column(db.String(50))
     date_option = db.Column(db.String(50))
     currency = db.Column(db.String(20))
@@ -81,6 +85,10 @@ class TripBooking(db.Model):
             traveler_id=clean(row.get("Traveler ID")),
             traveler_name=clean(row.get("Traveler Name")),
             room_type=clean(row.get("Room Type")),
+            room_group=clean(row.get("Room Group")),
+            boys_rooms_requested=int(clean(row.get("Boys Rooms Requested")) or 0),
+            girls_rooms_requested=int(clean(row.get("Girls Rooms Requested")) or 0),
+            room_requirements_json=clean(row.get("Room Requirements JSON")),
             flight_option=clean(row.get("Flight Option")),
             date_option=clean(row.get("Date Option")),
             currency=clean(row.get("Currency")),
@@ -115,6 +123,10 @@ class TripBooking(db.Model):
             "traveler_id": self.traveler_id,
             "traveler_name": self.traveler_name,
             "room_type": self.room_type,
+            "room_group": self.room_group,
+            "boys_rooms_requested": self.boys_rooms_requested or 0,
+            "girls_rooms_requested": self.girls_rooms_requested or 0,
+            "room_requirements_json": self.room_requirements_json,
             "flight_option": self.flight_option,
             "date_option": self.date_option,
             "currency": self.currency,

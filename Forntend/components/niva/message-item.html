@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Niva Message Item Component</title>
+    <link rel="stylesheet" href="./niva.css">
+  </head>
+  <body>
+    <main class="nv-page">
+      <div class="nv-demo-shell">
+        <header class="nv-demo-header">
+          <div>
+            <h1>NivaMessageItem</h1>
+            <p>Static version of `NivaMessageItem.tsx`, including Niva/user roles, timestamps, markdown content, and streaming caret example.</p>
+          </div>
+        </header>
+
+        <section class="nv-demo-panel nv-stack">
+          <article class="nv-niva-message-item" data-niva-role="niva">
+            <span class="nv-niva-message-item__avatar"><img src="../../assets/agent_icon.svg" alt="Niva"></span>
+            <div class="nv-niva-message-item__content">
+              <div class="nv-niva-message-item__meta">
+                <span class="nv-niva-message-item__name">Niva</span>
+                <span class="nv-niva-message-item__time">2:34 PM</span>
+              </div>
+              <div class="nv-niva-message-item__bubble" dir="auto">
+                <div class="nv-niva-markdown">
+                  <p>You can create a voice agent from the <strong>Voice agent</strong> section.</p>
+                  <ul>
+                    <li>Open Voice agent</li>
+                    <li>Choose a template</li>
+                    <li>Configure voice and call type</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="nv-niva-message-item nv-niva-message-item--user" data-niva-role="user">
+            <div class="nv-niva-message-item__content">
+              <div class="nv-niva-message-item__meta">
+                <span class="nv-niva-message-item__time">2:35 PM</span>
+                <span class="nv-niva-message-item__name">You</span>
+              </div>
+              <div class="nv-niva-message-item__bubble" dir="auto">Show me the fastest way to test it.</div>
+            </div>
+            <span class="nv-niva-message-item__avatar">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <circle cx="12" cy="7" r="4" stroke="currentColor" stroke-width="2"/>
+              </svg>
+            </span>
+          </article>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

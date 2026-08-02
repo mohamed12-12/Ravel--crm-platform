@@ -1,0 +1,11 @@
+[desktop] error: Failed to load resource: the server responded with a status of 404 (NOT FOUND)
+[desktop] error: Failed to load resource: the server responded with a status of 400 (BAD REQUEST)
+[desktop] warning: WebSocket connection to 'ws://127.0.0.1:5000/socket.io/?EIO=4&transport=websocket&sid=YeVwy_icxSxb7yrnAAAA' failed: WebSocket is closed before the connection is established.
+[desktop] error: WebSocket connection to 'ws://127.0.0.1:5000/socket.io/?EIO=4&transport=websocket&sid=YeVwy_icxSxb7yrnAAAA' failed: Error during WebSocket handshake: Unexpected response code: 400
+[desktop] error: Failed to load resource: the server responded with a status of 400 (BAD REQUEST)
+[desktop] http://127.0.0.1:5000/socket.io/?EIO=4&transport=polling&t=P-i_pfE&sid=YeVwy_icxSxb7yrnAAAA :: net::ERR_ABORTED
+[mobile] error: Failed to load resource: the server responded with a status of 404 (NOT FOUND)
+[mobile] error: Failed to load resource: the server responded with a status of 400 (BAD REQUEST)
+[mobile] warning: WebSocket connection to 'ws://127.0.0.1:5000/socket.io/?EIO=4&transport=websocket&sid=RvKiDfKLX77vIxb4AAAB' failed: WebSocket is closed before the connection is established.
+[mobile] error: Failed to load resource: the server responded with a status of 400 (BAD REQUEST)
+[mobile] http://127.0.0.1:5000/socket.io/?EIO=4&transport=polling&t=P-i_qu6&sid=RvKiDfKLX77vIxb4AAAB :: net::ERR_ABORTED

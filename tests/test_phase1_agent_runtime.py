@@ -162,7 +162,7 @@ class TestPhase1AgentRuntime(unittest.TestCase):
         app.config["SESSIONS"]._conversation_ai = agent
         session = client.post("/api/session", json={}).get_json()["session"]
         session = client.post(f"/api/session/{session['id']}/message", json={"text": "check profile 1112223333"}).get_json()["session"]
-        self.assertIn("more than one crm profile", session["messages"][-1]["text"].lower())
+        self.assertIn("more than one traveler profile", session["messages"][-1]["text"].lower())
 
     def test_tool_calling_incomplete_profile_does_not_show_blank_labels(self) -> None:
         client, app = self._tool_calling_app()

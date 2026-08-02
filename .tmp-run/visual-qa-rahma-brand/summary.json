@@ -1,0 +1,40 @@
+[
+  {
+    "mode": "desktop",
+    "status": 200,
+    "metrics": {
+      "statusText": "Admin Dashboard",
+      "workspace": "Client Workspace Rahma Traveler",
+      "logoSrc": "/static/assets/rahma/logos/rahma-traveler-logo.png",
+      "logoLoaded": true,
+      "badgeRect": {
+        "width": 174,
+        "height": 60
+      },
+      "sidebarWidth": 199,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "overflowX": false,
+      "missingImgs": []
+    }
+  },
+  {
+    "mode": "mobile",
+    "status": 200,
+    "metrics": {
+      "statusText": "Admin Dashboard",
+      "workspace": "Client Workspace Rahma Traveler",
+      "logoSrc": "/static/assets/rahma/logos/rahma-traveler-logo.png",
+      "logoLoaded": true,
+      "badgeRect": {
+        "width": 174,
+        "height": 60
+      },
+      "sidebarWidth": 199,
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "overflowX": false,
+      "missingImgs": []
+    }
+  }
+]

@@ -7,7 +7,7 @@ from copy import deepcopy
 from typing import Any
 
 from services.ai_agent.ai_agent_app.agent.prompt_builder import PromptBuilder
-from services.ai_agent.ai_agent_app.agent.response_format import format_agent_reply
+from services.ai_agent.ai_agent_app.agent.response_format import format_agent_reply, response_completeness_issue
 from services.ai_agent.ai_agent_app.agent.privacy_policy import AgentPrivacyPolicy
 from services.ai_agent.ai_agent_app.agent.read_only_tools import ReadOnlyCRMTools
 from services.ai_agent.ai_agent_app.agent.safety import AgentSafetyLayer
@@ -160,7 +160,7 @@ class GeminiAgent:
 
     @staticmethod
     def _safe_refusal() -> str:
-        return "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed."
+        return "I cannot save changes automatically in this step. I can only check whether the action is allowed."
 
     def _workflow_fallback_reply(self, session_context: dict[str, Any] | None) -> str:
         workflow = (session_context or {}).get("workflow_policy")
@@ -230,7 +230,7 @@ class GeminiAgent:
             return reply
         return str(
             workflow.get("assistant_message")
-            or "Please share your WhatsApp number first so I can check your Rahma Traveler profile safely."
+            or "Please share your WhatsApp number first so I can check your Ravel Traveler profile safely."
         ).strip()
 
     @staticmethod
@@ -280,6 +280,104 @@ class GeminiAgent:
         content = (candidates[0] or {}).get("content") or {}
         parts = content.get("parts") or []
         return [part for part in parts if isinstance(part, dict)]
+
+    @staticmethod
+    def _finish_reason(raw_response: dict[str, Any], fallback: str = "") -> str:
+        candidates = raw_response.get("candidates") or []
+        if candidates and isinstance(candidates[0], dict):
+            reason = str(candidates[0].get("finishReason") or candidates[0].get("finish_reason") or "").strip()
+            if reason:
+                return reason
+        return str(fallback or "").strip()
+
+    @staticmethod
+    def _token_limit_finish(reason: str) -> bool:
+        return str(reason or "").strip().upper() in {"MAX_TOKENS", "LENGTH"}
+
+    @staticmethod
+    def _completion_fallback(language: str) -> str:
+        if str(language or "").startswith("ar"):
+            return "\u0645\u0639\u0644\u0634\u060c \u0645\u0642\u062f\u0631\u062a\u0634 \u0623\u062c\u0647\u0632 \u0627\u0644\u0631\u062f \u0628\u0634\u0643\u0644 \u0635\u062d\u064a\u062d. \u0645\u0645\u0643\u0646 \u062a\u0628\u0639\u062a \u0637\u0644\u0628\u0643 \u0645\u0631\u0629 \u062a\u0627\u0646\u064a\u0629\u061f"
+        return "Sorry, I couldn\u2019t prepare that response properly. Could you try that again?"
+
+    def _regenerate_complete_reply(
+        self,
+        *,
+        package,
+        session_context: dict[str, Any],
+        user_message: str,
+        partial_reply: str,
+        reason: str,
+    ) -> tuple[str, str, str]:
+        language = str(session_context.get("language") or _detect_language(user_message))
+        payload = {
+            "task": "replace_incomplete_customer_reply",
+            "language": language,
+            "user_message": user_message,
+            "session_context": session_context,
+            "partial_incomplete_reply": partial_reply,
+            "failure_reason": reason,
+            "instructions": [
+                "Return one complete concise replacement response.",
+                "Do not append to the partial reply.",
+                "Do not repeat duplicate content from the partial reply.",
+                "Use only the supplied session context and tool results.",
+                "Plain text only. No Markdown emphasis.",
+                "Complete every sentence, question, and list item.",
+            ],
+        }
+        try:
+            response = self.provider.generate(
+                system_prompt=package.system_prompt,
+                messages=[{"role": "user", "parts": [{"text": json.dumps(payload, ensure_ascii=False)}]}],
+                tools=[],
+                generation_config={"temperature": 0.2, "topP": 0.9, "maxOutputTokens": 384},
+                request_id=f"{package.prompt_id}-completion-retry",
+            )
+        except GeminiProviderError as exc:
+            agent_logger.warning("Final response regeneration unavailable prompt_id=%s reason=%s error=%s", package.prompt_id, reason, exc)
+            return self._completion_fallback(language), "", "regeneration_error"
+        replacement = self.sanitize_reply(self._extract_reply(response.text))
+        finish_reason = self._finish_reason(response.raw, response.finish_reason)
+        issue = "token_limit_finish" if self._token_limit_finish(finish_reason) else response_completeness_issue(replacement)
+        if issue:
+            agent_logger.warning(
+                "Final response regeneration rejected prompt_id=%s reason=%s retry_finish_reason=%s",
+                package.prompt_id,
+                issue,
+                finish_reason,
+            )
+            return self._completion_fallback(language), response.response_id, issue
+        return replacement, response.response_id, ""
+
+    def _ensure_complete_final_reply(
+        self,
+        *,
+        package,
+        session_context: dict[str, Any],
+        user_message: str,
+        reply_text: str,
+        response,
+    ) -> tuple[str, str, str]:
+        finish_reason = self._finish_reason(response.raw, getattr(response, "finish_reason", ""))
+        issue = "token_limit_finish" if self._token_limit_finish(finish_reason) else response_completeness_issue(reply_text)
+        if not issue:
+            return reply_text, getattr(response, "response_id", ""), ""
+        agent_logger.warning(
+            "Final response validation failed prompt_id=%s response_id=%s reason=%s finish_reason=%s",
+            package.prompt_id,
+            getattr(response, "response_id", ""),
+            issue,
+            finish_reason,
+        )
+        replacement, response_id, retry_issue = self._regenerate_complete_reply(
+            package=package,
+            session_context=session_context,
+            user_message=user_message,
+            partial_reply=reply_text,
+            reason=issue,
+        )
+        return replacement, response_id or getattr(response, "response_id", ""), retry_issue or issue
 
     @staticmethod
     def _part_is_function_call(part: dict[str, Any]) -> bool:
@@ -505,6 +603,13 @@ class GeminiAgent:
                     reply_text = self._workflow_fallback_reply(session_context)
                 if not reply_text:
                     reply_text = self._safe_refusal()
+                reply_text, final_response_id, completion_issue = self._ensure_complete_final_reply(
+                    package=package,
+                    session_context=session_context,
+                    user_message=user_message,
+                    reply_text=reply_text,
+                    response=response,
+                )
                 memory_key = self._memory_key(session_context)
                 self._memory.setdefault(memory_key, []).extend(
                     [
@@ -515,7 +620,7 @@ class GeminiAgent:
                 agent_logger.info(
                     "Gemini final answer prompt_id=%s response_id=%s tool_calls=%s final_answer_len=%s",
                     package.prompt_id,
-                    response.response_id,
+                    final_response_id or response.response_id,
                     tool_call_count,
                     len(reply_text),
                 )
@@ -525,9 +630,11 @@ class GeminiAgent:
                     "write_results": [event for event in tool_events if event.get("write")],
                     "mode": self.settings.ai_agent_mode,
                     "prompt_id": package.prompt_id,
-                    "response_id": response.response_id,
+                    "response_id": final_response_id or response.response_id,
                     "elapsed_ms": None,
                     "usage_metadata": response.usage_metadata or {},
+                    "completion_issue": completion_issue,
+                    "finish_reason": self._finish_reason(response.raw, response.finish_reason),
                 }
 
             for call in function_calls:

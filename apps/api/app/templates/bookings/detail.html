@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ booking.booking_id }} — Rahma CRM{% endblock %}
+{% block title %}{{ booking.booking_id }} — Nanovate CRM{% endblock %}
 {% block topbar_title %}Booking Detail{% endblock %}
 
 {% block topbar_actions %}
@@ -54,7 +54,7 @@
 
         <!-- Details -->
         <div class="card">
-            <div class="card-title" style="margin-bottom:1rem">📋 Booking Details</div>
+            <div class="card-title" style="margin-bottom:1rem">Booking Details</div>
             <div class="grid-2">
                 <div><div class="form-label">Trip</div><div style="color:var(--text-main)">{{ booking.trip_name or '—' }}</div></div>
                 <div><div class="form-label">Trip ID</div><div class="mono" style="color:var(--accent-2)">{{ booking.trip_id or '—' }}</div></div>
@@ -157,7 +157,7 @@
         {% if traveler %}
         <div class="card">
             <div class="card-header">
-                <span class="card-title">👤 Traveler</span>
+                <span class="card-title">Traveler</span>
                 <a href="{{ url_for('travelers.detail', traveler_id=traveler.traveler_id) }}" class="btn btn-ghost btn-sm">View Profile →</a>
             </div>
             <div style="display:flex;align-items:center;gap:1rem">
@@ -253,16 +253,16 @@
         </div>
 
         <div class="card">
-            <div class="card-title" style="margin-bottom:0.75rem">🔗 Links</div>
+            <div class="card-title" style="margin-bottom:0.75rem">Links</div>
             <div style="display:flex;flex-direction:column;gap:0.5rem">
                 {% if trip %}
-                <a href="{{ url_for('trips.detail', trip_id=trip.trip_id) }}" class="btn btn-ghost btn-sm">✈️ View Trip</a>
+                <a href="{{ url_for('trips.detail', trip_id=trip.trip_id) }}" class="btn btn-ghost btn-sm">View Trip</a>
                 {% endif %}
                 {% if traveler %}
-                <a href="{{ url_for('travelers.detail', traveler_id=traveler.traveler_id) }}" class="btn btn-ghost btn-sm">👤 View Traveler</a>
+                <a href="{{ url_for('travelers.detail', traveler_id=traveler.traveler_id) }}" class="btn btn-ghost btn-sm">View Traveler</a>
                 {% endif %}
                 {% if booking.lead_id %}
-                <a href="{{ url_for('leads.detail', lead_id=booking.lead_id) }}" class="btn btn-ghost btn-sm">🎯 View Lead</a>
+                <a href="{{ url_for('leads.detail', lead_id=booking.lead_id) }}" class="btn btn-ghost btn-sm">View Lead</a>
                 {% endif %}
             </div>
         </div>

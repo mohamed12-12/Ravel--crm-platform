@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nanovate Modals</title>
+    <link rel="stylesheet" href="./modals.css">
+  </head>
+  <body>
+    <main class="nv-page">
+      <div class="nv-demo-shell">
+        <header class="nv-demo-header">
+          <div>
+            <h1>Modal Components</h1>
+            <p>Static equivalents for template selection, integration setup, success states, and destructive confirmation modals.</p>
+          </div>
+        </header>
+
+        <section class="nv-demo-section">
+          <h2>Template Modal</h2>
+          <div class="nv-modal" style="position: static;">
+            <header class="nv-modal__header">
+              <div>
+                <h3 class="nv-modal__title">Choose Template</h3>
+                <p class="nv-modal__description">Pick a ready-made template to get started quickly, then customize it to create an AI agent that fits your needs.</p>
+              </div>
+              <button class="nv-icon-button" aria-label="Close">x</button>
+            </header>
+            <div class="nv-template-list">
+              <button class="nv-template-option"><span class="nv-template-option__icon">S</span><span class="nv-agent-inline__meta"><span class="nv-agent-inline__name">Customer Support</span><span class="nv-agent-inline__role">Answer FAQs and route support questions.</span></span><span class="nv-template-option__action">Try now</span></button>
+              <button class="nv-template-option"><span class="nv-template-option__icon">M</span><span class="nv-agent-inline__meta"><span class="nv-agent-inline__name">Sales Mentor</span><span class="nv-agent-inline__role">Coach leads and explain offers.</span></span><span class="nv-template-option__action">Try now</span></button>
+            </div>
+          </div>
+        </section>
+
+        <section class="nv-demo-section">
+          <h2>Integration Setup</h2>
+          <div class="nv-demo-grid">
+            <div class="nv-modal" style="position: static;">
+              <header class="nv-modal__header">
+                <div>
+                  <h3 class="nv-modal__title">Connect WhatsApp</h3>
+                  <p class="nv-modal__description">Set up webhook credentials for this agent.</p>
+                </div>
+                <button class="nv-icon-button" aria-label="Close">x</button>
+              </header>
+              <div class="nv-step-indicator">
+                <span class="is-active"></span><span class="is-active"></span><span class="is-active"></span><span></span><span></span>
+              </div>
+              <div class="nv-step-copy">
+                <small>Step 3 of 5</small>
+                <h3>Phone Number ID</h3>
+                <p>Copy your WhatsApp Phone Number ID from the Meta dashboard.</p>
+              </div>
+              <label class="nv-field">
+                <span class="nv-label">Phone Number ID</span>
+                <input class="nv-input" placeholder="Enter your WhatsApp Phone Number ID">
+              </label>
+              <div class="nv-modal-actions">
+                <button class="nv-button nv-button--cta-secondary">Back</button>
+                <button class="nv-button nv-button--cta-tertiary">Next</button>
+              </div>
+            </div>
+
+            <div class="nv-modal" style="position: static;">
+              <header class="nv-modal__header">
+                <div>
+                  <h3 class="nv-modal__title">Webhook Setup</h3>
+                  <p class="nv-modal__description">Register the webhook URL and verify token in your provider dashboard.</p>
+                </div>
+                <button class="nv-icon-button" aria-label="Close">x</button>
+              </header>
+              <div class="nv-webhook-box">
+                <code>https://api.nanovate.io/whatsapp-webhook/agent_123</code>
+                <button class="nv-button nv-button--text-secondary nv-button--sm">Copy</button>
+              </div>
+              <label class="nv-field" style="margin-top: 12px;">
+                <span class="nv-label">Verify Token</span>
+                <input class="nv-input" value="nanovate_verify_agent_123">
+              </label>
+              <div class="nv-modal-actions">
+                <button class="nv-button nv-button--cta-secondary">Back</button>
+                <button class="nv-button nv-button--cta-tertiary">Connect</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="nv-demo-section">
+          <h2>Success And Danger States</h2>
+          <div class="nv-demo-grid">
+            <div class="nv-modal" style="position: static;">
+              <div class="nv-success-state">
+                <span class="nv-success-state__icon">OK</span>
+                <p>WhatsApp Connected!</p>
+                <small>Closing automatically...</small>
+              </div>
+            </div>
+
+            <div class="nv-modal nv-modal--danger" style="position: static;">
+              <header class="nv-modal__header">
+                <h3 class="nv-modal__title nv-modal__title--danger">Delete account</h3>
+                <button class="nv-icon-button" aria-label="Close">x</button>
+              </header>
+              <p class="nv-confirm-copy">This action cannot be undone. To confirm, type <strong>ragad@example.com</strong> below.</p>
+              <label class="nv-field">
+                <span class="nv-label">Confirm email</span>
+                <input class="nv-input" placeholder="ragad@example.com">
+              </label>
+              <div class="nv-modal-actions">
+                <button class="nv-button nv-button--text-secondary">Cancel</button>
+                <button class="nv-button nv-button--delete">Delete account</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

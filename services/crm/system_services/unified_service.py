@@ -1537,6 +1537,10 @@ class UnifiedCRMService:
         traveler_id: str,
         traveler_name: str,
         room_type: str,
+        room_group: str = "",
+        boys_rooms_requested: int | str = 0,
+        girls_rooms_requested: int | str = 0,
+        room_requirements: list[dict[str, Any]] | dict[str, Any] | str | None = None,
         channel: str = "",
         lead_id: str = "",
         flight_option: str = "",
@@ -1553,6 +1557,10 @@ class UnifiedCRMService:
             traveler_id=traveler_id,
             traveler_name=traveler_name,
             room_type=room_type,
+            room_group=room_group,
+            boys_rooms_requested=boys_rooms_requested,
+            girls_rooms_requested=girls_rooms_requested,
+            room_requirements=room_requirements,
             channel=channel,
             lead_id=lead_id,
             flight_option=flight_option,
@@ -1618,55 +1626,89 @@ class UnifiedCRMService:
         where_clause = "WHERE trip_id = ?" if trip_id else ""
         trip_rows = connection.execute(
             f"""
-            SELECT trip_id, draft_holds_single, draft_holds_double, draft_holds_triple
-            FROM trips
-            {where_clause}
-            """,
+                SELECT *
+                FROM trips
+                {where_clause}
+                """,
             params,
         ).fetchall()
         if not trip_rows:
             return 0
 
+        booking_columns = UnifiedCRMService._table_columns(connection, "trip_bookings")
+        select_fields = ["trip_id", "room_type", "booking_status"]
+        for optional in ("room_group", "boys_rooms_requested", "girls_rooms_requested", "room_requirements_json"):
+            if optional in booking_columns:
+                select_fields.append(optional)
         booking_where = "AND trip_id = ?" if trip_id else ""
         booking_rows = connection.execute(
             f"""
-            SELECT trip_id,
-                   SUM(CASE WHEN lower(trim(COALESCE(room_type, ''))) LIKE 'single%' THEN 1 ELSE 0 END) AS single_holds,
-                   SUM(CASE WHEN lower(trim(COALESCE(room_type, ''))) LIKE 'double%' THEN 1 ELSE 0 END) AS double_holds,
-                   SUM(CASE WHEN lower(trim(COALESCE(room_type, ''))) LIKE 'triple%' THEN 1 ELSE 0 END) AS triple_holds
+            SELECT {', '.join(select_fields)}
             FROM trip_bookings
             WHERE lower(trim(COALESCE(booking_status, ''))) <> 'cancelled'
             {booking_where}
-            GROUP BY trip_id
             """,
             params,
         ).fetchall()
-        booking_counts = {
-            str(row["trip_id"]): (
-                int(row["single_holds"] or 0),
-                int(row["double_holds"] or 0),
-                int(row["triple_holds"] or 0),
+        booking_counts: dict[str, dict[str, int]] = {}
+        for row in booking_rows:
+            trip_key = str(row["trip_id"] or "")
+            counts = booking_counts.setdefault(
+                trip_key,
+                {
+                    "single": 0,
+                    "double": 0,
+                    "triple": 0,
+                    "boys_double": 0,
+                    "girls_double": 0,
+                    "boys_triple": 0,
+                    "girls_triple": 0,
+                },
             )
-            for row in booking_rows
-        }
+            requirements = UnifiedCRMService._booking_row_room_requirements(row)
+            for requirement in requirements:
+                room_type = str(requirement.get("room_type") or "").strip().lower()
+                group = str(requirement.get("room_group") or "").strip().lower()
+                rooms = max(0, int(requirement.get("rooms") or 0))
+                if room_type in {"single", "double", "triple"}:
+                    counts[room_type] += rooms
+                if room_type in {"double", "triple"} and group in {"boys", "girls"}:
+                    counts[f"{group}_{room_type}"] += rooms
 
         updated = 0
         for row in trip_rows:
-            current = (
-                int(row["draft_holds_single"] or 0),
-                int(row["draft_holds_double"] or 0),
-                int(row["draft_holds_triple"] or 0),
+            expected = booking_counts.get(
+                str(row["trip_id"]),
+                {
+                    "single": 0,
+                    "double": 0,
+                    "triple": 0,
+                    "boys_double": 0,
+                    "girls_double": 0,
+                    "boys_triple": 0,
+                    "girls_triple": 0,
+                },
             )
-            expected = booking_counts.get(str(row["trip_id"]), (0, 0, 0))
-            if current == expected:
+            update_values = {
+                "draft_holds_single": int(expected["single"]),
+                "draft_holds_double": int(expected["double"]),
+                "draft_holds_triple": int(expected["triple"]),
+            }
+            trip_columns = UnifiedCRMService._table_columns(connection, "trips")
+            for key in ("boys_double", "girls_double", "boys_triple", "girls_triple"):
+                hold_key = f"draft_holds_{key}"
+                if hold_key in trip_columns:
+                    update_values[hold_key] = int(expected[key])
+            current = {key: int(row[key] or 0) for key in update_values}
+            if current == update_values:
                 continue
             connection.execute(
-                """
+                f"""
                 UPDATE trips
-                SET draft_holds_single = ?, draft_holds_double = ?, draft_holds_triple = ?
+                SET {', '.join(f'{key} = ?' for key in update_values)}
                 WHERE trip_id = ?
                 """,
-                (*expected, row["trip_id"]),
+                (*update_values.values(), row["trip_id"]),
             )
             updated += 1
         return updated
@@ -1795,6 +1837,10 @@ class UnifiedCRMService:
         traveler_id: str,
         traveler_name: str,
         room_type: str,
+        room_group: str = "",
+        boys_rooms_requested: int | str = 0,
+        girls_rooms_requested: int | str = 0,
+        room_requirements: list[dict[str, Any]] | dict[str, Any] | str | None = None,
         channel: str = "",
         lead_id: str = "",
         flight_option: str = "",
@@ -1813,6 +1859,25 @@ class UnifiedCRMService:
         timestamp = _utc_now().replace(microsecond=0)
         if room_type not in ROOM_HOLD_COLUMNS:
             raise ValueError(f"Unsupported room type {room_type!r}")
+        normalized_requirements = self._normalize_room_requirements(
+            room_type=room_type,
+            room_group=room_group,
+            boys_rooms_requested=boys_rooms_requested,
+            girls_rooms_requested=girls_rooms_requested,
+            room_requirements=room_requirements,
+        )
+        if not normalized_requirements:
+            raise ValueError("At least one room requirement is required.")
+        boys_rooms_total = sum(int(item["rooms"]) for item in normalized_requirements if item.get("room_group") == "boys")
+        girls_rooms_total = sum(int(item["rooms"]) for item in normalized_requirements if item.get("room_group") == "girls")
+        resolved_room_group = str(room_group or "").strip().lower()
+        if boys_rooms_total and girls_rooms_total:
+            resolved_room_group = "mixed"
+        elif boys_rooms_total:
+            resolved_room_group = "boys"
+        elif girls_rooms_total:
+            resolved_room_group = "girls"
+        room_requirements_json = json.dumps(normalized_requirements, ensure_ascii=False, separators=(",", ":"))
         if booking_status not in BOOKING_LIFECYCLE_STATUSES:
             raise ValueError(f"Unsupported booking status {booking_status!r}")
         if booking_status not in {"Draft", "Waiting Customer"}:
@@ -1823,8 +1888,7 @@ class UnifiedCRMService:
             self._reconcile_trip_room_holds(connection, trip_id)
             trip = connection.execute(
                 """
-                SELECT trip_id, trip_name, type, sales_status, single_remaining, double_remaining,
-                       triple_remaining, draft_holds_single, draft_holds_double, draft_holds_triple
+                SELECT *
                  FROM trips
                  WHERE trip_id = ?
                  """,
@@ -1836,13 +1900,37 @@ class UnifiedCRMService:
             if sales_status and sales_status != "open":
                 raise ValueError(f"Trip {trip_id} is not bookable because its status is {trip['sales_status']}")
 
-            remaining = self._as_int(trip[ROOM_REMAINING_COLUMNS[room_type]])
-            current_hold = self._as_int(trip[ROOM_HOLD_COLUMNS[room_type]], default=0) or 0
-            if remaining is None:
-                raise ValueError(f"Capacity is not configured for room type {room_type}")
-            available = remaining - current_hold
-            if available <= 0:
-                raise ValueError(f"No remaining draftable capacity for {room_type}")
+            aggregate_availability: dict[str, int] = {}
+            category_availability: dict[str, int] = {}
+            for requirement in normalized_requirements:
+                req_room_type = str(requirement.get("room_type") or "").strip().title()
+                group = str(requirement.get("room_group") or "").strip().lower()
+                rooms = max(0, int(requirement.get("rooms") or 0))
+                remaining = self._as_int(trip[ROOM_REMAINING_COLUMNS[req_room_type]])
+                current_hold = self._as_int(trip[ROOM_HOLD_COLUMNS[req_room_type]], default=0) or 0
+                if remaining is None:
+                    raise ValueError(f"Capacity is not configured for room type {req_room_type}")
+                aggregate_available = remaining - current_hold
+                aggregate_availability[req_room_type] = aggregate_available
+                requested_same_type = sum(
+                    int(item.get("rooms") or 0)
+                    for item in normalized_requirements
+                    if str(item.get("room_type") or "").strip().title() == req_room_type
+                )
+                if requested_same_type > aggregate_available:
+                    raise ValueError(f"No remaining draftable capacity for {req_room_type}")
+                if req_room_type in {"Double", "Triple"} and group in {"boys", "girls"}:
+                    capacity_key = f"{group}_{req_room_type.lower()}"
+                    hold_key = f"draft_holds_{capacity_key}"
+                    category_capacity = self._as_int(self._row_value(trip, capacity_key), default=0) or 0
+                    category_hold = self._as_int(self._row_value(trip, hold_key), default=0) or 0
+                    category_available = category_capacity - category_hold
+                    category_availability[capacity_key] = category_available
+                    if rooms > category_available:
+                        raise ValueError(
+                            f"{group.title()} {req_room_type.lower()} rooms are unavailable: requested {rooms}, available {max(category_available, 0)}."
+                        )
+            available = min(aggregate_availability.values()) if aggregate_availability else 0
 
             if not interaction_id:
                 interaction_id = self._next_daily_id(connection, "interactions", "interaction_id", "INT", timestamp)
@@ -1903,6 +1991,17 @@ class UnifiedCRMService:
                 self._as_int(group_size, default=1) or 1,
                 booking_notes or None,
             ]
+            booking_table_columns = self._table_columns(connection, "trip_bookings")
+            optional_booking_values = {
+                "room_group": resolved_room_group or None,
+                "boys_rooms_requested": boys_rooms_total,
+                "girls_rooms_requested": girls_rooms_total,
+                "room_requirements_json": room_requirements_json,
+            }
+            for column, value in optional_booking_values.items():
+                if column in booking_table_columns:
+                    booking_columns.append(column)
+                    booking_values.append(value)
             connection.execute(
                 f"""
                 INSERT INTO trip_bookings ({', '.join(booking_columns)})
@@ -1938,7 +2037,14 @@ class UnifiedCRMService:
             interaction_id=interaction_id,
             channel=channel,
             notes=booking_notes,
-            metadata={"room_type": room_type, "available_before_draft": available, "available_after_draft": available - 1},
+            metadata={
+                "room_type": room_type,
+                "room_group": resolved_room_group,
+                "room_requirements": normalized_requirements,
+                "available_before_draft": available,
+                "available_after_draft": available - sum(int(item["rooms"]) for item in normalized_requirements),
+                "category_availability_before": category_availability,
+            },
             occurred_at=timestamp,
         )
         follow_up_event = self.create_booking_event(
@@ -1975,6 +2081,10 @@ class UnifiedCRMService:
             "traveler_id": traveler_id,
             "traveler_name": traveler_name,
             "room_type": room_type,
+            "room_group": resolved_room_group,
+            "boys_rooms_requested": boys_rooms_total,
+            "girls_rooms_requested": girls_rooms_total,
+            "room_requirements": normalized_requirements,
             "flight_option": flight_option,
             "date_option": date_option,
             "currency": currency,
@@ -1983,7 +2093,7 @@ class UnifiedCRMService:
             "passport_required": bool(passport_required),
             "passport_status": passport_status or ("pending" if passport_required else ""),
             "available_before_draft": available,
-            "available_after_draft": available - 1,
+            "available_after_draft": available - sum(int(item["rooms"]) for item in normalized_requirements),
             "interaction": {"interaction_id": interaction_id},
             "lead_update": lead_update,
             "event_trail": [booking_event, follow_up_event],
@@ -1994,6 +2104,10 @@ class UnifiedCRMService:
                 "trip_id": trip_id,
                 "traveler_id": traveler_id,
                 "lead_id": lead_id,
+                "room_group": resolved_room_group,
+                "boys_rooms_requested": boys_rooms_total,
+                "girls_rooms_requested": girls_rooms_total,
+                "room_requirements": normalized_requirements,
             },
             "interaction_log": {"interaction_id": interaction_id},
             "lead_update": lead_update,
@@ -2602,6 +2716,36 @@ class UnifiedCRMService:
             return {"status": "failed", "backend": backend, "reason": str(e)}
         return {"status": "skipped", "backend": backend, "reason": "Sheet sync backend not supported."}
 
+    def remove_record_from_sheet(self, mapping_name: str, record_id: str) -> dict[str, Any]:
+        if not self.settings.sheet_export_enabled:
+            return {
+                "status": "disabled",
+                "backend": self.settings.sheet_backend,
+                "reason": "CRM is the operational authority; export must be explicitly enabled.",
+            }
+        if not record_id:
+            return {"status": "skipped", "reason": "empty_record_id"}
+
+        mapping = SHEET_TABLE_MAPPINGS[mapping_name]
+        key_column = self._key_column_for_mapping(mapping_name)
+        backend = self.settings.sheet_backend
+        try:
+            if backend == "excel":
+                updated = 0
+                for workbook_path in self._excel_outcome_workbooks():
+                    if self._delete_record_in_excel(workbook_path, mapping, key_column, record_id):
+                        updated += 1
+                self._record_sync_success(mapping_name, record_id)
+                return {"status": "ok", "backend": backend, "updated_workbooks": updated}
+            if backend == "google_sheets":
+                deleted = self._delete_record_in_google_sheet(mapping, key_column, record_id)
+                self._record_sync_success(mapping_name, record_id)
+                return {"status": "ok", "backend": backend, "updated_workbooks": 1 if deleted else 0}
+        except Exception as e:
+            self._record_sync_failure(mapping_name, record_id, str(e))
+            return {"status": "failed", "backend": backend, "reason": str(e)}
+        return {"status": "skipped", "backend": backend, "reason": "Sheet sync backend not supported."}
+
     def _record_sync_success(self, mapping_name: str, record_id: str) -> None:
         with self.connect() as connection:
             self._ensure_sync_queue_table(connection)
@@ -2744,6 +2888,10 @@ class UnifiedCRMService:
             ("girls_double", "INTEGER"),
             ("boys_triple", "INTEGER"),
             ("girls_triple", "INTEGER"),
+            ("draft_holds_boys_double", "INTEGER DEFAULT 0"),
+            ("draft_holds_girls_double", "INTEGER DEFAULT 0"),
+            ("draft_holds_boys_triple", "INTEGER DEFAULT 0"),
+            ("draft_holds_girls_triple", "INTEGER DEFAULT 0"),
         ]
         for col_name, col_type in room_columns:
             if col_name not in existing_cols:
@@ -2784,9 +2932,107 @@ class UnifiedCRMService:
             "public_description",
             "sales_notes",
         ]
-        optional_columns = ["boys_double", "girls_double", "boys_triple", "girls_triple"]
+        optional_columns = [
+            "boys_double",
+            "girls_double",
+            "boys_triple",
+            "girls_triple",
+            "draft_holds_boys_double",
+            "draft_holds_girls_double",
+            "draft_holds_boys_triple",
+            "draft_holds_girls_triple",
+        ]
         existing = self._table_columns(connection, "trips")
         return ", ".join([*base_columns, *[column for column in optional_columns if column in existing]])
+
+    @staticmethod
+    def _row_value(row: Any, name: str, default: Any = None) -> Any:
+        try:
+            return row[name]
+        except (KeyError, IndexError, TypeError):
+            return default
+
+    @classmethod
+    def _booking_row_room_requirements(cls, row: Any) -> list[dict[str, Any]]:
+        raw_json = str(cls._row_value(row, "room_requirements_json") or "").strip()
+        if raw_json:
+            try:
+                parsed = json.loads(raw_json)
+            except (TypeError, ValueError):
+                parsed = []
+            if isinstance(parsed, list):
+                requirements = []
+                for item in parsed:
+                    if not isinstance(item, dict):
+                        continue
+                    room_type = str(item.get("room_type") or "").strip().title()
+                    group = str(item.get("room_group") or "").strip().lower()
+                    rooms = cls._as_int(item.get("rooms"), default=0) or 0
+                    if room_type in ROOM_HOLD_COLUMNS and rooms > 0:
+                        requirements.append({"room_type": room_type, "room_group": group, "rooms": rooms})
+                if requirements:
+                    return requirements
+
+        room_type = str(cls._row_value(row, "room_type") or "").strip().title()
+        if room_type not in ROOM_HOLD_COLUMNS:
+            return []
+        boys_rooms = cls._as_int(cls._row_value(row, "boys_rooms_requested"), default=0) or 0
+        girls_rooms = cls._as_int(cls._row_value(row, "girls_rooms_requested"), default=0) or 0
+        requirements = []
+        if boys_rooms:
+            requirements.append({"room_type": room_type, "room_group": "boys", "rooms": boys_rooms})
+        if girls_rooms:
+            requirements.append({"room_type": room_type, "room_group": "girls", "rooms": girls_rooms})
+        if requirements:
+            return requirements
+
+        group = str(cls._row_value(row, "room_group") or "").strip().lower()
+        return [{"room_type": room_type, "room_group": group if group in {"boys", "girls"} else "", "rooms": 1}]
+
+    @classmethod
+    def _normalize_room_requirements(
+        cls,
+        *,
+        room_type: str,
+        room_group: str = "",
+        boys_rooms_requested: int | str = 0,
+        girls_rooms_requested: int | str = 0,
+        room_requirements: list[dict[str, Any]] | dict[str, Any] | str | None = None,
+    ) -> list[dict[str, Any]]:
+        parsed: Any = room_requirements
+        if isinstance(parsed, str) and parsed.strip():
+            try:
+                parsed = json.loads(parsed)
+            except (TypeError, ValueError):
+                parsed = None
+        if isinstance(parsed, dict):
+            parsed = parsed.get("requirements") or parsed.get("rooms") or []
+        requirements: list[dict[str, Any]] = []
+        if isinstance(parsed, list):
+            for item in parsed:
+                if not isinstance(item, dict):
+                    continue
+                item_room_type = str(item.get("room_type") or room_type or "").strip().title()
+                group = str(item.get("room_group") or item.get("group") or "").strip().lower()
+                rooms = cls._as_int(item.get("rooms") or item.get("count"), default=0) or 0
+                if item_room_type in ROOM_HOLD_COLUMNS and group in {"", "boys", "girls"} and rooms > 0:
+                    requirements.append({"room_type": item_room_type, "room_group": group, "rooms": rooms})
+        if requirements:
+            return requirements
+
+        canonical_room_type = str(room_type or "").strip().title()
+        if canonical_room_type not in ROOM_HOLD_COLUMNS:
+            return []
+        boys_rooms = cls._as_int(boys_rooms_requested, default=0) or 0
+        girls_rooms = cls._as_int(girls_rooms_requested, default=0) or 0
+        if boys_rooms or girls_rooms:
+            if boys_rooms:
+                requirements.append({"room_type": canonical_room_type, "room_group": "boys", "rooms": boys_rooms})
+            if girls_rooms:
+                requirements.append({"room_type": canonical_room_type, "room_group": "girls", "rooms": girls_rooms})
+            return requirements
+        group = str(room_group or "").strip().lower()
+        return [{"room_type": canonical_room_type, "room_group": group if group in {"boys", "girls"} else "", "rooms": 1}]
 
     @staticmethod
     def _migrate_trip_booking_passport_columns(connection: sqlite3.Connection) -> None:
@@ -2803,6 +3049,14 @@ class UnifiedCRMService:
             connection.execute("ALTER TABLE trip_bookings ADD COLUMN passport_status TEXT")
         if 'group_size' not in existing_cols:
             connection.execute("ALTER TABLE trip_bookings ADD COLUMN group_size INTEGER DEFAULT 1")
+        if 'room_group' not in existing_cols:
+            connection.execute("ALTER TABLE trip_bookings ADD COLUMN room_group TEXT")
+        if 'boys_rooms_requested' not in existing_cols:
+            connection.execute("ALTER TABLE trip_bookings ADD COLUMN boys_rooms_requested INTEGER DEFAULT 0")
+        if 'girls_rooms_requested' not in existing_cols:
+            connection.execute("ALTER TABLE trip_bookings ADD COLUMN girls_rooms_requested INTEGER DEFAULT 0")
+        if 'room_requirements_json' not in existing_cols:
+            connection.execute("ALTER TABLE trip_bookings ADD COLUMN room_requirements_json TEXT")
 
     @staticmethod
     def _migrate_lead_columns(connection: sqlite3.Connection) -> None:
@@ -3462,6 +3716,10 @@ class UnifiedCRMService:
         girls_double = self._as_int(value("girls_double"), default=0)
         boys_triple = self._as_int(value("boys_triple"), default=0)
         girls_triple = self._as_int(value("girls_triple"), default=0)
+        draft_holds_boys_double = self._as_int(value("draft_holds_boys_double"), default=0) or 0
+        draft_holds_girls_double = self._as_int(value("draft_holds_girls_double"), default=0) or 0
+        draft_holds_boys_triple = self._as_int(value("draft_holds_boys_triple"), default=0) or 0
+        draft_holds_girls_triple = self._as_int(value("draft_holds_girls_triple"), default=0) or 0
         draft_holds_single = self._as_int(value("draft_holds_single"), default=0)
         draft_holds_double = self._as_int(value("draft_holds_double"), default=0)
         draft_holds_triple = self._as_int(value("draft_holds_triple"), default=0)
@@ -3500,10 +3758,14 @@ class UnifiedCRMService:
             "draft_holds_single": draft_holds_single,
             "draft_holds_double": draft_holds_double,
             "draft_holds_triple": draft_holds_triple,
-            "boys_double": boys_double,
-            "girls_double": girls_double,
-            "boys_triple": boys_triple,
-            "girls_triple": girls_triple,
+            "boys_double": max(boys_double - draft_holds_boys_double, 0),
+            "girls_double": max(girls_double - draft_holds_girls_double, 0),
+            "boys_triple": max(boys_triple - draft_holds_boys_triple, 0),
+            "girls_triple": max(girls_triple - draft_holds_girls_triple, 0),
+            "draft_holds_boys_double": draft_holds_boys_double,
+            "draft_holds_girls_double": draft_holds_girls_double,
+            "draft_holds_boys_triple": draft_holds_boys_triple,
+            "draft_holds_girls_triple": draft_holds_girls_triple,
             "available_single": available_single,
             "available_double": available_double,
             "available_triple": available_triple,
@@ -3658,6 +3920,33 @@ class UnifiedCRMService:
             finally:
                 wb.close()
 
+    def _delete_record_in_excel(
+        self,
+        workbook_path: Path | None,
+        mapping: dict[str, Any],
+        key_column: str,
+        record_id: str,
+    ) -> bool:
+        if not workbook_path or not workbook_path.exists():
+            return False
+        with _SHEET_WRITE_LOCK:
+            wb = load_workbook(workbook_path)
+            try:
+                if mapping["sheet_name"] not in wb.sheetnames:
+                    return False
+                ws = wb[mapping["sheet_name"]]
+                header_row = int(mapping["header_row"])
+                header_map = self._ensure_sheet_headers(ws, header_row, list(mapping["columns"].values()))
+                key_header = mapping["columns"][key_column]
+                target_row = self._find_sheet_row(ws, header_map[key_header], str(record_id).strip(), header_row + 1)
+                if target_row is None:
+                    return False
+                ws.delete_rows(target_row, 1)
+                wb.save(workbook_path)
+                return True
+            finally:
+                wb.close()
+
     def _upsert_records_in_excel(
         self,
         workbook_path: Path,
@@ -3742,6 +4031,44 @@ class UnifiedCRMService:
 
         cells = [gspread.Cell(target_row, col_idx, value) for col_idx, value in values_by_col.items()]
         ws.update_cells(cells, value_input_option="USER_ENTERED")
+
+    def _delete_record_in_google_sheet(
+        self,
+        mapping: dict[str, Any],
+        key_column: str,
+        record_id: str,
+    ) -> bool:
+        if not self.settings.google_sheet_id or not self.settings.google_application_credentials:
+            raise RuntimeError("Google Sheets sync is not configured.")
+
+        import gspread
+        from google.oauth2.service_account import Credentials
+
+        self._clear_dead_local_proxy()
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds = Credentials.from_service_account_file(
+            str(self.settings.google_application_credentials),
+            scopes=scopes,
+        )
+        client = gspread.authorize(creds)
+        ws = client.open_by_key(self.settings.google_sheet_id).worksheet(mapping["sheet_name"])
+        rows = ws.get_all_values()
+        header_map = self._ensure_google_headers(ws, rows, int(mapping["header_row"]), list(mapping["columns"].values()))
+        key_header = mapping["columns"][key_column]
+        target_row = None
+        key_idx = header_map[key_header] - 1
+        for row_idx in range(int(mapping["header_row"]) + 1, len(rows) + 1):
+            current = rows[row_idx - 1][key_idx] if len(rows[row_idx - 1]) > key_idx else ""
+            if str(current or "").strip() == str(record_id).strip():
+                target_row = row_idx
+                break
+        if target_row is None:
+            return False
+        ws.delete_rows(target_row)
+        return True
 
     @staticmethod
     def _ensure_sheet_headers(ws, header_row: int, headers: list[str]) -> dict[str, int]:

@@ -368,7 +368,7 @@ class ActionValidator:
                 session_id=session_id,
             )
 
-        if self._is_international_trip(trip):
+        if self._passport_required_for_trip(trip, normalized_flight_option or flight_option):
             passport_status = self.read_only_tools.get_passport_status(traveler_id=traveler_id)
             has_attachment = bool(
                 self._value(payload, session_context, "passport_attachment_ref")
@@ -378,7 +378,7 @@ class ActionValidator:
                 return ValidationResult(
                     action="create_booking_draft",
                     decision=NEED_MORE_INFORMATION,
-                    reasons=["Passport attachment is required before an international booking draft can be validated."],
+                    reasons=["Passport attachment is required before this booking draft can be validated."],
                     missing_information=["passport_attachment_ref"],
                     traveler_id=traveler_id,
                     session_id=session_id,
@@ -464,6 +464,25 @@ class ActionValidator:
                 decision=NEED_MORE_INFORMATION,
                 reasons=["Passport attachment reference is required before upload can be validated."],
                 missing_information=["passport_attachment_ref"],
+                traveler_id=str(traveler.get("traveler_id") or ""),
+                session_id=session_id,
+            )
+        if not str(attachment_ref).strip().lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".pdf")):
+            return ValidationResult(
+                action="upload_passport",
+                decision=REJECTED,
+                reasons=["Passport attachment must be an allowed image or PDF file."],
+                traveler_id=str(traveler.get("traveler_id") or ""),
+                session_id=session_id,
+            )
+        workflow = session_context.get("workflow_policy") if isinstance(session_context.get("workflow_policy"), dict) else {}
+        stage = str(session_context.get("stage") or workflow.get("state") or "").strip()
+        required_step = str(workflow.get("required_step") or "").strip()
+        if stage and stage != "awaiting_passport_upload" and required_step != "collect_passport_attachment":
+            return ValidationResult(
+                action="upload_passport",
+                decision=REJECTED,
+                reasons=["Passport attachment was not expected at the current conversation step."],
                 traveler_id=str(traveler.get("traveler_id") or ""),
                 session_id=session_id,
             )
@@ -577,6 +596,15 @@ class ActionValidator:
     def _is_international_trip(trip: dict[str, Any]) -> bool:
         value = str(trip.get("type") or trip.get("trip_type") or "").strip().lower()
         return value == "international"
+
+    @classmethod
+    def _passport_required_for_trip(cls, trip: dict[str, Any], flight_option: str = "") -> bool:
+        for key in ("passport_required", "requires_passport"):
+            if key in trip:
+                return cls._as_bool(trip.get(key))
+        if "passport_required_with_flight" in trip:
+            return str(flight_option or "").strip() == "With Flight" and cls._as_bool(trip.get("passport_required_with_flight"))
+        return cls._is_international_trip(trip)
 
     @staticmethod
     def _value(payload: dict[str, Any], session_context: dict[str, Any], *keys: str) -> Any:

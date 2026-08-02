@@ -24,11 +24,13 @@ def _create_temp_app():
 def _load_app_objects():
     from app.extensions import db
     from app.models.booking import TripBooking
+    from app.models.booking_event import BookingEventTrail
+    from app.models.handoff import HandoffQueue
     from app.models.lead import Lead
     from app.models.trip import Trip
     from app.models.traveler import Traveler
 
-    return db, Lead, Trip, Traveler, TripBooking
+    return db, Lead, Trip, Traveler, TripBooking, HandoffQueue, BookingEventTrail
 
 
 class Phase4LeadRedesignTests(unittest.TestCase):
@@ -39,7 +41,7 @@ class Phase4LeadRedesignTests(unittest.TestCase):
         os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path.resolve().as_posix()}"
         os.environ["RAHMA_SYSTEM_DB_PATH"] = str(self.db_path)
         self.app = _create_temp_app()
-        self.db, self.Lead, self.Trip, self.Traveler, self.TripBooking = _load_app_objects()
+        self.db, self.Lead, self.Trip, self.Traveler, self.TripBooking, self.HandoffQueue, self.BookingEventTrail = _load_app_objects()
         self.app.config["TESTING"] = True
         with self.app.app_context():
             self.db.drop_all()
@@ -231,6 +233,91 @@ class Phase4LeadRedesignTests(unittest.TestCase):
             self.assertIn(lead.lead_stage, {"Booking Draft", "Booking Draft Created"})
             booking_row = self.db.session.get(self.TripBooking, booking["booking_id"])
             self.assertEqual(booking_row.traveler_id, "TR900")
+
+    def test_delete_lead_hard_deletes_record_and_reuses_highest_id(self) -> None:
+        with self.app.app_context():
+            traveler = self.db.session.get(self.Traveler, "TR900")
+            traveler.last_lead_id = "LD00030"
+            booking = self.TripBooking(
+                booking_id="B-L-30",
+                trip_id="TR-LEAD-1",
+                trip_name="Lead Trip",
+                traveler_id="TR900",
+                traveler_name="Existing Traveler",
+                booking_status="Draft",
+                lead_id="LD00030",
+            )
+            handoff = self.HandoffQueue(
+                handoff_id="H-L-30",
+                traveler_id="TR900",
+                lead_id="LD00030",
+                reason="delete-test",
+            )
+            event = self.BookingEventTrail(
+                event_id="E-L-30",
+                traveler_id="TR900",
+                lead_id="LD00030",
+                booking_id="B-L-30",
+                event_type="lead_created",
+                event_label="Lead Created",
+            )
+            self.db.session.add_all(
+                [
+                    self.Lead(
+                        lead_id="LD00029",
+                        customer_name="Lower Lead",
+                        lead_stage="Qualified",
+                        traveler_id="TR900",
+                    ),
+                    self.Lead(
+                        lead_id="LD00030",
+                        customer_name="Delete Me",
+                        lead_stage="Booking Draft",
+                        traveler_id="TR900",
+                        booking_id="B-L-30",
+                    ),
+                    booking,
+                    handoff,
+                    event,
+                ]
+            )
+            self.db.session.commit()
+
+        response = self.client.post(
+            "/leads/LD00030",
+            data={"_method": "DELETE"},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            self.assertIsNone(self.db.session.get(self.Lead, "LD00030"))
+            self.assertIsNone(self.db.session.get(self.HandoffQueue, "H-L-30"))
+            self.assertIsNone(self.db.session.get(self.BookingEventTrail, "E-L-30"))
+            booking = self.db.session.get(self.TripBooking, "B-L-30")
+            self.assertIsNotNone(booking)
+            self.assertIsNone(booking.lead_id)
+            traveler = self.db.session.get(self.Traveler, "TR900")
+            self.assertIsNone(traveler.last_lead_id)
+
+        create_response = self.client.post(
+            "/leads/",
+            data={
+                "customer_name": "Replacement Lead",
+                "raw_phone": "201022233344",
+                "lead_stage": "Contacted",
+                "priority": "High",
+                "lead_source": "WhatsApp",
+                "interested_trip_ids": "TR-LEAD-1",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(create_response.status_code, 302)
+
+        with self.app.app_context():
+            replacement = self.db.session.get(self.Lead, "LD00030")
+            self.assertIsNotNone(replacement)
+            self.assertEqual(replacement.customer_name, "Replacement Lead")
 
 
 if __name__ == "__main__":

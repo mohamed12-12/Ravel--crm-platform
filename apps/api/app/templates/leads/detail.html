@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Lead {{ lead.lead_id }} — Rahma CRM{% endblock %}
+{% block title %}Lead {{ lead.lead_id }} — Nanovate CRM{% endblock %}
 {% block topbar_title %}Lead Detail{% endblock %}
 
 {% block topbar_actions %}
 <a href="{{ url_for('leads.index') }}" class="btn btn-ghost btn-sm">← All Leads</a>
-<button onclick="openModal('editLead')" class="btn btn-primary btn-sm">✏ Edit Lead</button>
+<button onclick="openModal('editLead')" class="btn btn-primary btn-sm">Edit Lead</button>
 {% endblock %}
 
 {% block content %}
@@ -19,25 +19,27 @@
                 <div>
                     <div style="display:flex;align-items:center;gap:0.65rem;flex-wrap:wrap;margin-bottom:0.5rem">
                         <span class="mono" style="color:var(--accent-2)">{{ lead.lead_id }}</span>
-                        {% if lead.lead_stage in ['Qualified', 'Booking Draft', 'Won'] %}
+                        {% if lead.lead_stage in ['Qualified', 'Won'] %}
                             <span class="badge badge-green">{{ lead.lead_stage }}</span>
+                        {% elif lead.lead_stage in ['Booking Draft', 'Booking Draft Created'] %}
+                            <span class="badge badge-yellow">{{ lead.lead_stage }}</span>
                         {% elif lead.lead_stage == 'Handoff Needed' %}
                             <span class="badge badge-red">{{ lead.lead_stage }}</span>
                         {% elif lead.lead_stage == 'Lost' %}
                             <span class="badge badge-red">{{ lead.lead_stage }}</span>
                         {% elif lead.lead_stage == 'New Lead' %}
-                            <span class="badge badge-blue">{{ lead.lead_stage }}</span>
+                            <span class="badge badge-gray">{{ lead.lead_stage }}</span>
                         {% else %}
                             <span class="badge badge-yellow">{{ lead.lead_stage }}</span>
                         {% endif %}
-                        {% if lead.priority == 'High' %}<span class="badge badge-red">🔴 High</span>
-                        {% elif lead.priority == 'Medium' %}<span class="badge badge-yellow">🟡 Medium</span>
-                        {% else %}<span class="badge badge-gray">🟢 Low</span>{% endif %}
-                        {% if lead.handoff_required %}<span class="badge badge-purple">🔔 Handoff Required</span>{% endif %}
+                        {% if lead.priority == 'High' %}<span class="badge badge-green">High</span>
+                        {% elif lead.priority == 'Medium' %}<span class="badge badge-yellow">Medium</span>
+                        {% else %}<span class="badge badge-gray">Low</span>{% endif %}
+                        {% if lead.handoff_required %}<span class="badge badge-purple">Handoff Required</span>{% endif %}
                     </div>
                     <h1 style="font-size:1.5rem;font-weight:800;color:var(--text-main)">{{ lead.customer_name or 'Unknown' }}</h1>
                     {% if lead.raw_phone %}
-                    <div style="color:var(--text-muted);font-size:0.83rem;margin-top:4px">📱 {{ lead.raw_phone }}</div>
+                    <div style="color:var(--text-muted);font-size:0.83rem;margin-top:4px">{{ lead.raw_phone }}</div>
                     {% endif %}
                 </div>
                 <!-- Stage Advance -->
@@ -55,7 +57,7 @@
                 {% for s in stage_list %}
                 {% set s_idx = loop.index0 %}
                 <div style="flex:1;padding:0.35rem 0.5rem;text-align:center;font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;
-                    background:{% if s_idx < current_idx %}rgba(99,102,241,0.25){% elif s_idx == current_idx %}var(--accent){% else %}rgba(255,255,255,0.04){% endif %};
+                    background:{% if s_idx < current_idx %}rgba(0,208,146,0.18){% elif s_idx == current_idx %}var(--accent){% else %}rgba(255,255,255,0.04){% endif %};
                     color:{% if s_idx <= current_idx %}#fff{% else %}var(--text-muted){% endif %};
                     border-right:1px solid var(--border)">{{ s }}</div>
                 {% endfor %}
@@ -85,8 +87,8 @@
         <!-- Details -->
         <div class="card">
             <div class="card-header">
-                <span class="card-title">📋 Lead Details</span>
-                <button onclick="openModal('editLead')" class="btn btn-ghost btn-sm">✏ Edit</button>
+                <span class="card-title">Lead Details</span>
+                <button onclick="openModal('editLead')" class="btn btn-ghost btn-sm">Edit</button>
             </div>
             <div class="grid-2" style="gap:1rem">
                 <div>
@@ -179,7 +181,7 @@
         {% if traveler %}
         <div class="card">
             <div class="card-header">
-                <span class="card-title">👤 Linked Traveler</span>
+                <span class="card-title">Linked Traveler</span>
                 <a href="{{ url_for('travelers.detail', traveler_id=traveler.traveler_id) }}" class="btn btn-ghost btn-sm">View Profile →</a>
             </div>
             <div style="display:flex;align-items:center;gap:1rem">
@@ -244,7 +246,7 @@
         <!-- Interactions -->
         <div class="card">
             <div class="card-header">
-                <span class="card-title">💬 Interactions ({{ interactions|length }})</span>
+                <span class="card-title">Interactions ({{ interactions|length }})</span>
             </div>
             {% if interactions %}
             <div style="display:flex;flex-direction:column;gap:0.75rem">
@@ -270,28 +272,28 @@
     <!-- Right: Actions -->
     <div style="display:flex;flex-direction:column;gap:1rem">
         <div class="card">
-            <div class="card-title" style="margin-bottom:1rem">⚡ Actions</div>
+            <div class="card-title" style="margin-bottom:1rem">Actions</div>
             <div style="display:flex;flex-direction:column;gap:0.5rem">
                 {% if lead.lead_stage not in ['Booked', 'Lost'] %}
                 <button class="btn btn-primary" onclick="advanceStage('{{ lead.lead_id }}')">→ Advance Stage</button>
                 {% endif %}
-                <button class="btn btn-ghost" onclick="openModal('triggerHandoff')">🔔 Create Handoff</button>
-                <a href="{{ url_for('bookings.index') }}" class="btn btn-ghost">📋 Create Booking</a>
-                <button onclick="openModal('editLead')" class="btn btn-ghost">✏ Edit Lead</button>
+                <button class="btn btn-ghost" onclick="openModal('triggerHandoff')">Create Handoff</button>
+                <a href="{{ url_for('bookings.index') }}" class="btn btn-ghost">Create Booking</a>
+                <button onclick="openModal('editLead')" class="btn btn-ghost">Edit Lead</button>
                 <button class="btn btn-ghost" onclick="runQuickAction('mark_contacted')">Mark Customer Contacted</button>
                 <button class="btn btn-ghost" onclick="runQuickAction('waiting_customer')">Waiting for Customer</button>
                 <button class="btn btn-ghost" onclick="runQuickAction('request_documents')">Request Documents</button>
                 <button class="btn btn-ghost" onclick="runQuickAction('request_deposit')">Deposit Requested</button>
-                <form action="{{ url_for('leads.update', lead_id=lead.lead_id) }}" method="POST" onsubmit="return confirm('Mark as Lost?')">
+                <form action="{{ url_for('leads.update', lead_id=lead.lead_id) }}" method="POST" onsubmit="return confirm('Permanently delete this lead from the CRM?')">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="_method" value="DELETE">
-                    <button type="submit" class="btn btn-danger" style="width:100%">✕ Mark as Lost</button>
+                    <button type="submit" class="btn btn-danger" style="width:100%">Delete Lead</button>
                 </form>
             </div>
         </div>
 
         <div class="card">
-            <div class="card-title" style="margin-bottom:0.75rem">ℹ Meta</div>
+            <div class="card-title" style="margin-bottom:0.75rem">Meta</div>
             <div style="display:flex;flex-direction:column;gap:0.5rem;font-size:0.78rem">
                 <div style="display:flex;justify-content:space-between">
                     <span style="color:var(--text-muted)">Created</span>
@@ -322,8 +324,8 @@
 <div id="editLead" class="modal-overlay">
     <div class="modal-box">
         <div class="modal-header">
-            <span class="modal-title">✏ Edit Lead</span>
-            <button class="modal-close" onclick="closeModal('editLead')">✕</button>
+            <span class="modal-title">Edit Lead</span>
+            <button class="modal-close" onclick="closeModal('editLead')">Close</button>
         </div>
         <form action="{{ url_for('leads.update', lead_id=lead.lead_id) }}" method="POST">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -417,8 +419,8 @@
 <div id="triggerHandoff" class="modal-overlay">
     <div class="modal-box" style="max-width:420px">
         <div class="modal-header">
-            <span class="modal-title">🔔 Create Handoff</span>
-            <button class="modal-close" onclick="closeModal('triggerHandoff')">✕</button>
+            <span class="modal-title">Create Handoff</span>
+            <button class="modal-close" onclick="closeModal('triggerHandoff')">Close</button>
         </div>
         <div class="form-group">
             <label class="form-label">Reason</label>
@@ -501,3 +503,4 @@ function triggerHandoff() {
 }
 </script>
 {% endblock %}
+

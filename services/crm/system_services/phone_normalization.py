@@ -19,8 +19,26 @@ COUNTRY_RULES: list[tuple[str, str, tuple[str, ...]]] = [
 ]
 
 _COUNTRY_NAMES = {code: name for code, name, _ in COUNTRY_RULES}
+_COUNTRY_PREFIXES = {code: prefixes for code, _name, prefixes in COUNTRY_RULES}
 _LOCAL_EGYPT_PREFIXES = {"10", "11", "12", "15"}
 _KNOWN_CODES_DESC = sorted(_COUNTRY_NAMES, key=len, reverse=True)
+_LOCAL_LENGTH_RULES: dict[str, set[int]] = {
+    "1": {10},
+    "20": {10},
+    "44": {10},
+    "961": {7, 8},
+    "962": {9},
+    "965": {8},
+    "966": {9},
+    "968": {8},
+    "971": {9},
+    "973": {8},
+    "974": {8},
+}
+_MIN_E164_DIGITS = 8
+_MAX_E164_DIGITS = 15
+_MIN_LOCAL_DIGITS = 6
+_MAX_LOCAL_DIGITS = 12
 
 
 @dataclass(frozen=True)
@@ -34,6 +52,8 @@ class PhoneNormalizationResult:
     requires_country_confirmation: bool
     inferred_country: str
     inferred_nationality: str
+    is_valid: bool
+    invalid_reason: str
 
     def to_dict(self) -> dict[str, Any]:
         lookup_key = next((v for v in self.phone_variants_for_lookup if ":" in v), "")
@@ -57,6 +77,8 @@ class PhoneNormalizationResult:
             "requires_country_code_confirmation": self.requires_country_confirmation,
             "inferred_country": self.inferred_country,
             "inferred_nationality": self.inferred_nationality,
+            "is_valid": self.is_valid,
+            "invalid_reason": self.invalid_reason,
             "country_hint": self.inferred_country,
             "nationality_hint": self.inferred_nationality,
         }
@@ -68,6 +90,37 @@ def _clean_phone_text(raw_phone: str) -> str:
 
 def _prefix_matches(local_number: str, prefixes: tuple[str, ...]) -> bool:
     return any(local_number.startswith(prefix) for prefix in prefixes)
+
+
+def _validate_phone_shape(
+    *,
+    digits: str,
+    country_code: str,
+    local_number: str,
+    requires_country_confirmation: bool,
+    enforce_prefix_validation: bool,
+) -> tuple[bool, str]:
+    if not digits:
+        return False, "missing_digits"
+    if len(digits) > _MAX_E164_DIGITS:
+        return False, "too_many_digits"
+    if len(digits) < _MIN_E164_DIGITS:
+        return False, "too_few_digits"
+    if requires_country_confirmation:
+        if digits.startswith("0") and len(digits) > 11:
+            return False, "invalid_local_length"
+        if len(digits) > 12:
+            return False, "invalid_local_length"
+        return True, ""
+    if local_number and (len(local_number) < _MIN_LOCAL_DIGITS or len(local_number) > _MAX_LOCAL_DIGITS):
+        return False, "invalid_local_length"
+    allowed_lengths = _LOCAL_LENGTH_RULES.get(country_code)
+    if allowed_lengths and local_number and len(local_number) not in allowed_lengths:
+        return False, "invalid_local_length"
+    expected_prefixes = _COUNTRY_PREFIXES.get(country_code, ())
+    if enforce_prefix_validation and expected_prefixes and local_number and not _prefix_matches(local_number, expected_prefixes):
+        return False, "invalid_mobile_prefix"
+    return True, ""
 
 
 def _detect_country_code_from_plus(digits: str) -> tuple[str, str] | tuple[str, str, str]:
@@ -97,6 +150,7 @@ def normalize_phone_input(
     inferred_country = ""
     inferred_nationality = ""
     plus_prefixed = cleaned.startswith("+")
+    enforce_prefix_validation = False
 
     if not digits:
         return PhoneNormalizationResult(
@@ -109,6 +163,8 @@ def normalize_phone_input(
             requires_country_confirmation=True,
             inferred_country="",
             inferred_nationality="",
+            is_valid=False,
+            invalid_reason="missing_digits",
         )
 
     if cleaned.startswith("00"):
@@ -120,10 +176,13 @@ def normalize_phone_input(
         country_code = default_country_code
         if digits.startswith(country_code) and len(digits) > len(country_code):
             local_number = digits[len(country_code) :]
+            enforce_prefix_validation = True
         elif country_code == "20" and digits.startswith("0") and len(digits) == 11 and _prefix_matches(digits[1:], _LOCAL_EGYPT_PREFIXES):
             local_number = digits[1:]
+            enforce_prefix_validation = True
         elif country_code == "20" and len(digits) == 10 and _prefix_matches(digits, _LOCAL_EGYPT_PREFIXES):
             local_number = digits
+            enforce_prefix_validation = True
         else:
             local_number = digits[1:] if country_code == "20" and digits.startswith("0") else digits
         normalized_e164 = f"+{country_code}{local_number}" if country_code and local_number else ""
@@ -144,6 +203,7 @@ def normalize_phone_input(
             country_code = detected_code
             local_number = detected_local
             normalized_e164 = f"+{digits}"
+            enforce_prefix_validation = True
             confidence = "high"
             inferred_country = _COUNTRY_NAMES.get(country_code, "")
             if country_code == "20" and _prefix_matches(local_number, _LOCAL_EGYPT_PREFIXES):
@@ -155,6 +215,7 @@ def normalize_phone_input(
             country_code = "20"
             local_number = digits[2:]
             normalized_e164 = f"+{country_code}{local_number}"
+            enforce_prefix_validation = True
             confidence = "high"
             inferred_country = "Egypt"
             inferred_nationality = "Egyptian" if _prefix_matches(local_number, _LOCAL_EGYPT_PREFIXES) else ""
@@ -165,6 +226,7 @@ def normalize_phone_input(
                     if local_number:
                         country_code = code
                         normalized_e164 = f"+{country_code}{local_number}"
+                        enforce_prefix_validation = True
                         confidence = "high"
                         inferred_country = _COUNTRY_NAMES.get(country_code, "")
                     break
@@ -207,6 +269,21 @@ def normalize_phone_input(
         inferred_country = ""
         inferred_nationality = ""
 
+    is_valid, invalid_reason = _validate_phone_shape(
+        digits=digits,
+        country_code=country_code,
+        local_number=local_number,
+        requires_country_confirmation=requires_country_confirmation,
+        enforce_prefix_validation=enforce_prefix_validation,
+    )
+    if not is_valid:
+        normalized_e164 = ""
+        inferred_country = ""
+        inferred_nationality = ""
+        confidence = "low"
+        if invalid_reason != "missing_digits":
+            requires_country_confirmation = False
+
     return PhoneNormalizationResult(
         raw_input=raw_input,
         normalized_e164=normalized_e164,
@@ -217,4 +294,6 @@ def normalize_phone_input(
         requires_country_confirmation=requires_country_confirmation,
         inferred_country=inferred_country,
         inferred_nationality=inferred_nationality,
+        is_valid=is_valid,
+        invalid_reason=invalid_reason,
     )

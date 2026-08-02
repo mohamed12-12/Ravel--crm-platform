@@ -1,0 +1,265 @@
+@import "../../styles/base.css";
+@import "../../components/niva/niva.css";
+
+.nv-webchat-app {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 34% 18%, rgba(56, 185, 141, 0.12), transparent 26%),
+    radial-gradient(circle at 84% 64%, rgba(110, 41, 150, 0.24), transparent 30%),
+    linear-gradient(180deg, var(--nv-black) 0%, var(--nv-bg-sidebar) 58%, var(--nv-black) 100%);
+}
+
+.nv-webchat-app::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 96px 96px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.78), transparent 70%);
+}
+
+.nv-webchat-shell {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  width: min(1180px, calc(100% - 40px));
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 28px 0;
+}
+
+.nv-webchat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 42px;
+}
+
+.nv-webchat-logo {
+  width: 178px;
+  height: auto;
+}
+
+.nv-webchat-nav {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  color: var(--nv-text-soft);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.nv-webchat-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 430px);
+  align-items: center;
+  gap: clamp(28px, 5vw, 72px);
+  padding: 52px 0 64px;
+}
+
+.nv-webchat-hero {
+  display: grid;
+  gap: 24px;
+  max-width: 700px;
+}
+
+.nv-webchat-hero h1 {
+  margin: 0;
+  color: var(--nv-white);
+  font-size: clamp(44px, 7vw, 86px);
+  font-weight: 700;
+  line-height: 0.94;
+  letter-spacing: 0;
+}
+
+.nv-webchat-hero p {
+  max-width: 620px;
+  margin: 0;
+  color: var(--nv-text-soft);
+  font-size: 19px;
+  line-height: 1.62;
+}
+
+.nv-webchat-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.nv-webchat-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  border: 1px solid var(--nv-border-strong);
+  border-radius: var(--nv-radius-md);
+  padding: 0 22px;
+  background: var(--nv-white);
+  color: var(--nv-neutral-950);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.nv-webchat-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  border: 1px solid rgba(56, 185, 141, 0.2);
+  border-radius: var(--nv-radius-full);
+  padding: 8px 12px;
+  background: rgba(56, 185, 141, 0.1);
+  color: var(--nv-accent);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.nv-webchat-status::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: var(--nv-radius-full);
+  background: currentColor;
+  box-shadow: 0 0 0 5px rgba(56, 185, 141, 0.12);
+}
+
+.nv-webchat-panel {
+  width: 100%;
+  height: min(680px, calc(100vh - 148px));
+  min-height: 520px;
+  border-color: rgba(255, 255, 255, 0.1);
+  border-radius: var(--nv-radius-xl);
+  background:
+    linear-gradient(180deg, rgba(25, 25, 25, 0.96), rgba(13, 13, 13, 0.98)),
+    var(--nv-bg-panel);
+  box-shadow: 0 32px 96px rgba(0, 0, 0, 0.56);
+}
+
+.nv-webchat-brand {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 12px;
+}
+
+.nv-webchat-brand p {
+  margin: 0;
+  color: var(--nv-accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.nv-webchat-brand h2 {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--nv-white);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nv-webchat-mark {
+  display: grid;
+  place-items: center;
+  width: 31px;
+  color: var(--nv-accent);
+}
+
+.nv-webchat-mark svg {
+  width: 31px;
+  height: auto;
+  fill: currentColor;
+}
+
+.nv-niva-panel__messages {
+  scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: var(--nv-border-strong) transparent;
+}
+
+.nv-niva-message-item {
+  animation: nv-webchat-rise-in 220ms ease;
+}
+
+.nv-niva-message-item--error .nv-niva-message-item__bubble {
+  border-color: rgba(239, 68, 68, 0.32);
+  color: #fca5a5;
+}
+
+.nv-niva-composer button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+@keyframes nv-webchat-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 900px) {
+  .nv-webchat-shell {
+    width: min(100% - 32px, 720px);
+  }
+
+  .nv-webchat-workspace {
+    grid-template-columns: 1fr;
+    align-items: start;
+    padding-top: 44px;
+  }
+
+  .nv-webchat-hero {
+    justify-items: center;
+    text-align: center;
+  }
+
+  .nv-webchat-nav {
+    display: none;
+  }
+
+  .nv-webchat-panel {
+    height: min(660px, calc(100vh - 260px));
+  }
+}
+
+@media (max-width: 640px) {
+  .nv-webchat-shell {
+    width: 100%;
+    padding: 18px 12px 12px;
+  }
+
+  .nv-webchat-workspace {
+    padding: 28px 0 0;
+  }
+
+  .nv-webchat-hero {
+    display: none;
+  }
+
+  .nv-webchat-panel {
+    height: calc(100vh - 82px);
+    min-height: 0;
+    border-radius: var(--nv-radius-xl);
+  }
+
+  .nv-niva-panel__header {
+    padding: 14px;
+  }
+}

@@ -3,6 +3,30 @@ from __future__ import annotations
 from services.ai_agent.ai_agent_app.agent.tool_registry import ToolSpec
 
 
+ROOM_REQUIREMENTS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "room_type": {"type": "string"},
+        "room_group": {"type": "string"},
+        "boys_rooms_requested": {"type": "integer"},
+        "girls_rooms_requested": {"type": "integer"},
+        "requirements": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "room_type": {"type": "string"},
+                    "room_group": {"type": "string"},
+                    "count": {"type": "integer"},
+                    "gender": {"type": "string"},
+                    "label": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
+
 def _tool_spec(name: str, description: str, properties: dict[str, object]) -> ToolSpec:
     return ToolSpec(
         name=name,
@@ -43,6 +67,9 @@ def build_write_tool_registry() -> dict[str, ToolSpec]:
                 "flight_option": {"type": "string"},
                 "room_type": {"type": "string"},
                 "room_group": {"type": "string"},
+                "boys_rooms_requested": {"type": "integer"},
+                "girls_rooms_requested": {"type": "integer"},
+                "room_requirements": ROOM_REQUIREMENTS_SCHEMA,
                 "booking_id": {"type": "string"},
                 "flow_key": {"type": "string"},
                 "current_step": {"type": "string"},
@@ -76,6 +103,9 @@ def build_write_tool_registry() -> dict[str, ToolSpec]:
                 "trip_id": {"type": "string"},
                 "room_type": {"type": "string"},
                 "room_group": {"type": "string"},
+                "boys_rooms_requested": {"type": "integer"},
+                "girls_rooms_requested": {"type": "integer"},
+                "room_requirements": ROOM_REQUIREMENTS_SCHEMA,
                 "flight_option": {"type": "string"},
                 "date_option": {"type": "string"},
                 "currency": {"type": "string"},

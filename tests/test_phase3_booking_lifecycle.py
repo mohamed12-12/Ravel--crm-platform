@@ -175,6 +175,104 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
         self.assertEqual(after["draft_holds_double"], 0)
         self.assertEqual(after["available_double"], 2)
 
+    def test_mixed_boys_girls_booking_stores_and_holds_categories_separately(self) -> None:
+        with self.app.app_context():
+            trip = self.Trip.query.filter_by(trip_id="TRIP-100").one()
+            trip.double_remaining = 3
+            trip.boys_double = 2
+            trip.girls_double = 1
+            self.db.session.commit()
+
+        booking = self.service.create_booking_draft(
+            traveler_id="TR100",
+            traveler_name="Returning Traveler",
+            trip_id="TRIP-100",
+            room_type="Double",
+            room_group="mixed",
+            room_requirements=[
+                {"room_type": "Double", "room_group": "boys", "rooms": 1},
+                {"room_type": "Double", "room_group": "girls", "rooms": 1},
+            ],
+            channel="web",
+            source="Test",
+        )
+
+        self.assertEqual(booking["room_group"], "mixed")
+        self.assertEqual(booking["boys_rooms_requested"], 1)
+        self.assertEqual(booking["girls_rooms_requested"], 1)
+        after = self.service._fetch_trip_record("TRIP-100")
+        self.assertEqual(after["draft_holds_double"], 2)
+        self.assertEqual(after["draft_holds_boys_double"], 1)
+        self.assertEqual(after["draft_holds_girls_double"], 1)
+        self.assertEqual(after["boys_double"], 1)
+        self.assertEqual(after["girls_double"], 0)
+
+        with self.app.app_context():
+            row = self.TripBooking.query.filter_by(booking_id=booking["booking_id"]).one()
+            self.assertEqual(row.room_group, "mixed")
+            self.assertEqual(row.boys_rooms_requested, 1)
+            self.assertEqual(row.girls_rooms_requested, 1)
+
+    def test_unavailable_boys_category_does_not_use_girls_inventory(self) -> None:
+        with self.app.app_context():
+            trip = self.Trip.query.filter_by(trip_id="TRIP-100").one()
+            trip.double_remaining = 2
+            trip.boys_double = 0
+            trip.girls_double = 2
+            self.db.session.commit()
+
+        before = self.service._fetch_trip_record("TRIP-100")
+        with self.assertRaises(ValueError) as ctx:
+            self.service.create_booking_draft(
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                trip_id="TRIP-100",
+                room_type="Double",
+                room_group="mixed",
+                room_requirements=[
+                    {"room_type": "Double", "room_group": "boys", "rooms": 1},
+                    {"room_type": "Double", "room_group": "girls", "rooms": 1},
+                ],
+                channel="web",
+                source="Test",
+            )
+        self.assertIn("Boys double rooms are unavailable", str(ctx.exception))
+        after = self.service._fetch_trip_record("TRIP-100")
+        self.assertEqual(after["draft_holds_double"], before["draft_holds_double"])
+        self.assertEqual(after["draft_holds_boys_double"], before["draft_holds_boys_double"])
+        self.assertEqual(after["draft_holds_girls_double"], before["draft_holds_girls_double"])
+        self.assertEqual(after["girls_double"], before["girls_double"])
+
+    def test_unavailable_girls_category_does_not_use_boys_inventory(self) -> None:
+        with self.app.app_context():
+            trip = self.Trip.query.filter_by(trip_id="TRIP-100").one()
+            trip.double_remaining = 2
+            trip.boys_double = 2
+            trip.girls_double = 0
+            self.db.session.commit()
+
+        before = self.service._fetch_trip_record("TRIP-100")
+        with self.assertRaises(ValueError) as ctx:
+            self.service.create_booking_draft(
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                trip_id="TRIP-100",
+                room_type="Double",
+                room_group="mixed",
+                room_requirements=[
+                    {"room_type": "Double", "room_group": "boys", "rooms": 1},
+                    {"room_type": "Double", "room_group": "girls", "rooms": 1},
+                ],
+                channel="web",
+                source="Test",
+            )
+        self.assertIn("Girls double rooms are unavailable", str(ctx.exception))
+        after = self.service._fetch_trip_record("TRIP-100")
+        self.assertEqual(after["draft_holds_double"], before["draft_holds_double"])
+        self.assertEqual(after["draft_holds_boys_double"], before["draft_holds_boys_double"])
+        self.assertEqual(after["draft_holds_girls_double"], before["draft_holds_girls_double"])
+        self.assertEqual(after["boys_double"], before["boys_double"])
+
     def test_admin_booking_ui_updates_lifecycle_and_history(self) -> None:
         with self.app.app_context():
             booking = self.TripBooking(

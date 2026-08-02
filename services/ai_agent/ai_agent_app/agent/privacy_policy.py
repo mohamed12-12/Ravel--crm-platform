@@ -26,8 +26,8 @@ class AgentPrivacyPolicy:
         "\u062f\u0627\u062e\u0644 \u0646\u0638\u0627\u0645 CRM."
     )
     EN_RESPONSE = (
-        "I can't share another traveler's CRM details in this chat. "
-        "I can help with your own booking or profile only. For another customer, please use the Rahma Traveler CRM with employee access."
+        "I can't share another traveler's details in this chat. "
+        "I can help with your own booking or profile only. For another customer, please ask the Ravel Traveler team to review it with employee access."
     )
 
     SENSITIVE_TOOLS = {

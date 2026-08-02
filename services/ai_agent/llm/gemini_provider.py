@@ -18,6 +18,7 @@ class GeminiProviderResponse:
     response_id: str
     raw: dict[str, Any]
     usage_metadata: dict[str, Any] | None = None
+    finish_reason: str = ""
 
 
 class GeminiProviderError(RuntimeError):
@@ -98,18 +99,21 @@ class GeminiProvider:
                     text = self._extract_text(payload_json)
                     response_id = str(payload_json.get("responseId") or payload_json.get("id") or uuid.uuid4().hex)
                     usage_metadata = payload_json.get("usageMetadata")
+                    finish_reason = self._extract_finish_reason(payload_json)
                     elapsed_ms = int((time.perf_counter() - started) * 1000)
                     agent_logger.info(
-                        "Gemini response received prompt_id=%s response_id=%s elapsed_ms=%s",
+                        "Gemini response received prompt_id=%s response_id=%s elapsed_ms=%s finish_reason=%s",
                         request_id or "",
                         response_id,
                         elapsed_ms,
+                        finish_reason,
                     )
                     return GeminiProviderResponse(
                         text=text,
                         response_id=response_id,
                         raw=payload_json,
                         usage_metadata=usage_metadata if isinstance(usage_metadata, dict) else None,
+                        finish_reason=finish_reason,
                     )
             except error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")
@@ -288,3 +292,10 @@ class GeminiProvider:
             if text:
                 pieces.append(text)
         return "\n".join(pieces).strip()
+
+    @staticmethod
+    def _extract_finish_reason(payload_json: dict[str, Any]) -> str:
+        candidates = payload_json.get("candidates") or []
+        if not candidates or not isinstance(candidates[0], dict):
+            return ""
+        return str(candidates[0].get("finishReason") or candidates[0].get("finish_reason") or "").strip()

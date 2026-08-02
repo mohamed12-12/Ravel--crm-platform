@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nanovate Niva Component</title>
+    <link rel="stylesheet" href="./niva.css">
+  </head>
+  <body>
+    <main class="nv-page">
+      <div class="nv-demo-shell">
+        <header class="nv-demo-header">
+          <div>
+            <h1>Niva Assistant Component</h1>
+            <p>Static HTML/CSS version of the floating assistant widget, teaser, launcher, chat panel, message bubbles, typing indicator, and composer.</p>
+          </div>
+        </header>
+
+        <nav class="nv-niva-component-links" aria-label="Niva component files">
+          <a class="nv-button nv-button--cta-secondary nv-button--sm" href="./widget.html">NivaWidget</a>
+          <a class="nv-button nv-button--cta-secondary nv-button--sm" href="./panel.html">NivaPanel</a>
+          <a class="nv-button nv-button--cta-secondary nv-button--sm" href="./message-item.html">NivaMessageItem</a>
+          <a class="nv-button nv-button--cta-secondary nv-button--sm" href="./icons.html">Niva Icons</a>
+        </nav>
+      </div>
+    </main>
+
+    <div class="nv-niva">
+      <section class="nv-niva-panel" role="dialog" aria-label="Niva assistant">
+        <header class="nv-niva-panel__header">
+          <span class="nv-niva-panel__title">Niva</span>
+          <button class="nv-icon-button" aria-label="Close Niva">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </header>
+        <div class="nv-niva-panel__messages">
+          <article class="nv-niva-message-item">
+            <span class="nv-niva-message-item__avatar"><img src="../../assets/agent_icon.svg" alt="Niva"></span>
+            <div class="nv-niva-message-item__content">
+              <div class="nv-niva-message-item__meta"><span class="nv-niva-message-item__name">Niva</span><span class="nv-niva-message-item__time">2:34 PM</span></div>
+              <div class="nv-niva-message-item__bubble">Hi, I can help you navigate the dashboard or build a better agent.</div>
+            </div>
+          </article>
+          <article class="nv-niva-message-item nv-niva-message-item--user">
+            <div class="nv-niva-message-item__content">
+              <div class="nv-niva-message-item__meta"><span class="nv-niva-message-item__time">2:35 PM</span><span class="nv-niva-message-item__name">You</span></div>
+              <div class="nv-niva-message-item__bubble">Show me where to create a voice agent.</div>
+            </div>
+            <span class="nv-niva-message-item__avatar">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <circle cx="12" cy="7" r="4" stroke="currentColor" stroke-width="2"/>
+              </svg>
+            </span>
+          </article>
+          <div class="nv-niva-typing" aria-label="Niva is typing">
+            <span></span><span></span><span></span>
+          </div>
+        </div>
+        <footer class="nv-niva-panel__composer">
+          <div class="nv-niva-composer">
+            <textarea rows="1" placeholder="Type a message..." aria-label="Message Niva"></textarea>
+            <button aria-label="Send message">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="m22 2-7 20-4-9-9-4 20-7Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
+        </footer>
+      </section>
+
+      <section class="nv-niva-teaser" role="button" tabindex="0" aria-label="Open Niva">
+        <button class="nv-icon-button nv-niva-teaser__close" aria-label="Dismiss Niva message">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <h2>Hey! I'm Niva</h2>
+        <p>I can help you navigate the dashboard or build a better agent.</p>
+      </section>
+
+      <div class="nv-niva-launcher-wrap">
+        <button class="nv-niva-launcher" aria-label="Open Niva">
+          <svg width="31" height="24" viewBox="0 0 31 24" fill="none">
+            <path d="M4 19V5h6l5.5 8V5H21v14h-6l-5.5-8v8H4Zm21-14h3v14h-3V5Z" fill="currentColor"/>
+          </svg>
+        </button>
+        <span class="nv-niva-badge" aria-label="1 unread message from Niva">1</span>
+      </div>
+    </div>
+  </body>
+</html>

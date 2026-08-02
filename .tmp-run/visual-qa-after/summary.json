@@ -1,0 +1,370 @@
+[
+  {
+    "mode": "desktop",
+    "route": "/login",
+    "status": 200,
+    "title": "Login - Nanovate CRM",
+    "screenshot": ".tmp-run\\visual-qa-after\\desktop_login.png",
+    "sidebar_width": null,
+    "topbar_h": null,
+    "footer_h": null,
+    "missing_imgs": [],
+    "metrics": {
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "hasOverflowX": false,
+      "activeNav": null,
+      "productBrand": null,
+      "footerText": null,
+      "navIconImages": 0,
+      "overflowing": []
+    }
+  },
+  {
+    "mode": "desktop",
+    "route": "/admin/dashboard",
+    "status": 200,
+    "title": "Dashboard — Nanovate CRM",
+    "screenshot": ".tmp-run\\visual-qa-after\\desktop_admin_dashboard.png",
+    "sidebar_width": 199,
+    "topbar_h": 72,
+    "footer_h": 47,
+    "missing_imgs": [
+      "/static/assets/olive/logos/olive-mark.svg"
+    ],
+    "metrics": {
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "hasOverflowX": false,
+      "activeNav": "Dashboard",
+      "productBrand": "Olive",
+      "footerText": "This system is powered by Nanovate Agents. © 2026 Nanovate. All Rights Reserved.",
+      "navIconImages": 10,
+      "overflowing": [
+        "Blocked traveler match for Khaled Ibrahim. The WhatsApp numb",
+        "Blocked traveler match for Youssef Masoud. The WhatsApp numb",
+        "Blocked traveler match for Yasmine bassem. The WhatsApp numb"
+      ]
+    }
+  },
+  {
+    "mode": "desktop",
+    "route": "/travelers/",
+    "status": 200,
+    "title": "Travelers - Nanovate CRM",
+    "screenshot": ".tmp-run\\visual-qa-after\\desktop_travelers.png",
+    "sidebar_width": 199,
+    "topbar_h": 72,
+    "footer_h": 47,
+    "missing_imgs": [
+      "/static/assets/olive/logos/olive-mark.svg"
+    ],
+    "metrics": {
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "hasOverflowX": false,
+      "activeNav": "Travelers",
+      "productBrand": "Olive",
+      "footerText": "This system is powered by Nanovate Agents. © 2026 Nanovate. All Rights Reserved.",
+      "navIconImages": 10,
+      "overflowing": []
+    }
+  },
+  {
+    "mode": "desktop",
+    "route": "/leads/",
+    "status": 200,
+    "title": "Leads - Nanovate CRM",
+    "screenshot": ".tmp-run\\visual-qa-after\\desktop_leads.png",
+    "sidebar_width": 199,
+    "topbar_h": 72,
+    "footer_h": 47,
+    "missing_imgs": [
+      "/static/assets/olive/logos/olive-mark.svg"
+    ],
+    "metrics": {
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "hasOverflowX": false,
+      "activeNav": "Leads",
+      "productBrand": "Olive",
+      "footerText": "This system is powered by Nanovate Agents. © 2026 Nanovate. All Rights Reserved.",
+      "navIconImages": 10,
+      "overflowing": []
+    }
+  },
+  {
+    "mode": "desktop",
+    "route": "/bookings/",
+    "status": 200,
+    "title": "Bookings — Nanovate CRM",
+    "screenshot": ".tmp-run\\visual-qa-after\\desktop_bookings.png",
+    "sidebar_width": 199,
+    "topbar_h": 72,
+    "footer_h": 47,
+    "missing_imgs": [
+      "/static/assets/olive/logos/olive-mark.svg"
+    ],
+    "metrics": {
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "hasOverflowX": false,
+      "activeNav": "Bookings",
+      "productBrand": "Olive",
+      "footerText": "This system is powered by Nanovate Agents. © 2026 Nanovate. All Rights Reserved.",
+      "navIconImages": 10,
+      "overflowing": []
+    }
+  },
+  {
+    "mode": "desktop",
+    "route": "/trips/",
+    "status": 200,
+    "title": "Trips — Nanovate CRM",
+    "screenshot": ".tmp-run\\visual-qa-after\\desktop_trips.png",
+    "sidebar_width": 199,
+    "topbar_h": 72,
+    "footer_h": 47,
+    "missing_imgs": [
+      "/static/assets/olive/logos/olive-mark.svg"
+    ],
+    "metrics": {
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "hasOverflowX": false,
+      "activeNav": "Trips",
+      "productBrand": "Olive",
+      "footerText": "This system is powered by Nanovate Agents. © 2026 Nanovate. All Rights Reserved.",
+      "navIconImages": 10,
+      "overflowing": []
+    }
+  },
+  {
+    "mode": "desktop",
+    "route": "/admin/handoffs/",
+    "status": 200,
+    "title": "Handoff Queue - Nanovate CRM",
+    "screenshot": ".tmp-run\\visual-qa-after\\desktop_admin_handoffs.png",
+    "sidebar_width": 199,
+    "topbar_h": 72,
+    "footer_h": 47,
+    "missing_imgs": [
+      "/static/assets/olive/logos/olive-mark.svg"
+    ],
+    "metrics": {
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "hasOverflowX": false,
+      "activeNav": "Handoff Queue 3",
+      "productBrand": "Olive",
+      "footerText": "This system is powered by Nanovate Agents. © 2026 Nanovate. All Rights Reserved.",
+      "navIconImages": 10,
+      "overflowing": []
+    }
+  },
+  {
+    "mode": "desktop",
+    "route": "/admin/users",
+    "status": 200,
+    "title": "Login - Nanovate CRM",
+    "screenshot": ".tmp-run\\visual-qa-after\\desktop_admin_users.png",
+    "sidebar_width": null,
+    "topbar_h": null,
+    "footer_h": null,
+    "missing_imgs": [],
+    "metrics": {
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "hasOverflowX": false,
+      "activeNav": null,
+      "productBrand": null,
+      "footerText": null,
+      "navIconImages": 0,
+      "overflowing": []
+    }
+  },
+  {
+    "mode": "mobile",
+    "route": "/login",
+    "status": 200,
+    "title": "Login - Nanovate CRM",
+    "screenshot": ".tmp-run\\visual-qa-after\\mobile_login.png",
+    "sidebar_width": null,
+    "topbar_h": null,
+    "footer_h": null,
+    "missing_imgs": [],
+    "metrics": {
+      "scrollWidth": 390,
+      "innerWidth": 390,
+      "hasOverflowX": false,
+      "activeNav": null,
+      "productBrand": null,
+      "footerText": null,
+      "navIconImages": 0,
+      "overflowing": []
+    }
+  },
+  {
+    "mode": "mobile",
+    "route": "/admin/dashboard",
+    "status": 200,
+    "title": "Dashboard — Nanovate CRM",
+    "screenshot": ".tmp-run\\visual-qa-after\\mobile_admin_dashboard.png",
+    "sidebar_width": 199,
+    "topbar_h": 72,
+    "footer_h": 81,
+    "missing_imgs": [
+      "/static/assets/olive/logos/olive-mark.svg"
+    ],
+    "metrics": {
+      "scrollWidth": 980,
+      "innerWidth": 980,
+      "hasOverflowX": false,
+      "activeNav": "Dashboard",
+      "productBrand": "Olive",
+      "footerText": "This system is powered by Nanovate Agents. © 2026 Nanovate. All Rights Reserved.",
+      "navIconImages": 10,
+      "overflowing": [
+        "Blocked traveler match for Khaled Ibrahim. The WhatsApp numb",
+        "Blocked traveler match for Youssef Masoud. The WhatsApp numb",
+        "Blocked traveler match for Yasmine bassem. The WhatsApp numb"
+      ]
+    }
+  },
+  {
+    "mode": "mobile",
+    "route": "/travelers/",
+    "status": 200,
+    "title": "Travelers - Nanovate CRM",
+    "screenshot": ".tmp-run\\visual-qa-after\\mobile_travelers.png",
+    "sidebar_width": 199,
+    "topbar_h": 72,
+    "footer_h": 81,
+    "missing_imgs": [
+      "/static/assets/olive/logos/olive-mark.svg"
+    ],
+    "metrics": {
+      "scrollWidth": 876,
+      "innerWidth": 876,
+      "hasOverflowX": false,
+      "activeNav": "Travelers",
+      "productBrand": "Olive",
+      "footerText": "This system is powered by Nanovate Agents. © 2026 Nanovate. All Rights Reserved.",
+      "navIconImages": 10,
+      "overflowing": []
+    }
+  },
+  {
+    "mode": "mobile",
+    "route": "/leads/",
+    "status": 200,
+    "title": "Leads - Nanovate CRM",
+    "screenshot": ".tmp-run\\visual-qa-after\\mobile_leads.png",
+    "sidebar_width": 199,
+    "topbar_h": 72,
+    "footer_h": 81,
+    "missing_imgs": [
+      "/static/assets/olive/logos/olive-mark.svg"
+    ],
+    "metrics": {
+      "scrollWidth": 1147,
+      "innerWidth": 1147,
+      "hasOverflowX": false,
+      "activeNav": "Leads",
+      "productBrand": "Olive",
+      "footerText": "This system is powered by Nanovate Agents. © 2026 Nanovate. All Rights Reserved.",
+      "navIconImages": 10,
+      "overflowing": []
+    }
+  },
+  {
+    "mode": "mobile",
+    "route": "/bookings/",
+    "status": 200,
+    "title": "Bookings — Nanovate CRM",
+    "screenshot": ".tmp-run\\visual-qa-after\\mobile_bookings.png",
+    "sidebar_width": 199,
+    "topbar_h": 72,
+    "footer_h": 81,
+    "missing_imgs": [
+      "/static/assets/olive/logos/olive-mark.svg"
+    ],
+    "metrics": {
+      "scrollWidth": 860,
+      "innerWidth": 860,
+      "hasOverflowX": false,
+      "activeNav": "Bookings",
+      "productBrand": "Olive",
+      "footerText": "This system is powered by Nanovate Agents. © 2026 Nanovate. All Rights Reserved.",
+      "navIconImages": 10,
+      "overflowing": []
+    }
+  },
+  {
+    "mode": "mobile",
+    "route": "/trips/",
+    "status": 200,
+    "title": "Trips — Nanovate CRM",
+    "screenshot": ".tmp-run\\visual-qa-after\\mobile_trips.png",
+    "sidebar_width": 199,
+    "topbar_h": 72,
+    "footer_h": 81,
+    "missing_imgs": [
+      "/static/assets/olive/logos/olive-mark.svg"
+    ],
+    "metrics": {
+      "scrollWidth": 818,
+      "innerWidth": 818,
+      "hasOverflowX": false,
+      "activeNav": "Trips",
+      "productBrand": "Olive",
+      "footerText": "This system is powered by Nanovate Agents. © 2026 Nanovate. All Rights Reserved.",
+      "navIconImages": 10,
+      "overflowing": []
+    }
+  },
+  {
+    "mode": "mobile",
+    "route": "/admin/handoffs/",
+    "status": 200,
+    "title": "Handoff Queue - Nanovate CRM",
+    "screenshot": ".tmp-run\\visual-qa-after\\mobile_admin_handoffs.png",
+    "sidebar_width": 199,
+    "topbar_h": 72,
+    "footer_h": 81,
+    "missing_imgs": [
+      "/static/assets/olive/logos/olive-mark.svg"
+    ],
+    "metrics": {
+      "scrollWidth": 810,
+      "innerWidth": 810,
+      "hasOverflowX": false,
+      "activeNav": "Handoff Queue 3",
+      "productBrand": "Olive",
+      "footerText": "This system is powered by Nanovate Agents. © 2026 Nanovate. All Rights Reserved.",
+      "navIconImages": 10,
+      "overflowing": []
+    }
+  },
+  {
+    "mode": "mobile",
+    "route": "/admin/users",
+    "status": 200,
+    "title": "Login - Nanovate CRM",
+    "screenshot": ".tmp-run\\visual-qa-after\\mobile_admin_users.png",
+    "sidebar_width": null,
+    "topbar_h": null,
+    "footer_h": null,
+    "missing_imgs": [],
+    "metrics": {
+      "scrollWidth": 390,
+      "innerWidth": 390,
+      "hasOverflowX": false,
+      "activeNav": null,
+      "productBrand": null,
+      "footerText": null,
+      "navIconImages": 0,
+      "overflowing": []
+    }
+  }
+]

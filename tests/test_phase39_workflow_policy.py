@@ -191,7 +191,8 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
 
         session = client.post(f"/api/session/{session_id}/message", json={"text": "2"}).get_json()["session"]
         self.assertEqual(session["stage"], "trip_selection_required")
-        self.assertEqual(len(provider.calls), 3)
+        # Trip search and numbered result rendering are backend-owned.
+        self.assertEqual(len(provider.calls), 1)
 
         expected_trip_id = "RT-INT-26-001"
         session = client.post(f"/api/session/{session_id}/message", json={"text": "yes"}).get_json()["session"]
@@ -216,7 +217,7 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
         self.assertEqual(session["selectedTripId"], expected_trip_id)
         self.assertEqual(session["selectedTripName"], "Istanbul Explorer")
         self.assertIn("passport", session["messages"][-1]["text"].lower())
-        self.assertEqual(len(provider.calls), 3)
+        self.assertEqual(len(provider.calls), 1)
         self.assertNotIn("Sinai Trek", "\n".join(message["text"] for message in session["messages"]))
 
     def test_arabic_digit_phone_submission_runs_crm_lookup(self) -> None:
@@ -297,11 +298,12 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
         self.assertNotIn("create_booking_draft", room_step.allowed_tools)
         self.assertNotIn("search_available_trips", room_step.allowed_tools)
         room_message = policy.block_tool_result("create_booking_draft", room_step)["assistant_message"]
-        self.assertIn("Single: 3 available", room_message)
-        self.assertIn("Double boys: 2 available", room_message)
+        self.assertIn("Single", room_message)
+        self.assertIn("Double boys", room_message)
         self.assertNotIn("Double girls", room_message)
-        self.assertIn("Triple boys: 2 available", room_message)
+        self.assertIn("Triple boys", room_message)
         self.assertNotIn("Triple girls", room_message)
+        self.assertNotIn("available", room_message.lower().replace("available room options", ""))
 
         group_step = policy.evaluate({
             **base_context,
@@ -376,6 +378,8 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
         })
         self.assertEqual(birthday_step.state, "birthday_required")
         self.assertEqual(birthday_step.required_step, "collect_birthday")
+        self.assertIn("any clear format", birthday_step.assistant_message)
+        self.assertNotIn("YYYY-MM-DD format", birthday_step.assistant_message)
 
         currency_step = policy.evaluate({
             **base_context,
@@ -455,10 +459,12 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
             },
             arabic=True,
         )
-        self.assertIn("\u0627\u0644\u062a\u0648\u0641\u0631 \u0627\u0644\u062d\u0627\u0644\u064a \u0645\u0646 CRM:", room_message)
-        self.assertIn("Single (\u0641\u0631\u062f\u064a\u0629): 3 available", room_message)
-        self.assertIn("Double - Girls (\u062b\u0646\u0627\u0626\u064a\u0629 \u0628\u0646\u0627\u062a): 1 available", room_message)
-        self.assertIn("\n4) Triple - Boys (\u062b\u0644\u0627\u062b\u064a\u0629 \u0634\u0628\u0627\u0628): 2 available", room_message)
+        self.assertIn("\u0627\u0644\u062e\u064a\u0627\u0631\u0627\u062a \u0627\u0644\u0645\u062a\u0627\u062d\u0629:", room_message)
+        self.assertIn("Single (\u0641\u0631\u062f\u064a\u0629)", room_message)
+        self.assertIn("Double - Girls (\u062b\u0646\u0627\u0626\u064a\u0629 \u0628\u0646\u0627\u062a)", room_message)
+        self.assertIn("\n4) Triple - Boys (\u062b\u0644\u0627\u062b\u064a\u0629 \u0634\u0628\u0627\u0628)", room_message)
+        self.assertNotIn("CRM", room_message)
+        self.assertNotIn("available", room_message)
         self.assertIn("\u0627\u0643\u062a\u0628 \u0627\u0644\u062e\u064a\u0627\u0631 \u0627\u0644\u0645\u0646\u0627\u0633\u0628 \u0623\u0648 \u0631\u0642\u0645\u0647.", room_message)
 
     def test_customer_reply_formatter_removes_markdown_and_preserves_lists(self) -> None:
@@ -472,7 +478,14 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
         self.assertNotIn("*", reply)
         self.assertNotIn("**", reply)
 
-    def test_gender_filter_and_capacity_handoff_are_backend_owned(self) -> None:
+    def test_customer_reply_formatter_preserves_explicit_numbers_after_item_details(self) -> None:
+        reply = format_agent_reply(
+            "1) DEmo\nDates: July 28, 2026 to August 10, 2026\n\n2) Today Demo\nDates: July 28, 2026 to July 30, 2026"
+        )
+        self.assertIn("\n1) DEmo\n", f"\n{reply}\n")
+        self.assertIn("\n2) Today Demo\n", f"\n{reply}\n")
+
+    def test_gender_filter_uses_room_occupancy_before_capacity_handoff(self) -> None:
         policy = ConversationWorkflowPolicy()
         context = {
             "workflow": {"lookup_status": "found", "identity_verified": True, "verified_status": "Active"},
@@ -495,12 +508,48 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
             "collection_state": {"room_group": True, "room_type": True, "group_size": True},
         }
         decision = policy.evaluate(context)
+        self.assertNotEqual(decision.state, "capacity_handoff_required")
+        self.assertFalse(decision.handoff_required)
+        room_prompt = policy._room_inventory_prompt(context["selected_trip"], room_group="girls")
+        self.assertIn("Double girls", room_prompt)
+        self.assertNotIn("Double boys", room_prompt)
+        self.assertNotIn("1 available", room_prompt)
+
+    def test_mixed_room_partial_availability_creates_handoff(self) -> None:
+        policy = ConversationWorkflowPolicy()
+        context = {
+            "workflow": {"lookup_status": "found", "identity_verified": True, "verified_status": "Active"},
+            "known_traveler": {"traveler_id": "TR00999", "status": "Active"},
+            "trip_type": "local",
+            "selected_trip_id": "RT-LOC-26-001",
+            "selected_trip": {
+                "type": "Local",
+                "available_double": 2,
+                "boys_double": 0,
+                "girls_double": 2,
+            },
+            "room_group": "mixed",
+            "room_type": "Double",
+            "room_requirements": {
+                "requirements": [
+                    {"room_type": "Double", "room_group": "boys", "rooms": 1},
+                    {"room_type": "Double", "room_group": "girls", "rooms": 1},
+                ],
+                "boys_rooms_requested": 1,
+                "girls_rooms_requested": 1,
+            },
+            "group_size": 2,
+            "flight_option": "Without Flight",
+            "collection_state": {"room_group": True, "room_type": True, "group_size": True, "flight_option": True},
+        }
+
+        decision = policy.evaluate(context)
+
         self.assertEqual(decision.state, "capacity_handoff_required")
         self.assertTrue(decision.handoff_required)
-        self.assertEqual(decision.allowed_tools, {"create_handoff"})
-        room_prompt = policy._room_inventory_prompt(context["selected_trip"], room_group="girls")
-        self.assertIn("Double girls: 1 available", room_prompt)
-        self.assertNotIn("Double boys", room_prompt)
+        self.assertIn("Girls Double Room", decision.assistant_message)
+        self.assertIn("Boys Double Room", decision.assistant_message)
+        self.assertIn("not available", decision.assistant_message)
 
     def test_blacklisted_profile_creates_one_critical_handoff_without_gemini(self) -> None:
         client, app = self._tool_calling_app()
@@ -613,7 +662,8 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
         session = client.post(f"/api/session/{session['id']}/message", json={"text": "01112223333"}).get_json()["session"]
 
         self.assertEqual(session["tripType"], "international")
-        self.assertEqual(session["selectedTripName"], "Turkey")
+        self.assertEqual(session["tripQuery"], "Turkey")
+        self.assertEqual(session["selectedTripName"], "")
         self.assertEqual(session["preferredDate"], "August")
         self.assertEqual(session["groupSize"], 4)
         self.assertEqual(session["customer_status"], "Searching trips")
@@ -668,7 +718,7 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
                     function_call_response(
                         "create_lead",
                         {
-                            "customer_name": "Amina Hassan",
+                            "customer_name": "Amina Hassan Salem",
                             "raw_phone": "01112223333",
                             "country_code": "20",
                             "preferred_trip_type": "international",
@@ -687,8 +737,18 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
         session = client.post("/api/session", json={}).get_json()["session"]
         session = client.post(
             f"/api/session/{session['id']}/message",
-            json={"text": "My name is Amina Hassan. I want an international trip to Turkey in August. My WhatsApp is 01112223333."},
+            json={"text": "01112223333"},
         ).get_json()["session"]
+        self.assertEqual(session["stage"], "traveler_not_found")
+
+        for text, expected_stage in (
+            ("Amina Hassan Salem", "nationality_required"),
+            ("Egyptian", "birthday_required"),
+            ("26/05/2003", "currency_required"),
+            ("USD", "trip_type_required"),
+        ):
+            session = client.post(f"/api/session/{session['id']}/message", json={"text": text}).get_json()["session"]
+            self.assertEqual(session["stage"], expected_stage)
 
         final_result = session["finalResult"]
         self.assertIn("create_lead", session["toolsUsed"])

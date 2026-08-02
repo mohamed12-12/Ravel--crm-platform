@@ -1,0 +1,127 @@
+{
+  "_meta": {
+    "mode": "preview",
+    "source_type": "excel",
+    "source_label": "authority-test.xlsx",
+    "fingerprint": "bd0260e39326eca19a46a3e39a0f71634e4794b11aa39cc349e197b3028a08c7",
+    "schema_version": "1",
+    "generated_at": "2026-07-29T13:47:17+00:00",
+    "approved_by": "",
+    "authority": "crm"
+  },
+  "Language Templates": {
+    "new": 0,
+    "update": 0,
+    "unchanged": 0,
+    "conflict": 0,
+    "invalid": 0,
+    "duplicate": 0,
+    "inserted": 0,
+    "samples": []
+  },
+  "DM Copy Library": {
+    "new": 0,
+    "update": 0,
+    "unchanged": 0,
+    "conflict": 0,
+    "invalid": 0,
+    "duplicate": 0,
+    "inserted": 0,
+    "samples": []
+  },
+  "Trips": {
+    "new": 0,
+    "update": 0,
+    "unchanged": 0,
+    "conflict": 1,
+    "invalid": 0,
+    "duplicate": 0,
+    "inserted": 0,
+    "samples": [
+      {
+        "row": 3,
+        "key": "RT-TEST",
+        "classification": "conflict",
+        "reason": "CRM value differs; spreadsheet overwrite blocked",
+        "fields": [
+          "trip_name",
+          "year",
+          "sales_status",
+          "single_remaining"
+        ]
+      }
+    ]
+  },
+  "Community Events": {
+    "new": 0,
+    "update": 0,
+    "unchanged": 0,
+    "conflict": 0,
+    "invalid": 0,
+    "duplicate": 0,
+    "inserted": 0,
+    "samples": []
+  },
+  "Travelers": {
+    "new": 0,
+    "update": 0,
+    "unchanged": 0,
+    "conflict": 1,
+    "invalid": 0,
+    "duplicate": 0,
+    "inserted": 0,
+    "samples": [
+      {
+        "row": 2,
+        "key": "TR00999",
+        "classification": "conflict",
+        "reason": "CRM value differs; spreadsheet overwrite blocked",
+        "fields": [
+          "status",
+          "full_name",
+          "created_at"
+        ]
+      }
+    ]
+  },
+  "Leads": {
+    "new": 0,
+    "update": 0,
+    "unchanged": 0,
+    "conflict": 0,
+    "invalid": 0,
+    "duplicate": 0,
+    "inserted": 0,
+    "samples": []
+  },
+  "Interactions": {
+    "new": 0,
+    "update": 0,
+    "unchanged": 0,
+    "conflict": 0,
+    "invalid": 0,
+    "duplicate": 0,
+    "inserted": 0,
+    "samples": []
+  },
+  "Trip Bookings": {
+    "new": 0,
+    "update": 0,
+    "unchanged": 0,
+    "conflict": 0,
+    "invalid": 0,
+    "duplicate": 0,
+    "inserted": 0,
+    "samples": []
+  },
+  "CE Bookings": {
+    "new": 0,
+    "update": 0,
+    "unchanged": 0,
+    "conflict": 0,
+    "invalid": 0,
+    "duplicate": 0,
+    "inserted": 0,
+    "samples": []
+  }
+}

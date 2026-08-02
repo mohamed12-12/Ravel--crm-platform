@@ -33,6 +33,55 @@ class ReadOnlyCRMTools:
     def _normalize_text(value: str | None) -> str:
         return str(value or "").strip()
 
+    @classmethod
+    def _trip_matches_query(cls, trip: dict[str, Any], query: str) -> bool:
+        normalized_query = cls._normalize_text(query).casefold()
+        if not normalized_query:
+            return True
+        haystack = " ".join(
+            str(trip.get(key) or "")
+            for key in (
+                "trip_id",
+                "trip_name",
+                "destination",
+                "country",
+                "city",
+                "location",
+                "public_description",
+                "description",
+                "program",
+                "notes",
+            )
+        ).casefold()
+        stop_words = {
+            "a",
+            "an",
+            "country",
+            "destination",
+            "for",
+            "from",
+            "go",
+            "in",
+            "interested",
+            "me",
+            "need",
+            "please",
+            "show",
+            "the",
+            "to",
+            "travel",
+            "trip",
+            "trips",
+            "visit",
+            "visiting",
+            "want",
+            "we",
+        }
+        tokens = [token for token in normalized_query.split() if token and token not in stop_words]
+        if not tokens:
+            return True
+        return all(token in haystack for token in tokens)
+
     @staticmethod
     def _row_to_dict(row: Any) -> dict[str, Any]:
         if row is None:
@@ -266,8 +315,7 @@ class ReadOnlyCRMTools:
                 trip_result[bucket] = [
                     trip
                     for trip in trip_result[bucket]
-                    if normalized_query in str(trip.get("trip_name", "")).casefold()
-                    or normalized_query in str(trip.get("trip_id", "")).casefold()
+                    if self._trip_matches_query(trip, normalized_query)
                 ]
         return {
             "trip_type": trip_type or "",
@@ -311,15 +359,13 @@ class ReadOnlyCRMTools:
             trips = [
                 trip
                 for trip in trips
-                if normalized_destination in str(trip.get("trip_name") or "").casefold()
-                or normalized_destination in str(trip.get("trip_id") or "").casefold()
+                if self._trip_matches_query(trip, normalized_destination)
             ]
         if normalized_query and normalized_query != normalized_destination:
             trips = [
                 trip
                 for trip in trips
-                if normalized_query in str(trip.get("trip_name") or "").casefold()
-                or normalized_query in str(trip.get("trip_id") or "").casefold()
+                if self._trip_matches_query(trip, normalized_query)
             ]
         if normalized_date:
             trips = [

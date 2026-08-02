@@ -1,0 +1,348 @@
+@import "../../styles/base.css";
+@import "../atoms/atoms.css";
+
+.nv-niva {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.nv-niva-teaser {
+  position: relative;
+  max-width: 300px;
+  border: 1px solid #2a2a2a;
+  border-radius: 16px;
+  padding: 16px 36px 16px 16px;
+  background: #141414;
+  box-shadow: var(--nv-shadow-soft);
+}
+
+.nv-niva-teaser__close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+.nv-niva-teaser h2 {
+  margin: 0;
+  color: var(--nv-white);
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.nv-niva-teaser p {
+  margin: 4px 0 0;
+  color: #9a9a9a;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.nv-niva-launcher-wrap {
+  position: relative;
+}
+
+.nv-niva-launcher {
+  display: grid;
+  place-items: center;
+  width: 51px;
+  height: 50px;
+  border: 1px solid var(--nv-neutral-600);
+  border-radius: var(--nv-radius-lg);
+  background: var(--nv-neutral-700);
+  color: var(--nv-white);
+  box-shadow: var(--nv-shadow-soft);
+  transition: transform 150ms ease;
+}
+
+.nv-niva-launcher:hover {
+  transform: scale(1.04);
+}
+
+.nv-niva-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  border: 2px solid var(--nv-bg-sidebar);
+  border-radius: var(--nv-radius-full);
+  padding: 0 5px;
+  background: var(--nv-error);
+  color: var(--nv-white);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.nv-niva-panel {
+  display: flex;
+  width: min(350px, calc(100vw - 32px));
+  height: min(491px, calc(100vh - 120px));
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--nv-border-strong);
+  border-radius: var(--nv-radius-md);
+  background: #0b040f;
+}
+
+.nv-niva-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  border-bottom: 1px solid #272727;
+  padding: 24px;
+}
+
+.nv-niva-panel__title {
+  color: var(--nv-white);
+  font-size: 16px;
+  font-weight: 650;
+  text-transform: capitalize;
+}
+
+.nv-niva-panel__messages {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.nv-niva-message {
+  display: flex;
+  gap: 10px;
+  max-width: 92%;
+}
+
+.nv-niva-message--user {
+  align-self: flex-end;
+  justify-content: flex-end;
+}
+
+.nv-niva-message__bubble {
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #191919;
+  color: var(--nv-white);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.nv-niva-message--user .nv-niva-message__bubble {
+  background: var(--nv-accent);
+  color: var(--nv-neutral-950);
+}
+
+.nv-niva-message-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding-right: 8px;
+}
+
+.nv-niva-message-item--user {
+  justify-content: flex-end;
+  gap: 16px;
+}
+
+.nv-niva-message-item__avatar {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: var(--nv-radius-full);
+  background: #0b040f;
+}
+
+.nv-niva-message-item__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.nv-niva-message-item--user .nv-niva-message-item__avatar {
+  border-radius: var(--nv-radius-lg);
+  background: #2a2828;
+  color: #a1a1a1;
+}
+
+.nv-niva-message-item__content {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.nv-niva-message-item--user .nv-niva-message-item__content {
+  align-items: flex-end;
+}
+
+.nv-niva-message-item__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 20px;
+}
+
+.nv-niva-message-item__name {
+  color: var(--nv-white);
+  font-size: 14px;
+}
+
+.nv-niva-message-item__time {
+  color: #a1a1a1;
+  font-size: 12px;
+}
+
+.nv-niva-message-item__bubble {
+  width: 100%;
+  border: 1px solid #353535;
+  border-radius: 6px 16px 16px 16px;
+  padding: 16px;
+  background: #191919;
+  color: var(--nv-white);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.nv-niva-message-item--user .nv-niva-message-item__bubble {
+  border: 0;
+  border-radius: 16px 6px 16px 16px;
+  padding: 16px 20px;
+  background: #171717;
+}
+
+.nv-niva-markdown {
+  display: grid;
+  gap: 8px;
+}
+
+.nv-niva-markdown p,
+.nv-niva-markdown ul,
+.nv-niva-markdown ol {
+  margin: 0;
+}
+
+.nv-niva-markdown ul,
+.nv-niva-markdown ol {
+  padding-left: 18px;
+}
+
+.nv-niva-icons-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.nv-niva-icon-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--nv-border);
+  border-radius: var(--nv-radius-md);
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.nv-niva-icon-card__icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  border-radius: var(--nv-radius-md);
+  background: var(--nv-neutral-800);
+  color: var(--nv-white);
+}
+
+.nv-niva-component-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+.nv-niva-typing {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 44px;
+}
+
+.nv-niva-typing span {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--nv-radius-full);
+  background: #a1a1a1;
+  animation: nv-niva-bounce 1s infinite;
+}
+
+.nv-niva-typing span:nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.nv-niva-typing span:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+.nv-niva-panel__composer {
+  flex: 0 0 auto;
+  border-top: 1px solid #2e2e2e;
+  padding: 16px;
+  background: var(--nv-bg-sidebar);
+}
+
+.nv-niva-composer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #303030;
+  border-radius: var(--nv-radius-lg);
+  padding: 8px;
+  background: var(--nv-bg-card);
+}
+
+.nv-niva-composer textarea {
+  min-width: 0;
+  max-height: 80px;
+  flex: 1;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--nv-white);
+  font-size: 14px;
+}
+
+.nv-niva-composer button {
+  display: grid;
+  place-items: center;
+  width: 35px;
+  height: 35px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: var(--nv-radius-sm);
+  background: var(--nv-accent);
+  color: #0b040f;
+}
+
+@media (max-width: 560px) {
+  .nv-niva {
+    right: 16px;
+    bottom: 16px;
+  }
+}

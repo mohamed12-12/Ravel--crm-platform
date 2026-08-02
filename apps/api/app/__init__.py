@@ -90,6 +90,10 @@ def _ensure_trip_room_columns(app: Flask) -> None:
         "girls_double": "INTEGER",
         "boys_triple": "INTEGER",
         "girls_triple": "INTEGER",
+        "draft_holds_boys_double": "INTEGER DEFAULT 0",
+        "draft_holds_girls_double": "INTEGER DEFAULT 0",
+        "draft_holds_boys_triple": "INTEGER DEFAULT 0",
+        "draft_holds_girls_triple": "INTEGER DEFAULT 0",
     }
 
     with app.app_context():
@@ -137,6 +141,15 @@ def _ensure_lead_and_booking_group_columns(app: Flask) -> None:
             if "group_size" not in booking_columns:
                 with db.engine.begin() as connection:
                     connection.execute(text("ALTER TABLE trip_bookings ADD COLUMN group_size INTEGER DEFAULT 1"))
+            for column_name, column_type in (
+                ("room_group", "VARCHAR(50)"),
+                ("boys_rooms_requested", "INTEGER DEFAULT 0"),
+                ("girls_rooms_requested", "INTEGER DEFAULT 0"),
+                ("room_requirements_json", "TEXT"),
+            ):
+                if column_name not in booking_columns:
+                    with db.engine.begin() as connection:
+                        connection.execute(text(f"ALTER TABLE trip_bookings ADD COLUMN {column_name} {column_type}"))
 
 
 def _ensure_employee_followup_columns(app: Flask) -> None:

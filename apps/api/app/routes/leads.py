@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash
+from app.models.booking import TripBooking
 from app.models.lead import Lead
 from app.models.trip import Trip
 from app.models.traveler import Traveler
@@ -98,6 +99,13 @@ STEP_LABELS = {
     'collect_passport_attachment': 'Request passport attachment',
     'create_capacity_handoff': 'Arrange capacity review',
 }
+
+
+def _remove_sheet_record(mapping_name: str, record_id: str) -> None:
+    try:
+        UnifiedCRMService().remove_record_from_sheet(mapping_name, record_id)
+    except Exception:
+        pass
 
 
 def _display_text(value: object, fallback: str = '-') -> str:
@@ -596,10 +604,28 @@ def update(lead_id):
 
 def delete(lead_id):
     lead = db.get_or_404(Lead, lead_id)
-    lead.lead_stage = 'Lost'
-    lead.updated_at = datetime.now(timezone.utc)
+
+    BookingEventTrail.query.filter(BookingEventTrail.lead_id == lead_id).delete(synchronize_session=False)
+    HandoffQueue.query.filter(HandoffQueue.lead_id == lead_id).delete(synchronize_session=False)
+    TripBooking.query.filter(TripBooking.lead_id == lead_id).update(
+        {
+            TripBooking.lead_id: None,
+            TripBooking.customer_response_status: db.func.coalesce(
+                TripBooking.customer_response_status,
+                "Lead deleted",
+            ),
+        },
+        synchronize_session=False,
+    )
+    Traveler.query.filter(Traveler.last_lead_id == lead_id).update(
+        {Traveler.last_lead_id: None},
+        synchronize_session=False,
+    )
+    db.session.delete(lead)
     db.session.commit()
-    flash(f"Lead marked as Lost.", 'info')
+
+    _remove_sheet_record("Leads", lead_id)
+    flash("Lead deleted permanently.", 'success')
     return redirect(url_for('leads.index'))
 
 

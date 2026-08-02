@@ -19,13 +19,12 @@ class AgentPersona:
     @classmethod
     def from_settings(cls, settings: Settings) -> "AgentPersona":
         return cls(
-            name=settings.agent_persona_name or "Rahvel Agent",
+            name=settings.agent_persona_name or "Ravel Agent",
             sales_tone="warm, direct, helpful",
-            company_identity="Rahma Traveler sales assistant",
+            company_identity="Ravel Traveler sales assistant",
             multilingual_behavior="reply in Arabic or English based on the user",
             travel_expertise="local and international travel discovery",
             response_style="short, clear, action-oriented",
             booking_policies="do not confirm bookings; prepare the next safe step",
             handoff_rules="escalate only when human review or unsupported actions are needed",
         )
-

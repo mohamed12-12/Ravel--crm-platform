@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Travelers - Rahma CRM{% endblock %}
+{% block title %}Travelers - Nanovate CRM{% endblock %}
 
 {% block topbar_title %}Traveler Management{% endblock %}
 
@@ -8,7 +8,7 @@
 <a href="{{ url_for('travelers.export', q=q, status=current_status, nationality=current_nationality) }}" class="btn btn-success" style="background: rgba(34, 197, 94, 0.15); border-color: rgba(34, 197, 94, 0.4); border-radius: 8px; backdrop-filter: blur(10px);">
     <span style="font-size: 1.1rem; margin-right: 0.4rem;">⬇</span> Export CSV
 </a>
-<button onclick="document.getElementById('createModal').classList.add('open')" class="btn btn-primary" style="background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: none; box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4); border-radius: 8px; transform: scale(1); transition: all 0.3s ease;">
+<button onclick="document.getElementById('createModal').classList.add('open')" class="btn btn-primary" style="background: var(--accent); border: none; box-shadow: none; border-radius: 6px; transform: scale(1); transition: all 0.3s ease;">
     <span style="font-size: 1.1rem; margin-right: 0.4rem;">+</span> New Traveler
 </button>
 {% endblock %}
@@ -54,10 +54,10 @@
     }
     
     .status-pill.active {
-        background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(167, 139, 250, 0.2));
+        background: rgba(255, 255, 255, 0.10);
         color: #fff;
-        border-color: rgba(167, 139, 250, 0.5);
-        box-shadow: 0 0 15px rgba(99, 102, 241, 0.3);
+        border-color: rgba(255, 255, 255, 0.16);
+        box-shadow: none;
     }
     
     .status-pill:not(.active) {
@@ -83,7 +83,7 @@
     }
     
     .data-table tbody tr:hover {
-        background: rgba(99, 102, 241, 0.08);
+        background: rgba(0, 208, 146, 0.06);
         transform: scale(1.002);
     }
 
@@ -105,12 +105,13 @@
         width: 36px;
         height: 36px;
         border-radius: 50%;
-        background: linear-gradient(135deg, #3b82f6, #8b5cf6);
-        color: white;
+        background: linear-gradient(134deg, #38b98d 6%, #ffffff 96%);
+        color: #06120f;
         font-weight: 700;
         font-size: 0.9rem;
         margin-right: 0.75rem;
-        box-shadow: 0 4px 10px rgba(59, 130, 246, 0.3);
+        border: 1px solid rgba(0, 208, 146, 0.30);
+        box-shadow: none;
     }
 
     /* Modal Enhancements */
@@ -128,7 +129,7 @@
         left: 20%;
         width: 60%;
         height: 100px;
-        background: radial-gradient(ellipse at center, rgba(99, 102, 241, 0.15) 0%, rgba(17, 24, 39, 0) 70%);
+        background: radial-gradient(ellipse at center, rgba(0, 208, 146, 0.10) 0%, rgba(18, 18, 18, 0) 70%);
         pointer-events: none;
         z-index: 0;
     }
@@ -142,7 +143,7 @@
     <!-- Search & Filters -->
     <form method="GET" action="{{ url_for('travelers.index') }}" class="glass-card filter-section">
         <div class="search-input-wrap" style="flex: 2; min-width: 250px;">
-            <span class="search-icon">🔍</span>
+            <span class="search-icon"></span>
             <input type="text" name="q" value="{{ q }}" placeholder="Search by name, phone, email, ID, nationality, residence, source, notes..." class="form-input" style="background: rgba(0,0,0,0.2); border-color: rgba(255,255,255,0.1);">
         </div>
         <div style="flex: 1; min-width: 150px;">
@@ -202,7 +203,17 @@
                         </div>
                     </td>
                     <td class="mono">{{ traveler.traveler_id }}</td>
-                    <td>{{ traveler.whatsapp_raw or traveler.normalized_whatsapp or '-' }}</td>
+                    <td class="mono">
+                        {% if traveler.phone_code and traveler.whatsapp_raw %}
+                            +{{ traveler.phone_code }} {{ traveler.whatsapp_raw }}
+                        {% elif traveler.normalized_whatsapp %}
+                            {{ traveler.normalized_whatsapp }}
+                        {% elif traveler.whatsapp_raw %}
+                            {{ traveler.whatsapp_raw }}
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
                     <td>
                         <span class="badge 
                             {% if traveler.status == 'VIP' %}badge-purple
@@ -213,18 +224,18 @@
                         </span>
                     </td>
                     <td style="text-align: center;">
-                        <span style="color: #60a5fa; font-weight: 600;">{{ traveler.local_trips_count or 0 }}</span>
+                        <span class="table-value-plain">{{ traveler.local_trips_count or 0 }}</span>
                     </td>
                     <td style="text-align: center;">
-                        <span style="color: #a78bfa; font-weight: 600;">{{ traveler.international_trips_count or 0 }}</span>
+                        <span class="table-value-plain">{{ traveler.international_trips_count or 0 }}</span>
                     </td>
                     <td style="text-align: center;">
-                        <span style="background: rgba(255,255,255,0.05); padding: 0.2rem 0.6rem; border-radius: 6px; font-weight: 600; color: #fbbf24;">
+                        <span class="table-value-plain table-value-chip">
                             {{ traveler.total_trips or 0 }}
                         </span>
                     </td>
                     <td style="text-align: center;">
-                        <span style="color: #34d399; font-weight: 600;">{{ traveler.community_events_count or 0 }}</span>
+                        <span class="table-value-plain">{{ traveler.community_events_count or 0 }}</span>
                     </td>
                     <td style="text-align: right;" class="mono">${{ "{:,.2f}".format(traveler.lifetime_revenue or 0) }}</td>
                     <td style="text-align: center;">
@@ -240,7 +251,7 @@
                 {% else %}
                 <tr>
                     <td colspan="10" style="text-align: center; padding: 3rem; color: var(--text-muted);">
-                        <div style="font-size: 2rem; margin-bottom: 1rem;">📭</div>
+                        <div style="font-size: 2rem; margin-bottom: 1rem;"></div>
                         No travelers found.
                     </td>
                 </tr>
@@ -280,7 +291,7 @@
 <div id="createModal" class="modal-overlay">
     <div class="modal-box" style="transform: scale(0.95); opacity: 0; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);">
         <div class="modal-header">
-            <h2 class="modal-title" style="background: linear-gradient(135deg, #fff, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">New Traveler</h2>
+            <h2 class="modal-title" style="background: linear-gradient(100deg, #38b98d, #fff); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">New Traveler</h2>
             <button onclick="closeModal()" class="modal-close">x</button>
         </div>
         <form action="{{ url_for('travelers.create') }}" method="POST" class="grid-2">
@@ -321,7 +332,7 @@
             </div>
             <div class="col-span-2" style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1.5rem;">
                 <button type="button" onclick="closeModal()" class="btn btn-ghost">Cancel</button>
-                <button type="submit" class="btn btn-primary" style="background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: none; box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);">Create Traveler</button>
+                <button type="submit" class="btn btn-primary" style="background: var(--accent); border: none; box-shadow: none;">Create Traveler</button>
             </div>
         </form>
     </div>

@@ -1,0 +1,180 @@
+@import "../../styles/base.css";
+@import "../atoms/atoms.css";
+@import "../agent-panels/agent-panels.css";
+
+.nv-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.nv-modal {
+  width: min(540px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: var(--nv-radius-xl);
+  padding: 24px;
+  background: #121212;
+  box-shadow: var(--nv-shadow-menu);
+}
+
+.nv-modal--danger {
+  border-color: rgba(239, 68, 68, 0.40);
+}
+
+.nv-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.nv-modal__title {
+  margin: 0;
+  color: var(--nv-white);
+  font-size: 20px;
+  line-height: 1.2;
+  font-weight: 750;
+}
+
+.nv-modal__title--danger {
+  color: #f87171;
+}
+
+.nv-modal__description {
+  max-width: 360px;
+  margin: 6px 0 0;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.nv-step-indicator {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 24px;
+}
+
+.nv-step-indicator span {
+  height: 4px;
+  flex: 1;
+  border-radius: var(--nv-radius-full);
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.nv-step-indicator span.is-active {
+  background: #1acc96;
+}
+
+.nv-step-copy {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 20px;
+}
+
+.nv-step-copy small {
+  color: #1acc96;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.nv-step-copy h3 {
+  margin: 0;
+  color: var(--nv-white);
+  font-size: 17px;
+}
+
+.nv-step-copy p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.52);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.nv-webhook-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: var(--nv-radius-md);
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.nv-webhook-box code {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.72);
+  font-family: Consolas, Monaco, monospace;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nv-modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.nv-confirm-copy {
+  margin: 0 0 16px;
+  color: rgba(255, 255, 255, 0.60);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.nv-confirm-copy strong {
+  color: var(--nv-white);
+  font-family: Consolas, Monaco, monospace;
+  font-weight: 600;
+}
+
+.nv-success-state {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 32px 0;
+  text-align: center;
+}
+
+.nv-success-state__icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--nv-radius-full);
+  background: rgba(26, 204, 150, 0.15);
+  color: #1acc96;
+  font-weight: 800;
+}
+
+.nv-success-state p {
+  margin: 0;
+  color: var(--nv-white);
+  font-weight: 650;
+}
+
+.nv-success-state small {
+  color: rgba(255, 255, 255, 0.42);
+}
+
+@media (max-width: 560px) {
+  .nv-modal-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .nv-modal-actions .nv-button {
+    width: 100%;
+  }
+}

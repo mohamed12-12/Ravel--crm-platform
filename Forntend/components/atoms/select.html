@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Select Atom</title>
+    <link rel="stylesheet" href="./atoms.css">
+  </head>
+  <body>
+    <main class="nv-page">
+      <section class="nv-demo-shell">
+        <header class="nv-demo-header">
+          <div>
+            <h1>Select</h1>
+            <p>Static version of `Select.tsx`. The React custom dropdown is represented as a native select for portable HTML reuse.</p>
+          </div>
+        </header>
+        <div class="nv-demo-grid">
+          <label class="nv-field">
+            <span class="nv-label">Model</span>
+            <span class="nv-help">Choose the model used by the agent.</span>
+            <span class="nv-select">
+              <select class="nv-select-native">
+                <option>GPT-4o mini</option>
+                <option>GPT-4.1</option>
+                <option>Claude Sonnet</option>
+              </select>
+            </span>
+          </label>
+          <label class="nv-field">
+            <span class="nv-label">Voice</span>
+            <span class="nv-select">
+              <select class="nv-select-native">
+                <option>Sarah @en-US</option>
+                <option>Adam @en-US</option>
+              </select>
+            </span>
+          </label>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

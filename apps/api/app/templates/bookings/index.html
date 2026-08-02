@@ -1,5 +1,5 @@
-﻿{% extends "base.html" %}
-{% block title %}Bookings â€” Rahma CRM{% endblock %}
+{% extends "base.html" %}
+{% block title %}Bookings — Nanovate CRM{% endblock %}
 {% block topbar_title %}Bookings{% endblock %}
 
 {% block topbar_actions %}
@@ -8,10 +8,10 @@
 
 {% block content %}
 <!-- Status summary -->
-<div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:1.25rem">
+<div class="kpi-grid kpi-grid-balanced" style="margin-bottom:1.25rem">
     {% for s, color in [('Draft','badge-yellow'),('Waiting Customer','badge-blue'),('Pending Confirmation','badge-blue'),('Confirmed','badge-green'),('Payment Pending','badge-yellow'),('Paid','badge-green'),('Completed','badge-green'),('Cancelled','badge-red')] %}
     <a href="{{ url_for('bookings.index', status=s) }}" style="text-decoration:none">
-        <div class="kpi-card" style="border-left:3px solid {% if s == 'Draft' %}var(--yellow){% elif s == 'Confirmed' %}var(--green){% else %}var(--red){% endif %}">
+        <div class="kpi-card" style="border-left:3px solid {% if s == 'Draft' %}var(--warning){% elif s == 'Confirmed' %}var(--green){% else %}var(--red){% endif %}">
             <div class="kpi-label">{{ s }}</div>
             <div class="kpi-value">{{ counts.get(s, 0) }}</div>
         </div>
@@ -22,8 +22,8 @@
 <!-- Search -->
 <form method="GET" action="{{ url_for('bookings.index') }}" class="search-bar">
     <div class="search-input-wrap">
-        <span class="search-icon">ðŸ”</span>
-        <input class="form-input" type="text" name="q" value="{{ q }}" placeholder="Search traveler, booking ID, tripâ€¦">
+        <span class="search-icon"></span>
+        <input class="form-input" type="text" name="q" value="{{ q }}" placeholder="Search traveler, booking ID, trip…">
     </div>
     <select class="form-select" name="status" style="width:160px">
         <option value="">All Statuses</option>
@@ -58,7 +58,7 @@
     {% endif %}
     <button type="submit" class="btn btn-ghost">Filter</button>
     {% if q or current_status or current_payment or current_queue or current_employee_id %}
-    <a href="{{ url_for('bookings.index') }}" class="btn btn-ghost">âœ• Clear</a>
+    <a href="{{ url_for('bookings.index') }}" class="btn btn-ghost">Clear</a>
     {% endif %}
 </form>
 
@@ -73,11 +73,11 @@
         <tr onclick="window.location='{{ url_for('bookings.detail', booking_id=b.booking_id) }}'">
             <td class="mono">{{ b.booking_id }}</td>
             <td>
-                <div class="primary">{{ b.traveler_name or 'â€”' }}</div>
+                <div class="primary">{{ b.traveler_name or '—' }}</div>
                 {% if b.traveler_id %}<div style="font-size:0.7rem;color:var(--text-muted)">{{ b.traveler_id }}</div>{% endif %}
             </td>
-            <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ b.trip_name or b.trip_id or 'â€”' }}</td>
-            <td>{{ b.room_type or 'â€”' }}</td>
+            <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ b.trip_name or b.trip_id or '—' }}</td>
+            <td>{{ b.room_type or '—' }}</td>
             <td>
                 {% if b.booking_status == 'Confirmed' %}<span class="badge badge-green">Confirmed</span>
                 {% elif b.booking_status == 'Payment Pending' %}<span class="badge badge-yellow">Payment Pending</span>
@@ -93,7 +93,7 @@
                 {% else %}<span class="badge badge-gray">{{ b.payment_status or 'Pending' }}</span>{% endif %}
             </td>
             <td>{{ b.assigned_user.display_name if b.assigned_user else (b.assigned_to or 'Unassigned') }}</td>
-            <td style="font-size:0.78rem;color:var(--text-muted)">{{ b.draft_created_at.strftime('%d %b %Y') if b.draft_created_at else 'â€”' }}</td>
+            <td style="font-size:0.78rem;color:var(--text-muted)">{{ b.draft_created_at.strftime('%d %b %Y') if b.draft_created_at else '—' }}</td>
         </tr>
         {% endfor %}
         </tbody>
@@ -103,19 +103,19 @@
 <div class="pagination">
     <span style="font-size:0.78rem;color:var(--text-muted);margin-right:0.5rem">{{ total_count }} total</span>
     {% if pagination.has_prev %}
-    <a href="{{ url_for('bookings.index', page=pagination.prev_num, q=q, status=current_status, payment=current_payment, queue=current_queue, employee_id=current_employee_id) }}" class="page-btn">â† Prev</a>
+    <a href="{{ url_for('bookings.index', page=pagination.prev_num, q=q, status=current_status, payment=current_payment, queue=current_queue, employee_id=current_employee_id) }}" class="page-btn">← Prev</a>
     {% endif %}
     {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
         {% if p %}<a href="{{ url_for('bookings.index', page=p, q=q, status=current_status, payment=current_payment, queue=current_queue, employee_id=current_employee_id) }}" class="page-btn {% if p == pagination.page %}active{% endif %}">{{ p }}</a>
-        {% else %}<span style="padding:0 0.25rem;color:var(--text-muted)">â€¦</span>{% endif %}
+        {% else %}<span style="padding:0 0.25rem;color:var(--text-muted)">…</span>{% endif %}
     {% endfor %}
     {% if pagination.has_next %}
-    <a href="{{ url_for('bookings.index', page=pagination.next_num, q=q, status=current_status, payment=current_payment, queue=current_queue, employee_id=current_employee_id) }}" class="page-btn">Next â†’</a>
+    <a href="{{ url_for('bookings.index', page=pagination.next_num, q=q, status=current_status, payment=current_payment, queue=current_queue, employee_id=current_employee_id) }}" class="page-btn">Next →</a>
     {% endif %}
 </div>
 {% else %}
 <div class="card" style="text-align:center;padding:3rem">
-    <div style="font-size:2.5rem;margin-bottom:0.75rem">ðŸ“‹</div>
+    <div style="font-size:2.5rem;margin-bottom:0.75rem"></div>
     <div style="font-weight:700;color:var(--text-main);margin-bottom:0.4rem">No bookings found</div>
     <div style="color:var(--text-muted);font-size:0.83rem;margin-bottom:1.25rem">Bookings are created by the agent or manually.</div>
     <button onclick="openModal('createBooking')" class="btn btn-primary">+ Create Booking</button>
@@ -126,8 +126,8 @@
 <div id="createBooking" class="modal-overlay">
     <div class="modal-box">
         <div class="modal-header">
-            <span class="modal-title">ðŸ“‹ New Booking</span>
-            <button class="modal-close" onclick="closeModal('createBooking')">âœ•</button>
+            <span class="modal-title">New Booking</span>
+            <button class="modal-close" onclick="closeModal('createBooking')">Close</button>
         </div>
         <form action="{{ url_for('bookings.create') }}" method="POST">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -183,7 +183,7 @@
                     <select class="form-select" name="assigned_to_user_id">
                         <option value="">Unassigned</option>
                         {% for employee in employees %}
-                        <option value="{{ employee.id }}">{{ employee.display_name }} Â· {{ employee.role }}</option>
+                        <option value="{{ employee.id }}">{{ employee.display_name }} · {{ employee.role }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -218,7 +218,7 @@
                 </div>
                 <div class="form-group col-span-2">
                     <label class="form-label">Notes</label>
-                    <textarea class="form-textarea" name="booking_notes" placeholder="Any booking notesâ€¦"></textarea>
+                    <textarea class="form-textarea" name="booking_notes" placeholder="Any booking notes…"></textarea>
                 </div>
             </div>
             <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1rem">

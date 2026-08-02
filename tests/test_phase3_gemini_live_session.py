@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 from services.ai_agent.ai_agent_app.agent.gemini_agent import GeminiAgent
 from services.ai_agent.ai_agent_app.agent.read_only_tools import ReadOnlyCRMTools
+from services.ai_agent.ai_agent_app.agent.session_flow import SessionState
+from services.ai_agent.ai_agent_app.server import _route_live_message_with_gemini
 
 from test_phase11_demo_features import _make_app_with_db
 from test_phase2_gemini_tool_loop import (
@@ -50,6 +52,52 @@ class DummyGeminiSessionAgent(GeminiAgent):
         }
 
 
+class DeterministicWorkflowReadTools:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.trips = [
+            {
+                "trip_id": "RT-LOC-26-DEM",
+                "trip_name": "DEMOO3",
+                "type": "local",
+                "trip_type": "local",
+                "start_date": "2026-08-25",
+                "end_date": "2026-08-30",
+                "public_price": "1000$",
+                "available_single": 3,
+                "available_double": 2,
+                "available_triple": 1,
+                "boys_double": 1,
+                "boys_triple": 1,
+                "girls_double": 1,
+                "girls_triple": 0,
+                "supports_flights": False,
+            }
+        ]
+
+    def search_trips(self, *, trip_type: str = "", query: str = "") -> dict:
+        self.calls.append({"name": "search_trips", "trip_type": trip_type, "query": query})
+        normalized_type = str(trip_type or "").strip().lower()
+        trips = [
+            dict(trip)
+            for trip in self.trips
+            if not normalized_type
+            or str(trip.get("trip_type") or trip.get("type") or "").strip().lower() == normalized_type
+        ]
+        return {"open_trips": trips, "date_tbd_trips": []}
+
+    def search_traveler(self, *, raw_phone: str, country_code: str = "") -> dict:
+        self.calls.append({"name": "search_traveler", "raw_phone": raw_phone, "country_code": country_code})
+        return {
+            "status": "found",
+            "traveler": {
+                "traveler_id": "TR00607",
+                "full_name": "jo jo jo",
+                "status": "Active",
+            },
+        }
+
+
 class ContextAwareGeminiSessionAgent(DummyGeminiSessionAgent):
     def respond(
         self,
@@ -70,7 +118,7 @@ class ContextAwareGeminiSessionAgent(DummyGeminiSessionAgent):
         lowered = user_message.lower()
         if context.get("candidate_language_question"):
             return {
-                "reply": "أيوه، أقدر أساعدك بالعربي. تحب رحلة داخل مصر ولا رحلة خارجية؟",
+                "reply": "Ø£ÙŠÙˆÙ‡ØŒ Ø£Ù‚Ø¯Ø± Ø£Ø³Ø§Ø¹Ø¯Ùƒ Ø¨Ø§Ù„Ø¹Ø±Ø¨ÙŠ. ØªØ­Ø¨ Ø±Ø­Ù„Ø© Ø¯Ø§Ø®Ù„ Ù…ØµØ± ÙˆÙ„Ø§ Ø±Ø­Ù„Ø© Ø®Ø§Ø±Ø¬ÙŠØ©ØŸ",
                 "tool_requests": [],
                 "mode": "gemini",
             }
@@ -115,43 +163,43 @@ class ExactConversationGeminiSessionAgent(DummyGeminiSessionAgent):
         )
         lowered = user_message.strip().lower()
         known_traveler = context.get("known_traveler") if isinstance(context.get("known_traveler"), dict) else {}
-        if lowered in {"هلا", "مرحبا", "السلام عليكم"}:
+        if lowered in {"Ù‡Ù„Ø§", "Ù…Ø±Ø­Ø¨Ø§", "Ø§Ù„Ø³Ù„Ø§Ù… Ø¹Ù„ÙŠÙƒÙ…"}:
             return {
-                "reply": "هلا بيك. أقدر أساعدك بالعربي. تحب رحلة محلية ولا دولية؟",
+                "reply": "Ù‡Ù„Ø§ Ø¨ÙŠÙƒ. Ø£Ù‚Ø¯Ø± Ø£Ø³Ø§Ø¹Ø¯Ùƒ Ø¨Ø§Ù„Ø¹Ø±Ø¨ÙŠ. ØªØ­Ø¨ Ø±Ø­Ù„Ø© Ù…Ø­Ù„ÙŠØ© ÙˆÙ„Ø§ Ø¯ÙˆÙ„ÙŠØ©ØŸ",
                 "tool_requests": [],
                 "mode": "gemini",
             }
-        if lowered == "لا":
+        if lowered == "Ù„Ø§":
             return {
-                "reply": "تمام، ولا يهمك. لو حابب نكمل، قولي تحب رحلة محلية ولا دولية.",
+                "reply": "ØªÙ…Ø§Ù…ØŒ ÙˆÙ„Ø§ ÙŠÙ‡Ù…Ùƒ. Ù„Ùˆ Ø­Ø§Ø¨Ø¨ Ù†ÙƒÙ…Ù„ØŒ Ù‚ÙˆÙ„ÙŠ ØªØ­Ø¨ Ø±Ø­Ù„Ø© Ù…Ø­Ù„ÙŠØ© ÙˆÙ„Ø§ Ø¯ÙˆÙ„ÙŠØ©.",
                 "tool_requests": [],
                 "mode": "gemini",
             }
-        if "احجز" in user_message:
+        if "Ø§Ø­Ø¬Ø²" in user_message:
             return {
-                "reply": "أكيد. قبل ما أجهز الحجز، تحب رحلة محلية ولا دولية؟",
+                "reply": "Ø£ÙƒÙŠØ¯. Ù‚Ø¨Ù„ Ù…Ø§ Ø£Ø¬Ù‡Ø² Ø§Ù„Ø­Ø¬Ø²ØŒ ØªØ­Ø¨ Ø±Ø­Ù„Ø© Ù…Ø­Ù„ÙŠØ© ÙˆÙ„Ø§ Ø¯ÙˆÙ„ÙŠØ©ØŸ",
                 "tool_requests": [],
                 "mode": "gemini",
             }
         if context.get("candidate_trip_type") == "international":
             return {
-                "reply": "تمام، رحلة دولية. تحب السفر تقريبًا إمتى؟ ومعاك كام شخص؟",
+                "reply": "ØªÙ…Ø§Ù…ØŒ Ø±Ø­Ù„Ø© Ø¯ÙˆÙ„ÙŠØ©. ØªØ­Ø¨ Ø§Ù„Ø³ÙØ± ØªÙ‚Ø±ÙŠØ¨Ù‹Ø§ Ø¥Ù…ØªÙ‰ØŸ ÙˆÙ…Ø¹Ø§Ùƒ ÙƒØ§Ù… Ø´Ø®ØµØŸ",
                 "tool_requests": [],
                 "mode": "gemini",
             }
         if context.get("raw_phone") and known_traveler and lowered.isdigit():
             return {
                 "reply": (
-                    f"أهلا {known_traveler.get('full_name') or 'بحضرتك'}. "
-                    f"لقيت ملفك في Rahma CRM برقم {known_traveler.get('traveler_id') or ''} "
-                    f"وحالتك {known_traveler.get('status') or 'Active'}. "
-                    "تحب رحلة محلية ولا دولية؟"
+                    f"Ø£Ù‡Ù„Ø§ {known_traveler.get('full_name') or 'Ø¨Ø­Ø¶Ø±ØªÙƒ'}. "
+                    f"Ù„Ù‚ÙŠØª Ù…Ù„ÙÙƒ ÙÙŠ Rahma CRM Ø¨Ø±Ù‚Ù… {known_traveler.get('traveler_id') or ''} "
+                    f"ÙˆØ­Ø§Ù„ØªÙƒ {known_traveler.get('status') or 'Active'}. "
+                    "ØªØ­Ø¨ Ø±Ø­Ù„Ø© Ù…Ø­Ù„ÙŠØ© ÙˆÙ„Ø§ Ø¯ÙˆÙ„ÙŠØ©ØŸ"
                 ),
                 "tool_requests": [],
                 "mode": "gemini",
             }
         return {
-            "reply": "ممكن توضّح لي نوع الرحلة أو التاريخ المناسب لك؟",
+            "reply": "Ù…Ù…ÙƒÙ† ØªÙˆØ¶Ù‘Ø­ Ù„ÙŠ Ù†ÙˆØ¹ Ø§Ù„Ø±Ø­Ù„Ø© Ø£Ùˆ Ø§Ù„ØªØ§Ø±ÙŠØ® Ø§Ù„Ù…Ù†Ø§Ø³Ø¨ Ù„ÙƒØŸ",
             "tool_requests": [],
             "mode": "gemini",
         }
@@ -329,11 +377,11 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
         session = client.post("/api/session", json={}).get_json()["session"]
         session = client.post(
             f"/api/session/{session['id']}/message",
-            json={"text": "بتحكي عربي؟"},
+            json={"text": "Ø¨ØªØ­ÙƒÙŠ Ø¹Ø±Ø¨ÙŠØŸ"},
         ).get_json()["session"]
 
         reply = session["messages"][-1]["text"]
-        self.assertIn("أيوه", reply)
+        self.assertIn("Ø£ÙŠÙˆÙ‡", reply)
         self.assertNotIn("WhatsApp", reply)
 
     def test_gemini_mode_trip_search_before_phone_asks_trip_type(self) -> None:
@@ -403,7 +451,7 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
             self._enable_gemini(app, agent)
             session = client.post("/api/session", json={}).get_json()["session"]
             transcript = []
-            for text in ("01012345678", "هلا", "لا", "عايز احجز", "دوليه", "2"):
+            for text in ("01012345678", "Ù‡Ù„Ø§", "Ù„Ø§", "Ø¹Ø§ÙŠØ² Ø§Ø­Ø¬Ø²", "Ø¯ÙˆÙ„ÙŠÙ‡", "2"):
                 session = client.post(
                     f"/api/session/{session['id']}/message",
                     json={"text": text},
@@ -414,11 +462,11 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
         self.assertIn("Mina Andrawes", transcript[0])
         self.assertIn("TR00585", transcript[0])
         self.assertIn("VIP", transcript[0])
-        self.assertIn("هلا بيك", transcript[1])
-        self.assertIn("ولا يهمك", transcript[2])
-        self.assertIn("تحب رحلة محلية ولا دولية", transcript[3])
-        self.assertIn("رحلة دولية", transcript[4])
-        self.assertIn("رحلة دولية", transcript[5])
+        self.assertIn("Ù‡Ù„Ø§ Ø¨ÙŠÙƒ", transcript[1])
+        self.assertIn("ÙˆÙ„Ø§ ÙŠÙ‡Ù…Ùƒ", transcript[2])
+        self.assertIn("ØªØ­Ø¨ Ø±Ø­Ù„Ø© Ù…Ø­Ù„ÙŠØ© ÙˆÙ„Ø§ Ø¯ÙˆÙ„ÙŠØ©", transcript[3])
+        self.assertIn("Ø±Ø­Ù„Ø© Ø¯ÙˆÙ„ÙŠØ©", transcript[4])
+        self.assertIn("Ø±Ø­Ù„Ø© Ø¯ÙˆÙ„ÙŠØ©", transcript[5])
         self.assertNotIn("{", full_log)
         self.assertNotIn("}", full_log)
         self.assertNotIn("Please share your WhatsApp", full_log)
@@ -627,6 +675,10 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
         second_call = agent.calls[1]
         self.assertGreaterEqual(len(second_call["conversation_history"]), 3)
         self.assertEqual(second_call["conversation_history"][-1]["text"], "First Gemini reply.")
+        memory = second_call["session_context"]["conversation_memory"]
+        self.assertEqual(memory["turn_count"], 2)
+        self.assertIn("hello", memory["user_messages"])
+        self.assertIn("what did I say?", memory["user_messages"])
         self.assertEqual(session["messages"][-1]["text"], "Second Gemini reply.")
 
     def test_arabic_and_english_responses_work(self) -> None:
@@ -642,7 +694,7 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
                 }
             )
             if str((session_context or {}).get("language") or "").startswith("ar"):
-                return {"reply": "أهلاً بك، كيف أساعدك اليوم؟", "tool_requests": [], "mode": "gemini"}
+                return {"reply": "Ø£Ù‡Ù„Ø§Ù‹ Ø¨ÙƒØŒ ÙƒÙŠÙ Ø£Ø³Ø§Ø¹Ø¯Ùƒ Ø§Ù„ÙŠÙˆÙ…ØŸ", "tool_requests": [], "mode": "gemini"}
             return {"reply": "Hello, how can I help you today?", "tool_requests": [], "mode": "gemini"}
 
         agent.respond = respond_for_language  # type: ignore[method-assign]
@@ -651,9 +703,9 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
         session = client.post("/api/session", json={}).get_json()["session"]
         session = client.post(
             f"/api/session/{session['id']}/message",
-            json={"text": "مرحبا"},
+            json={"text": "Ù…Ø±Ø­Ø¨Ø§"},
         ).get_json()["session"]
-        self.assertEqual(session["messages"][-1]["text"], "أهلاً بك، كيف أساعدك اليوم؟")
+        self.assertEqual(session["messages"][-1]["text"], "Ø£Ù‡Ù„Ø§Ù‹ Ø¨ÙƒØŒ ÙƒÙŠÙ Ø£Ø³Ø§Ø¹Ø¯Ùƒ Ø§Ù„ÙŠÙˆÙ…ØŸ")
 
         second = client.post("/api/session", json={}).get_json()["session"]
         second = client.post(
@@ -685,7 +737,7 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
         session = client.post("/api/session", json={}).get_json()["session"]
         session = client.post(
             f"/api/session/{session['id']}/message",
-            json={"text": "عايز رحلة داخلية"},
+            json={"text": "Ø¹Ø§ÙŠØ² Ø±Ø­Ù„Ø© Ø¯Ø§Ø®Ù„ÙŠØ©"},
         ).get_json()["session"]
 
         self.assertIn("local trips", session["messages"][-1]["text"])
@@ -806,6 +858,164 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
         self.assertEqual(session["messages"][-1]["text"], "Choice accepted. I will continue with that option.")
         self.assertFalse(session["fallbackUsed"])
 
+    def test_gemini_mode_numeric_booking_steps_are_deterministic_not_fallbacks(self) -> None:
+        agent = DummyGeminiSessionAgent(responses=[{"reply": "", "tool_requests": [], "mode": "gemini"}])
+        agent.read_only_tools = DeterministicWorkflowReadTools()
+        session = SessionState(id="sess-gemini-numeric", agent_mode="gemini")
+        session.raw_phone = "01270482380"
+        session.country_code = "20"
+        session.preview = {
+            "traveler": {"traveler_id": "TR00607", "full_name": "jo jo jo", "status": "Active"},
+            "collection_state": {},
+        }
+
+        _route_live_message_with_gemini(session, "1", agent)
+        self.assertFalse(session.fallback_used)
+        self.assertEqual(session.trip_type, "local")
+        self.assertEqual(session.selected_trip_id, "")
+        self.assertIn("Here are the local trips", session.messages[-1]["text"])
+        self.assertEqual(agent.calls, [])
+
+        _route_live_message_with_gemini(session, "1", agent)
+        self.assertFalse(session.fallback_used)
+        self.assertEqual(session.selected_trip_id, "RT-LOC-26-DEM")
+        self.assertIn("boys/male or girls/female", session.messages[-1]["text"])
+
+        _route_live_message_with_gemini(session, "1", agent)
+        self.assertFalse(session.fallback_used)
+        self.assertEqual(session.room_group, "boys")
+        self.assertIn("Available room options", session.messages[-1]["text"])
+
+        _route_live_message_with_gemini(session, "2", agent)
+        self.assertFalse(session.fallback_used)
+        self.assertEqual(session.room_type, "Double")
+        self.assertIn("How many travelers", session.messages[-1]["text"])
+
+        _route_live_message_with_gemini(session, "3", agent)
+        self.assertFalse(session.fallback_used)
+        self.assertEqual(session.group_size, 3)
+        self.assertEqual(
+            session.room_requirements,
+            {
+                "requirements": [{"room_type": "Double", "room_group": "boys", "rooms": 2}],
+                "boys_rooms_requested": 2,
+                "girls_rooms_requested": 0,
+            },
+        )
+        self.assertEqual(session.flight_option, "Not Applicable")
+        self.assertEqual(session.stage, "booking_confirmation_required")
+        self.assertIn("Do you confirm creating the booking draft", session.messages[-1]["text"])
+        self.assertNotIn("couldn", session.messages[-1]["text"].lower())
+        self.assertEqual(agent.calls, [])
+
+    def test_gemini_mode_understands_spelled_group_size_for_triple_room(self) -> None:
+        agent = DummyGeminiSessionAgent(responses=[{"reply": "", "tool_requests": [], "mode": "gemini"}])
+        agent.read_only_tools = DeterministicWorkflowReadTools()
+        session = SessionState(id="sess-gemini-three-word", agent_mode="gemini")
+        session.raw_phone = "01270482380"
+        session.country_code = "20"
+        session.preview = {
+            "traveler": {"traveler_id": "TR00607", "full_name": "jo jo jo", "status": "Active"},
+            "collection_state": {},
+        }
+
+        for message in ("1", "1", "1", "3"):
+            _route_live_message_with_gemini(session, message, agent)
+
+        self.assertEqual(session.room_type, "Triple")
+        self.assertIn("How many travelers", session.messages[-1]["text"])
+
+        _route_live_message_with_gemini(session, "three traveler", agent)
+
+        self.assertFalse(session.fallback_used)
+        self.assertEqual(session.group_size, 3)
+        self.assertEqual(
+            session.room_requirements,
+            {
+                "requirements": [{"room_type": "Triple", "room_group": "boys", "rooms": 1}],
+                "boys_rooms_requested": 1,
+                "girls_rooms_requested": 0,
+            },
+        )
+        self.assertEqual(session.stage, "booking_confirmation_required")
+        self.assertIn("Do you confirm creating the booking draft", session.messages[-1]["text"])
+        self.assertNotIn("another traveler", session.messages[-1]["text"].lower())
+        self.assertEqual(agent.calls, [])
+
+    def test_gemini_mode_accepts_arabic_group_size_phrase_without_fallback(self) -> None:
+        agent = DummyGeminiSessionAgent(responses=[{"reply": "", "tool_requests": [], "mode": "gemini"}])
+        agent.read_only_tools = DeterministicWorkflowReadTools()
+        session = SessionState(id="sess-gemini-arabic-group", agent_mode="gemini")
+        session.raw_phone = "01270482380"
+        session.country_code = "20"
+        session.language = "ar"
+        session.preview = {
+            "traveler": {"traveler_id": "TR00607", "full_name": "jo jo jo", "status": "Active"},
+            "collection_state": {},
+        }
+
+        for message in ("1", "1", "1", "2"):
+            _route_live_message_with_gemini(session, message, agent)
+
+        _route_live_message_with_gemini(session, "\u0627\u062b\u0646\u064a\u0646 \u0645\u0633\u0627\u0641\u0631\u064a\u0646", agent)
+
+        self.assertFalse(session.fallback_used)
+        self.assertEqual(session.group_size, 2)
+        self.assertEqual(session.flight_option, "Not Applicable")
+        self.assertEqual(session.stage, "booking_confirmation_required")
+        self.assertIn("Do you confirm creating the booking draft", session.messages[-1]["text"])
+        self.assertEqual(agent.calls, [])
+
+    def test_gemini_mode_group_size_clarification_preserves_pending_step(self) -> None:
+        agent = DummyGeminiSessionAgent(responses=[{"reply": "", "tool_requests": [], "mode": "gemini"}])
+        agent.read_only_tools = DeterministicWorkflowReadTools()
+        session = SessionState(id="sess-gemini-group-clarify", agent_mode="gemini")
+        session.raw_phone = "01270482380"
+        session.country_code = "20"
+        session.language = "ar"
+        session.preview = {
+            "traveler": {"traveler_id": "TR00607", "full_name": "jo jo jo", "status": "Active"},
+            "collection_state": {},
+        }
+
+        for message in ("1", "1", "1", "2"):
+            _route_live_message_with_gemini(session, message, agent)
+
+        _route_live_message_with_gemini(session, "\u064a\u0639\u0646\u064a \u0627\u064a\u0647", agent)
+        clarification = session.messages[-1]["text"]
+        self.assertFalse(session.fallback_used)
+        self.assertEqual(session.stage, "group_size_required")
+        self.assertIn("\u0627\u0644\u0645\u0633\u0627\u0641\u0631\u064a\u0646", clarification)
+        self.assertNotIn("\u0645\u0639\u0644\u0634", clarification)
+        self.assertEqual(agent.calls, [])
+
+        _route_live_message_with_gemini(session, "\u0627\u0646\u0627 \u0639\u0627\u064a\u0632 \u0627\u062d\u062c\u0632", agent)
+        booking_intent_reply = session.messages[-1]["text"]
+        self.assertEqual(session.stage, "group_size_required")
+        self.assertIn("\u0627\u0644\u0645\u0633\u0627\u0641\u0631\u064a\u0646", booking_intent_reply)
+        self.assertEqual(agent.calls, [])
+    def test_gemini_mode_no_requested_trip_type_does_not_show_other_type(self) -> None:
+        agent = DummyGeminiSessionAgent(responses=[{"reply": "", "tool_requests": [], "mode": "gemini"}])
+        read_tools = DeterministicWorkflowReadTools()
+        read_tools.trips = []
+        agent.read_only_tools = read_tools
+        session = SessionState(id="sess-gemini-no-international", agent_mode="gemini")
+        session.raw_phone = "01270482380"
+        session.country_code = "20"
+        session.preview = {
+            "traveler": {"traveler_id": "TR00607", "full_name": "jo jo jo", "status": "Active"},
+            "collection_state": {},
+        }
+
+        _route_live_message_with_gemini(session, "international trip", agent)
+
+        reply = session.messages[-1]["text"]
+        self.assertFalse(session.fallback_used)
+        self.assertEqual(session.trip_type, "international")
+        self.assertIn("do not have any available international trips", reply.lower())
+        self.assertIn("Reason for escalation", reply)
+        self.assertNotIn("local trips currently available", reply)
+        self.assertEqual(agent.calls, [])
     def test_gemini_mode_human_request_can_create_handoff(self) -> None:
         client, app = _make_app_with_db(self.tmp)
         db_path = Path(os.environ["RAHMA_SYSTEM_DB_PATH"])
@@ -968,3 +1178,6 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+

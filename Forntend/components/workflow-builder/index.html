@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nanovate Workflow Builder</title>
+    <link rel="stylesheet" href="./workflow-builder.css">
+  </head>
+  <body>
+    <main class="nv-page">
+      <div class="nv-demo-shell">
+        <header class="nv-demo-header">
+          <div>
+            <h1>Workflow Builder Components</h1>
+            <p>Static HTML/CSS versions of builder panels, picker items, workflow canvas nodes, inspector controls, and AI copilot chat.</p>
+          </div>
+        </header>
+
+        <section class="nv-builder">
+          <aside class="nv-builder-panel">
+            <div>
+              <h2 class="nv-builder-panel__title">Build Your Workflow</h2>
+              <p class="nv-builder-panel__description">Create automations with simple steps.</p>
+            </div>
+            <label class="nv-node-search">
+              <span class="nv-sr-only">Search nodes</span>
+              <input placeholder="Search nodes....">
+            </label>
+            <div class="nv-node-list">
+              <button class="nv-node-picker-item">
+                <span class="nv-node-picker-item__icon">WA</span>
+                <span class="nv-agent-inline__meta"><span class="nv-agent-inline__name">Send WhatsApp</span><span class="nv-agent-inline__role">Send a WhatsApp message.</span></span>
+                <span class="nv-node-picker-item__chevron">></span>
+              </button>
+              <button class="nv-node-picker-item">
+                <span class="nv-node-picker-item__icon">IF</span>
+                <span class="nv-agent-inline__meta"><span class="nv-agent-inline__name">Condition</span><span class="nv-agent-inline__role">Branch based on a variable.</span></span>
+                <span class="nv-node-picker-item__chevron">></span>
+              </button>
+              <button class="nv-node-picker-item">
+                <span class="nv-node-picker-item__icon">AI</span>
+                <span class="nv-agent-inline__meta"><span class="nv-agent-inline__name">Run Chat Agent</span><span class="nv-agent-inline__role">Ask an agent to respond.</span></span>
+                <span class="nv-node-picker-item__chevron">></span>
+              </button>
+            </div>
+          </aside>
+
+          <section class="nv-canvas">
+            <header class="nv-canvas__toolbar">
+              <div>
+                <h2 class="nv-builder-panel__title" style="font-size: 16px;">Lead qualification workflow</h2>
+                <p class="nv-builder-panel__description">Draft saved locally</p>
+              </div>
+              <div class="nv-row">
+                <button class="nv-button nv-button--cta-secondary nv-button--sm">Run</button>
+                <button class="nv-button nv-button--cta-tertiary nv-button--sm">Save</button>
+              </div>
+            </header>
+            <div class="nv-canvas__stage">
+              <article class="nv-flow-node is-selected" style="left: 80px; top: 96px;">
+                <div class="nv-flow-node__header">
+                  <span class="nv-flow-node__icon">T</span>
+                  <div><p class="nv-flow-node__category">Trigger</p><p class="nv-flow-node__title">Webhook received</p></div>
+                  <button class="nv-menu-button" style="margin-left:auto;">...</button>
+                </div>
+                <div class="nv-flow-node__body">Starts when a new lead arrives.</div>
+              </article>
+              <span class="nv-flow-connector" style="left: 302px; top: 154px; width: 120px;"></span>
+              <article class="nv-flow-node nv-flow-node--branch" style="left: 430px; top: 96px;">
+                <div class="nv-flow-node__header">
+                  <span class="nv-flow-node__icon">IF</span>
+                  <div><p class="nv-flow-node__category">Logic</p><p class="nv-flow-node__title">Lead score above 70</p></div>
+                  <button class="nv-menu-button" style="margin-left:auto;">...</button>
+                </div>
+                <div class="nv-flow-node__body">Routes hot leads to sales.</div>
+              </article>
+              <span class="nv-flow-connector" style="left: 540px; top: 214px; width: 120px; transform: rotate(42deg);"></span>
+              <article class="nv-flow-node nv-flow-node--action" style="left: 650px; top: 300px;">
+                <div class="nv-flow-node__header">
+                  <span class="nv-flow-node__icon">WA</span>
+                  <div><p class="nv-flow-node__category">Messaging</p><p class="nv-flow-node__title">Send sales WhatsApp</p></div>
+                  <button class="nv-menu-button" style="margin-left:auto;">...</button>
+                </div>
+                <div class="nv-flow-node__body">Send a personalized follow-up.</div>
+              </article>
+            </div>
+          </section>
+
+          <aside class="nv-builder-panel nv-builder-panel--right">
+            <div class="nv-inspector">
+              <div>
+                <h2 class="nv-builder-panel__title">Webhook received</h2>
+                <p class="nv-builder-panel__description">Configure this step</p>
+              </div>
+              <label class="nv-field">
+                <span class="nv-label">Step name</span>
+                <input class="nv-input" value="Webhook received">
+              </label>
+              <div class="nv-hint">POST to: https://api.nanovate.io/workflows/id/webhook</div>
+              <label class="nv-field">
+                <span class="nv-label">Message</span>
+                <textarea class="nv-textarea">New lead from {{body.source}}</textarea>
+              </label>
+              <div class="nv-inspector__footer">
+                <button class="nv-button nv-button--delete nv-button--full">Delete step</button>
+              </div>
+            </div>
+          </aside>
+        </section>
+
+        <section class="nv-demo-section">
+          <h2>AI Copilot Panel</h2>
+          <aside class="nv-builder-panel" style="width: min(420px, 100%); min-height: 520px;">
+            <div class="nv-copilot">
+              <header>
+                <h2 class="nv-builder-panel__title">Automate With AI</h2>
+                <p class="nv-builder-panel__description">Create smart workflows in minutes no coding needed.</p>
+              </header>
+              <div class="nv-copilot__messages">
+                <article class="nv-copilot-message">
+                  <div class="nv-copilot-message__speaker"><span class="nv-copilot-message__avatar">L</span>LENS Assistant</div>
+                  <div class="nv-copilot-message__bubble">Describe the workflow you want and I will draft it for you.</div>
+                </article>
+                <article class="nv-copilot-message nv-copilot-message--user">
+                  <div class="nv-copilot-message__speaker"><span class="nv-copilot-message__avatar">U</span>You</div>
+                  <div class="nv-copilot-message__bubble">When a lead submits a form, score it and message sales if it is hot.</div>
+                </article>
+              </div>
+              <div class="nv-copilot__composer">
+                <textarea rows="1" placeholder="Describe the workflow you want..."></textarea>
+                <button class="nv-round-send" aria-label="Send">S</button>
+              </div>
+            </div>
+          </aside>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

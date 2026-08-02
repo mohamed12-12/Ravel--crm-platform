@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Duplicates — Rahma CRM{% endblock %}
+{% block title %}Duplicates — Nanovate CRM{% endblock %}
 {% block topbar_title %}Identity Resolution & Deduplication Center{% endblock %}
 
 {% block content %}
@@ -19,7 +19,7 @@
                 <span style="font-size:0.75rem;color:var(--text-muted);margin-left:0.5rem">Matched by: <code class="mono" style="color:var(--yellow)">{{ group.match_key }}</code></span>
             </div>
             <button onclick="mergeGroup('{{ group.records[0].traveler_id }}', {{ group.records[1:] | map(attribute='traveler_id') | list | tojson }})" class="btn btn-primary btn-sm">
-                ⚡ Merge into Master ({{ group.records[0].traveler_id }})
+                Merge into Master ({{ group.records[0].traveler_id }})
             </button>
         </div>
 
@@ -39,7 +39,7 @@
             <tr onclick="window.open('{{ url_for('travelers.detail', traveler_id=rec.traveler_id) }}', '_blank')">
                 <td>
                     {% if loop.first %}
-                        <span class="badge badge-green">👑 Master</span>
+                        <span class="badge badge-green">Master</span>
                     {% else %}
                         <span class="badge badge-yellow">Alias</span>
                     {% endif %}
@@ -62,7 +62,7 @@
 </div>
 {% else %}
 <div class="card" style="text-align:center;padding:3rem">
-    <div style="font-size:2.5rem;margin-bottom:0.75rem">✨</div>
+    <div style="font-size:2.5rem;margin-bottom:0.75rem"></div>
     <div style="font-weight:700;color:var(--text-main);margin-bottom:0.4rem">Zero Duplicates Found</div>
     <div style="color:var(--text-muted);font-size:0.83rem">The database is clean! All traveler records are fully deduplicated.</div>
 </div>

@@ -1,6 +1,6 @@
 // app/static/js/main.js
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Rahma CRM Loaded');
+    console.log('Nanovate CRM Loaded');
     
     // Auto-dismiss flashes
     const alerts = document.querySelectorAll('.alert');
