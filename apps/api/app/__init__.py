@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from flask import Flask, session
+from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy import text
 from .config import config
 from .extensions import db, migrate, login_manager, socketio
@@ -509,6 +510,7 @@ def create_app(config_name=None):
         config_name = os.getenv('FLASK_CONFIG', 'default')
 
     app = Flask(__name__)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
     app.config["CRM_AUTH_ENABLED"] = os.environ.get(
         "CRM_AUTH_ENABLED", "true"
     ).strip().lower() in {"1", "true", "yes", "on"}
