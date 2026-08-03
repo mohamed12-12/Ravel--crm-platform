@@ -710,3 +710,107 @@ textarea:focus {
     min-height: auto;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   Live customer-facing chat layout.
+   The sidebar (demo controls/scenario presets/internal CRM stats) and the
+   inspector column (live CRM snapshot/write activity/lead intelligence)
+   no longer exist in the page - only the chat itself is customer-facing.
+   This layer turns the old 3-column ops-dashboard grid into a single,
+   centered, mobile-first chat column. Colors/tokens above are untouched.
+   ══════════════════════════════════════════════════════════════════════ */
+.app-shell {
+  display: block;
+  grid-template-columns: none;
+  min-height: 100dvh;
+  min-height: 100vh;
+}
+
+.workspace {
+  display: block;
+  grid-template-columns: none;
+  height: 100dvh;
+  height: 100vh;
+  min-height: 100dvh;
+  min-height: 100vh;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 1.5rem;
+  overflow: hidden;
+}
+
+.chat-area {
+  height: 100%;
+  min-height: 0;
+  border-radius: 1rem;
+}
+
+.chat-header {
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.chat-header .brand-block {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.chat-header .brand-wordmark {
+  width: 108px;
+}
+
+.chat-header .brand-wordmark-secondary {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  border-radius: 0.5rem;
+}
+
+@media (max-width: 720px) {
+  .app-shell {
+    min-height: 100dvh;
+  }
+
+  .workspace {
+    max-width: none;
+    padding: 0;
+    height: 100dvh;
+  }
+
+  .chat-area {
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    padding: 0.85rem;
+    padding-bottom: calc(0.85rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .chat-header .brand-wordmark {
+    width: 92px;
+  }
+
+  .chat-header .brand-wordmark-secondary {
+    width: 34px;
+    height: 34px;
+  }
+
+  .composer {
+    padding: 0.4rem;
+  }
+
+  .btn-quick {
+    padding: 0.55rem 0.75rem;
+    font-size: 0.8rem;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 380px) {
+  .chat-header .brand-wordmark-secondary {
+    display: none;
+  }
+}

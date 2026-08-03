@@ -9,21 +9,6 @@ const PASSPORT_CHAT_STAGES = [
 ];
 
 const els = {
-  sheetBackend: document.getElementById("sheet-backend"),
-  runtimeWorkbook: document.getElementById("runtime-workbook"),
-  sourceWorkbook: document.getElementById("source-workbook"),
-  travelerCount: document.getElementById("traveler-count"),
-  interactionCount: document.getElementById("interaction-count"),
-  tripStatusList: document.getElementById("trip-status-list"),
-  leadCount: document.getElementById("lead-count"),
-  qualificationRate: document.getElementById("qualification-rate"),
-  urgentCount: document.getElementById("urgent-count"),
-  dueTodayCount: document.getElementById("due-today-count"),
-  leadStageList: document.getElementById("lead-stage-list"),
-  recentLeads: document.getElementById("recent-leads"),
-  bookingDraftCount: document.getElementById("booking-draft-count"),
-  paymentPendingCount: document.getElementById("payment-pending-count"),
-  bookingAlertCount: document.getElementById("booking-alert-count"),
   chatLog: document.getElementById("chat-log"),
   messageForm: document.getElementById("message-form"),
   messageInput: document.getElementById("message-input"),
@@ -39,18 +24,6 @@ const els = {
   phoneInput: document.getElementById("phone-input"),
   submitIntakeBtn: document.getElementById("submit-intake-btn"),
   quickActions: document.getElementById("quick-actions"),
-  newSessionBtn: document.getElementById("new-session-btn"),
-  resetDemoBtn: document.getElementById("reset-demo-btn"),
-  sessionChip: document.getElementById("session-chip"),
-  crmSnapshot: document.getElementById("crm-snapshot"),
-  tripResult: document.getElementById("trip-result"),
-  writeResult: document.getElementById("write-result"),
-  leadResult: document.getElementById("lead-result"),
-  bookingFormPanel: document.getElementById("booking-form-panel"),
-  bookingResult: document.getElementById("booking-result"),
-  crmBrowser: document.getElementById("crm-browser"),
-  leadActions: document.getElementById("lead-actions"),
-  qualifyLeadBtn: document.getElementById("qualify-lead-btn"),
 };
 
 async function api(path, options = {}) {
@@ -87,7 +60,7 @@ function safeMediaUrl(url) {
 
 function detectTextDirection(text) {
   const value = String(text || "");
-  const arabicCount = (value.match(/[\u0600-\u06ff]/g) || []).length;
+  const arabicCount = (value.match(/[؀-ۿ]/g) || []).length;
   const latinCount = (value.match(/[A-Za-z]/g) || []).length;
   if (arabicCount === 0 && latinCount === 0) return "auto";
   return arabicCount >= latinCount ? "rtl" : "ltr";
@@ -95,7 +68,7 @@ function detectTextDirection(text) {
 
 function inlineDirection(token, parentDir) {
   const value = String(token || "");
-  if (/[\u0600-\u06ff]/.test(value)) return "rtl";
+  if (/[؀-ۿ]/.test(value)) return "rtl";
   if (/[A-Za-z]/.test(value) || /\d/.test(value) || /^https?:\/\//i.test(value)) return "ltr";
   return parentDir || "auto";
 }
@@ -156,46 +129,6 @@ function renderMessageText(container, text, dir) {
   });
 }
 
-function renderStats(stats) {
-  if (!stats) return;
-  els.travelerCount.textContent = stats.travelerCount ?? 0;
-  els.interactionCount.textContent = stats.interactionCount ?? 0;
-  els.leadCount.textContent = stats.leadCount ?? 0;
-  els.qualificationRate.textContent = `${stats.pipeline?.qualificationRate ?? 0}%`;
-  els.urgentCount.textContent = stats.followUpSummary?.urgent ?? 0;
-  els.dueTodayCount.textContent = stats.followUpSummary?.dueToday ?? 0;
-  els.bookingDraftCount.textContent = stats.bookingDraftCount ?? 0;
-  els.paymentPendingCount.textContent = stats.paymentPendingCount ?? 0;
-  els.bookingAlertCount.textContent = stats.bookingAlertCount ?? 0;
-
-  els.tripStatusList.innerHTML = "";
-  Object.entries(stats.tripStatusCounts || {}).forEach(([status, count]) => {
-    const div = document.createElement("div");
-    div.className = "trip-status-item";
-    div.innerHTML = `<span>${escapeHtml(status)}</span><strong>${count}</strong>`;
-    els.tripStatusList.appendChild(div);
-  });
-
-  els.leadStageList.innerHTML = "";
-  Object.entries(stats.leadStageCounts || {}).forEach(([status, count]) => {
-    const div = document.createElement("div");
-    div.className = "trip-status-item";
-    div.innerHTML = `<span>${escapeHtml(status || "Blank")}</span><strong>${count}</strong>`;
-    els.leadStageList.appendChild(div);
-  });
-
-  els.recentLeads.innerHTML = "";
-  (stats.recentLeads || []).forEach((lead) => {
-    const div = document.createElement("div");
-    div.className = "detail-card";
-    div.innerHTML = `
-      <h3>${escapeHtml(lead.leadId)}</h3>
-      <p class="muted">${escapeHtml(lead.customerName)} - ${escapeHtml(lead.leadStage)}</p>
-    `;
-    els.recentLeads.appendChild(div);
-  });
-}
-
 function renderMessages(messages) {
   els.chatLog.innerHTML = "";
   (messages || []).forEach((message) => {
@@ -245,9 +178,7 @@ function renderSession(session) {
   const runtimeMode = session.runtimeMode || session.agentMode || "deterministic";
   const chatEnabled = Boolean(session.chatEnabled ?? session.chat_enabled ?? (runtimeMode !== "deterministic"));
   const requiresIntake = Boolean(session.requiresIntake ?? session.requires_intake ?? (runtimeMode === "deterministic" && session.stage === "awaiting_intake"));
-  els.sessionChip.textContent = `Session ${session.id.slice(0, 8)} - ${session.customerStatus || session.uiStatus || session.stage}`;
   renderMessages(session.messages);
-  renderStats(session.stats);
 
   const isGeminiMode = runtimeMode === "gemini";
   const isToolCallingMode = runtimeMode === "tool_calling";
@@ -280,13 +211,6 @@ function renderSession(session) {
   els.sendBtn.disabled = state.messagePending || (!canChat && !hasActiveHandoff) || isCompleted;
   renderQuickActions(session);
   renderPassportUpload(session);
-
-  renderCrmSnapshot(session);
-  renderTripResult(session);
-  renderWriteResult(session);
-  renderLeadResult(session);
-  renderBookingPanel(session);
-  renderBookingResult(session);
 }
 
 function messagePlaceholder(session, runtimeMode = "deterministic") {
@@ -492,255 +416,18 @@ function getAvailableRoomChoices(session) {
   return choices;
 }
 
-function renderCrmSnapshot(session) {
-  const workflow = session.preview?.workflow || {};
-  const verifiedTraveler = workflow.verified_traveler || {};
-  const hasVerifiedPreview = Boolean(
-    workflow.identity_verified && (verifiedTraveler.traveler_id || session.preview?.traveler?.traveler_id)
-  );
-  const traveler = session.finalResult?.traveler || (hasVerifiedPreview ? session.preview?.traveler : null);
-  if (!traveler) {
-    els.crmSnapshot.innerHTML = `<p class="muted">${escapeHtml(session.customerStatus || "Waiting for verified CRM lookup.")}</p>`;
-    return;
-  }
-  const t = Array.isArray(traveler) ? traveler[0] : traveler;
-  const fullName = String(t.full_name || "").trim();
-  const travelerId = String(t.traveler_id || "").trim();
-  const status = String(t.status || "").trim();
-  if (!fullName || !travelerId || !status) {
-    els.crmSnapshot.innerHTML = `
-      <div class="detail-card">
-        <h3>Profile Incomplete</h3>
-        <p class="muted">The CRM record is missing required fields, so the agent will ask for a safe follow-up instead of showing a partial profile.</p>
-      </div>
-    `;
-    return;
-  }
-  els.crmSnapshot.innerHTML = `
-    <div class="detail-card">
-      <h3>${escapeHtml(fullName)}</h3>
-      <div class="meta-item"><span>Status</span><strong>${escapeHtml(status || "Active")}</strong></div>
-      <div class="meta-item"><span>ID</span><strong>${escapeHtml(travelerId)}</strong></div>
-      ${session.roomChoiceLabel ? `<div class="meta-item"><span>Room Choice</span><strong>${escapeHtml(session.roomChoiceLabel)}</strong></div>` : ""}
-    </div>
-  `;
-}
-
-function renderTripResult(session) {
-  const result = session.finalResult || session.preview;
-  const workflow = session.preview?.workflow || {};
-  if (!workflow.identity_verified && !session.finalResult?.trip_result) {
-    els.tripResult.innerHTML = `<p class="muted">Trip preferences are saved. Verified matches appear after CRM identity is confirmed.</p>`;
-    return;
-  }
-  const tripResult = result?.trip_result;
-  if (!tripResult) {
-    els.tripResult.innerHTML = `<p class="muted">Trip suggestions will appear here after the customer shares trip type.</p>`;
-    return;
-  }
-
-  const rows = [];
-  (tripResult.open_trips || []).forEach((trip) => {
-    const remaining = trip.remaining_places ?? "Unknown";
-    rows.push(`
-      <div class="trip-pill">
-        <div>
-          <strong>${escapeHtml(trip.trip_name)}</strong><br>
-          <small>${escapeHtml(trip.start_date)} to ${escapeHtml(trip.end_date)}</small>
-        </div>
-        <span class="tag ok">${escapeHtml(remaining)} places</span>
-      </div>
-    `);
-  });
-  (tripResult.date_tbd_trips || []).forEach((trip) => {
-    rows.push(`
-      <div class="trip-pill">
-        <div><strong>${escapeHtml(trip.trip_name)}</strong><br><small>Date TBD</small></div>
-        <span class="tag warn">Follow up</span>
-      </div>
-    `);
-  });
-  els.tripResult.innerHTML = rows.join("") || `<p class="muted">No confirmed upcoming trips match this request.</p>`;
-}
-
-function renderWriteResult(session) {
-  const write = session.finalResult?.write_result;
-  if (!write) {
-    els.writeResult.innerHTML = `<p class="muted">No sheet write yet. Lead is written only after confirmation.</p>`;
-    return;
-  }
-  if (session.finalResult?.handoff_required) {
-    els.writeResult.innerHTML = `
-      <div class="detail-card">
-        <h3>Review Required</h3>
-        <div class="meta-item"><span>Reason</span><strong>${escapeHtml(session.finalResult?.handoff_reason || "manual_review")}</strong></div>
-        <p class="muted">No traveler profile was overwritten during this handoff.</p>
-      </div>
-    `;
-    return;
-  }
-  const created = write.created_traveler;
-  const lead = write.lead_update;
-  els.writeResult.innerHTML = `
-    <div class="detail-card">
-      <h3>${created ? "Created Traveler" : "Updated Existing Traveler"}</h3>
-      <div class="meta-item"><span>Traveler</span><strong>${escapeHtml(created?.traveler_id || session.finalResult?.traveler?.traveler_id || "Resolved")}</strong></div>
-      <div class="meta-item"><span>Lead</span><strong>${escapeHtml(lead?.lead_id || "N/A")}</strong></div>
-    </div>
-  `;
-}
-
-function renderLeadResult(session) {
-  const lead = session.finalResult?.write_result?.lead_update;
-  if (!lead) {
-    els.leadResult.innerHTML = `<p class="muted">Waiting for confirmed lead...</p>`;
-    els.leadActions.style.display = "none";
-    return;
-  }
-  els.leadActions.style.display = "flex";
-  els.qualifyLeadBtn.onclick = () => handleQualifyLead(lead.lead_id);
-  els.leadResult.innerHTML = `
-    <div class="detail-card">
-      <h3>${escapeHtml(lead.lead_id)}</h3>
-      <div class="tag-row"><span class="tag ok">${escapeHtml(lead.lead_stage)}</span></div>
-      <div class="meta-item"><span>Lead status</span><strong>${escapeHtml(session.leadStatus || lead.lead_stage || "Unknown")}</strong></div>
-    </div>
-  `;
-}
-
-function renderBookingPanel(session) {
-  if (["completed", "handed_off", "cancelled"].includes(session.stage) || session.bookingResult) {
-    els.bookingFormPanel.innerHTML = `<p class="muted">Session completed. Booking follow-up can continue from the saved draft.</p>`;
-    return;
-  }
-  const openTrips = session.finalResult?.trip_result?.open_trips || [];
-  const travelerId = session.finalResult?.write_result?.created_traveler?.traveler_id || session.finalResult?.traveler?.traveler_id;
-  if (!openTrips.length || !travelerId) {
-    els.bookingFormPanel.innerHTML = `<p class="muted">Confirm a lead with open trips before creating a booking draft.</p>`;
-    return;
-  }
-  els.bookingFormPanel.innerHTML = `
-    <select id="booking-trip-select" class="booking-select">
-      ${openTrips.map((trip) => `<option value="${escapeHtml(trip.trip_id)}">${escapeHtml(trip.trip_name)}</option>`).join("")}
-    </select>
-    <select id="booking-room-select" class="booking-select">
-      <option>Double</option>
-      <option>Single</option>
-      <option>Triple</option>
-    </select>
-    <button id="create-booking-btn" class="primary-btn" type="button">Create Booking Draft</button>
-  `;
-  document.getElementById("create-booking-btn")?.addEventListener("click", handleCreateBooking);
-}
-
-function renderBookingResult(session) {
-  const booking = session.bookingResult;
-  if (!booking) {
-    if (session.roomChoiceLabel) {
-      els.bookingResult.innerHTML = `
-        <div class="detail-card">
-          <h3>Selected Room</h3>
-          <div class="meta-item"><span>Choice</span><strong>${escapeHtml(session.roomChoiceLabel)}</strong></div>
-          <div class="meta-item"><span>Session</span><strong>${escapeHtml(session.stage)}</strong></div>
-        </div>
-      `;
-      return;
-    }
-    els.bookingResult.innerHTML = `<p class="muted">Booking draft details and internal alert output will appear here after reservation.</p>`;
-    return;
-  }
-  els.bookingResult.innerHTML = `
-    <div class="detail-card">
-      <h3>${escapeHtml(booking.booking_id)}</h3>
-      <div class="meta-item"><span>Session</span><strong>${escapeHtml(session.stage)}</strong></div>
-      <div class="meta-item"><span>Status</span><strong>${escapeHtml(booking.booking_status || "Draft")}</strong></div>
-      <div class="meta-item"><span>Payment</span><strong>${escapeHtml(booking.payment_status || "Pending")}</strong></div>
-      <div class="meta-item"><span>Trip</span><strong>${escapeHtml(booking.trip_name)}</strong></div>
-      <div class="meta-item"><span>Room</span><strong>${escapeHtml(booking.room_choice_label || session.roomChoiceLabel || booking.room_type)}</strong></div>
-      <div class="meta-item"><span>Availability</span><strong>Updated</strong></div>
-    </div>
-  `;
-}
-
-async function handleQualifyLead(id) {
-  try {
-    await api(`/api/lead/${id}/qualify`, { method: "POST" });
-    const data = await api(`/api/session/${state.sessionId}`);
-    renderSession(data.session);
-  } catch (err) {
-    alert(err.message);
-  }
-}
-
-async function handleCreateBooking() {
-  const tripId = document.getElementById("booking-trip-select")?.value;
-  const roomType = document.getElementById("booking-room-select")?.value;
-  if (!tripId || !roomType || !state.sessionId) return;
-  try {
-    const data = await api(`/api/session/${state.sessionId}/book`, {
-      method: "POST",
-      body: JSON.stringify({ tripId, roomType }),
-    });
-    renderSession(data.session);
-  } catch (err) {
-    alert(err.message);
-  }
-}
-
-async function fetchCrmPreview() {
-  try {
-    const data = await api("/api/crm/preview");
-    els.crmBrowser.innerHTML = "";
-    (data.travelers || []).forEach((traveler) => {
-      const div = document.createElement("div");
-      div.className = "meta-item";
-      div.innerHTML = `<div><strong>${escapeHtml(traveler.name)}</strong><br><small>${escapeHtml(traveler.id)}</small></div>`;
-      els.crmBrowser.appendChild(div);
-    });
-  } catch (err) {
-    els.crmBrowser.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
-  }
-}
-
-async function bootstrap() {
-  try {
-    const data = await api("/api/bootstrap");
-    const dbDiagnostics = data.dbDiagnostics || null;
-    els.sheetBackend.textContent = data.sheetBackend === "crm-db" ? "CRM Database" : (data.sheetBackend === "google" ? "Google Sheets" : "Local XLSX");
-    els.runtimeWorkbook.textContent = data.activeDbPath || data.runtimeWorkbook;
-    els.sourceWorkbook.textContent = dbDiagnostics
-      ? `${dbDiagnostics.counts?.travelers ?? 0} travelers | ${dbDiagnostics.counts?.trips ?? 0} trips | ${dbDiagnostics.counts?.trip_bookings ?? 0} bookings`
-      : data.sourceWorkbook;
-    renderStats(data.stats);
-    await fetchCrmPreview();
-  } catch (err) {
-    alert("Server error. Please check if the Python app is running.");
-  }
-}
-
-els.newSessionBtn?.addEventListener("click", async () => {
+async function startSession() {
   try {
     const data = await api("/api/session", { method: "POST" });
     renderSession(data.session);
   } catch (err) {
-    alert(err.message);
+    els.chatLog.innerHTML = `<div class="empty-state"><h3>Unable to connect</h3><p style="color:var(--text-dim);font-size:0.85rem">Please refresh the page to try again.</p></div>`;
   }
-});
-
-els.resetDemoBtn?.addEventListener("click", async () => {
-  if (!confirm("Reset all demo data from the source workbook?")) return;
-  try {
-    await api("/api/reset", { method: "POST" });
-    location.reload();
-  } catch (err) {
-    alert(err.message);
-  }
-});
+}
 
 els.intakeForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!state.sessionId) {
-    alert("Start a session first.");
     return;
   }
   const payload = {
@@ -847,4 +534,4 @@ els.quickActions?.addEventListener("click", async (event) => {
   }
 });
 
-bootstrap();
+startSession();
