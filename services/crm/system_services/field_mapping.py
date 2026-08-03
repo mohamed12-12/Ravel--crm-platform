@@ -73,6 +73,7 @@ SHEET_TABLE_MAPPINGS = {
             "total_trips": "Total trips",
             "community_events_count": "Comm. Events",
             "lifetime_revenue": "Lifetime Revenue",
+            "preferred_currency": "Preferred Currency",
             "notes": "Notes",
             "introduce_yourself": "Introduce yourself",
             "emergency_contact": "Emergency Contact",

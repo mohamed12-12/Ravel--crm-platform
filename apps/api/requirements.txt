@@ -1,9 +1,18 @@
+# CRM-only subset of the root ../requirements.txt (kept for standalone installs).
+# Keep this file's package set in sync with root requirements.txt.
 Flask>=3.0.0
 Flask-SQLAlchemy>=3.1.0
 Flask-Migrate>=4.0.5
 Flask-Login>=0.6.3
 Flask-SocketIO>=5.3.6
+# SQLAlchemy connects via "postgresql+psycopg2://" - this requires psycopg2,
+# not psycopg (v3). Do not swap this for psycopg[binary].
+psycopg2-binary>=2.9.9
 pandas>=2.1.0
 openpyxl>=3.1.2
 python-dotenv>=1.0.0
 phonenumbers>=8.13.0
+# Production WSGI serving (see ../../deploy/README.md) - eventlet is required
+# for gunicorn to serve Flask-SocketIO's real-time handoff notifications.
+gunicorn>=21.2.0
+eventlet>=0.36.0

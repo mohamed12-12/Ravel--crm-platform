@@ -31,6 +31,7 @@ class Traveler(db.Model):
     total_trips = db.Column(db.Integer, default=0)
     community_events_count = db.Column(db.Integer, default=0)
     lifetime_revenue = db.Column(db.Float, default=0.0)
+    preferred_currency = db.Column(db.String(20))
     notes = db.Column(db.Text)
     introduce_yourself = db.Column(db.Text)
     emergency_contact = db.Column(db.String(200))
@@ -152,6 +153,7 @@ class Traveler(db.Model):
             total_trips=to_int(get("Total Trips", "Total trips")),
             community_events_count=to_int(get("Community Events Count", "Comm. Events")),
             lifetime_revenue=to_float(get("Lifetime Revenue")),
+            preferred_currency=clean(get("Preferred Currency")),
             notes=clean(get("Notes")),
             introduce_yourself=clean(get("Introduce Yourself", "Introduce yourself")),
             emergency_contact=clean(get("Emergency Contact")),
@@ -200,6 +202,7 @@ class Traveler(db.Model):
             "total_trips": self.total_trips,
             "community_events_count": self.community_events_count,
             "lifetime_revenue": self.lifetime_revenue,
+            "preferred_currency": self.preferred_currency,
             "notes": self.notes,
             "introduce_yourself": self.introduce_yourself,
             "emergency_contact": self.emergency_contact,

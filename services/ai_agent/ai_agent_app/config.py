@@ -120,6 +120,7 @@ class Settings:
     meta_page_access_token: str
     meta_app_secret: str
     meta_graph_api_version: str
+    meta_page_id: str
     public_webhook_url: str
 
     human_handoff_phone: str
@@ -170,6 +171,15 @@ class Settings:
             errors.append("APP_DEBUG cannot be true in production.")
         if self.app_env == "production" and _bool(os.getenv("APP_USE_RELOADER"), default=False):
             errors.append("APP_USE_RELOADER cannot be true in production.")
+        if (
+            self.app_env == "production"
+            and (self.meta_app_secret or self.meta_page_access_token)
+            and not self.meta_page_id
+        ):
+            errors.append(
+                "META_PAGE_ID is required in production once Instagram/Meta webhook credentials "
+                "are configured, so inbound events can be validated against the expected page."
+            )
         if self.sheet_backend not in {"excel", "google", "google_sheets"}:
             errors.append("SHEET_BACKEND must be either 'excel', 'google', or 'google_sheets'.")
         if self.sheet_backend == "excel" and not self.excel_source_workbook.exists():
@@ -213,7 +223,7 @@ def load_settings() -> Settings:
 
     return Settings(
         app_env=os.getenv("APP_ENV", "development"),
-        app_host=os.getenv("APP_HOST", "127.0.0.1"),
+        app_host=os.getenv("APP_HOST", "0.0.0.0"),
         app_port=int(os.getenv("APP_PORT", "5001")),
         app_secret_key=(
             os.getenv("APP_SECRET_KEY", "").strip()
@@ -251,6 +261,7 @@ def load_settings() -> Settings:
         meta_page_access_token=os.getenv("META_PAGE_ACCESS_TOKEN", "").strip(),
         meta_app_secret=os.getenv("META_APP_SECRET", "").strip(),
         meta_graph_api_version=os.getenv("META_GRAPH_API_VERSION", "").strip(),
+        meta_page_id=os.getenv("META_PAGE_ID", "").strip(),
         public_webhook_url=os.getenv("PUBLIC_WEBHOOK_URL", "").strip(),
         human_handoff_phone=os.getenv("HUMAN_HANDOFF_PHONE", "").strip(),
         human_handoff_email=os.getenv("HUMAN_HANDOFF_EMAIL", "").strip(),

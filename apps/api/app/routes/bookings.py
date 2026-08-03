@@ -3,6 +3,7 @@ from flask import Blueprint, render_template, request, jsonify, redirect, url_fo
 from app.models.booking import TripBooking
 from app.models.booking_event import BookingEventTrail
 from app.models.booking_status_history import BookingStatusHistory
+from app.models.lead import Lead
 from app.models.traveler import Traveler
 from app.models.trip import Trip
 from app.models.user import User
@@ -22,6 +23,7 @@ from app.security import current_actor, current_role, current_user, current_user
 bookings_bp = Blueprint('bookings', __name__, url_prefix='/bookings')
 
 BOOKING_STATUSES = ['Draft', 'Waiting Customer', 'Pending Confirmation', 'Confirmed', 'Payment Pending', 'Paid', 'Completed', 'Cancelled']
+BOOKING_MANUAL_STATUS_OPTIONS = ['Draft', 'Completed', 'Cancelled']
 PAYMENT_STATUSES = ['Pending', 'Deposit Paid', 'Fully Paid', 'Refunded']
 PAYMENT_TRANSITIONS = {
     'Pending': {'Deposit Paid', 'Fully Paid', 'Refunded'},
@@ -32,9 +34,9 @@ PAYMENT_TRANSITIONS = {
 
 
 def _allowed_status_options(current_status: str | None) -> list[str]:
-    """Return the complete employee status menu in lifecycle order."""
+    """Return the simplified employee status menu while preserving legacy current values."""
     current = (current_status or 'Draft').strip() or 'Draft'
-    return list(dict.fromkeys([current, *BOOKING_STATUSES]))
+    return list(dict.fromkeys([current, *BOOKING_MANUAL_STATUS_OPTIONS]))
 
 
 def _allowed_payment_options(current_status: str | None) -> list[str]:
@@ -83,6 +85,13 @@ def _append_note(existing: str | None, note: str, actor: str) -> str | None:
     stamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat(sep=' ')
     entry = f"[{stamp} by {actor}] {clean_note}"
     return f"{existing.rstrip()}\n{entry}" if existing else entry
+
+
+def _remove_sheet_record(mapping_name: str, record_id: str) -> None:
+    try:
+        UnifiedCRMService().remove_record_from_sheet(mapping_name, record_id)
+    except Exception:
+        pass
 
 
 def _is_overdue(moment) -> bool:
@@ -215,6 +224,7 @@ def create():
     
     trip_id = data.get('trip_id')
     traveler_id = data.get('traveler_id')
+    lead_id = (data.get('lead_id') or '').strip()
     room_type = data.get('room_type')
     group_size = data.get('group_size', '1').strip() or '1'
     
@@ -258,6 +268,7 @@ def create():
             passport_required=passport_required,
             passport_status=passport_status,
             group_size=normalized_group_size,
+            lead_id=lead_id,
         )
         booking_id = result["booking_id"]
         if data.get('assigned_to_user_id'):
@@ -397,6 +408,59 @@ def update_status(booking_id):
     else:
         flash('Changes saved', 'success')
     return redirect(url_for('bookings.detail', booking_id=booking_id))
+
+
+@bookings_bp.route('/<string:booking_id>/delete', methods=['POST'])
+def delete(booking_id):
+    booking = db.get_or_404(TripBooking, booking_id)
+    traveler_id = booking.traveler_id or ''
+    trip_id = booking.trip_id or ''
+    lead_id = booking.lead_id or ''
+
+    BookingStatusHistory.query.filter_by(booking_id=booking_id).delete(synchronize_session=False)
+    BookingEventTrail.query.filter(BookingEventTrail.booking_id == booking_id).delete(synchronize_session=False)
+
+    if lead_id:
+        replacement_booking_id = db.session.execute(
+            db.select(TripBooking.booking_id)
+            .where(TripBooking.lead_id == lead_id, TripBooking.booking_id != booking_id)
+            .order_by(TripBooking.draft_created_at.desc(), TripBooking.booking_id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        Lead.query.filter_by(lead_id=lead_id).update(
+            {Lead.booking_id: replacement_booking_id},
+            synchronize_session=False,
+        )
+
+    if traveler_id:
+        replacement_last_booking = db.session.execute(
+            db.select(TripBooking.booking_id)
+            .where(TripBooking.traveler_id == traveler_id, TripBooking.booking_id != booking_id)
+            .order_by(TripBooking.draft_created_at.desc(), TripBooking.booking_id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        Traveler.query.filter_by(traveler_id=traveler_id).update(
+            {Traveler.last_booking_id: replacement_last_booking},
+            synchronize_session=False,
+        )
+
+    db.session.delete(booking)
+    db.session.commit()
+
+    try:
+        service = UnifiedCRMService()
+        if trip_id:
+            with service.connect() as connection:
+                service._reconcile_trip_room_holds(connection, trip_id)
+                connection.commit()
+        if traveler_id:
+            service.recalculate_traveler_stats(traveler_id)
+    except Exception:
+        pass
+
+    _remove_sheet_record("Bookings", booking_id)
+    flash(f"Booking {booking_id} deleted successfully.", 'success')
+    return redirect(url_for('bookings.index'))
 
 
 def _sync_booking_event(booking: TripBooking, *, event_type: str, event_label: str, notes: str = '') -> None:

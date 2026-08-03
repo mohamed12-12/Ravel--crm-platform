@@ -361,7 +361,7 @@ class UnifiedCRMService:
         lookup_keys = self.lookup_key_variants(phone)
         with self.connect() as connection:
             query = """
-                SELECT traveler_id, status, full_name, birthday, gender, nationality,
+                SELECT traveler_id, status, full_name, birthday, gender, nationality, preferred_currency,
                        phone_code, whatsapp_raw, integrated_whatsapp, normalized_whatsapp,
                        phone_lookup_key, local_trips_count, international_trips_count, total_trips,
                        lead_source, created_at, last_contacted_at, agent_notes, data_audit
@@ -783,6 +783,7 @@ class UnifiedCRMService:
         birthday: str = "",
         gender: str = "",
         nationality: str = "",
+        preferred_currency: str = "",
         lead_source: str = "",
         agent_notes: str = "",
         country_code: str = "20",
@@ -800,9 +801,9 @@ class UnifiedCRMService:
                         """
                         INSERT INTO travelers (
                             traveler_id, status, full_name, first_name, last_name, birthday, gender,
-                            nationality, phone_code, whatsapp_raw, integrated_whatsapp, normalized_whatsapp,
+                            nationality, preferred_currency, phone_code, whatsapp_raw, integrated_whatsapp, normalized_whatsapp,
                             phone_lookup_key, lead_source, created_at, last_contacted_at, agent_notes
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             traveler_id,
@@ -813,6 +814,7 @@ class UnifiedCRMService:
                             birthday or None,
                             gender or None,
                             nationality or None,
+                            preferred_currency or None,
                             phone["country_code"] or None,
                             phone["local_number"] or None,
                             phone["normalized_whatsapp"] or None,
@@ -839,6 +841,7 @@ class UnifiedCRMService:
             "birthday": birthday or None,
             "gender": gender or None,
             "nationality": nationality or None,
+            "preferred_currency": preferred_currency or None,
             "phone_lookup_key": phone["lookup_key"],
             "integrated_whatsapp": phone["normalized_whatsapp"],
         }
@@ -1061,6 +1064,7 @@ class UnifiedCRMService:
         birthday: str = "",
         gender: str = "",
         nationality: str = "",
+        preferred_currency: str = "",
         preferred_trip_id: str = "",
         language: str = "",
         manual_lead_stage: str = "",
@@ -1079,6 +1083,8 @@ class UnifiedCRMService:
             agent_notes = str(legacy_kwargs.pop("status_snapshot", "") or "").strip()
         if not source:
             source = str(legacy_kwargs.pop("intent", "") or "System").strip() or "System"
+        if not preferred_currency:
+            preferred_currency = str(legacy_kwargs.pop("currency", "") or "").strip().upper()
         if "group_size" in legacy_kwargs and group_size in (1, "1", "", None):
             group_size = legacy_kwargs.pop("group_size")
         legacy_kwargs.clear()
@@ -1100,6 +1106,7 @@ class UnifiedCRMService:
                 birthday=birthday,
                 gender=gender,
                 nationality=nationality,
+                preferred_currency=preferred_currency,
                 lead_source=source,
                 agent_notes=agent_notes,
                 country_code=country_code,
@@ -1113,6 +1120,7 @@ class UnifiedCRMService:
                 birthday=birthday,
                 gender=gender,
                 nationality=nationality,
+                preferred_currency=preferred_currency,
                 timestamp=timestamp,
             )
             if profile_updates and traveler:
@@ -1511,13 +1519,14 @@ class UnifiedCRMService:
         birthday: str = "",
         gender: str = "",
         nationality: str = "",
+        preferred_currency: str = "",
         timestamp: datetime | None = None,
     ) -> dict[str, Any]:
         timestamp = timestamp or _utc_now().replace(microsecond=0)
         updates: dict[str, Any] = {}
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT birthday, gender, nationality FROM travelers WHERE traveler_id = ?",
+                "SELECT birthday, gender, nationality, preferred_currency FROM travelers WHERE traveler_id = ?",
                 (traveler_id,),
             ).fetchone()
             if not row:
@@ -1532,6 +1541,9 @@ class UnifiedCRMService:
             if nationality and not row["nationality"]:
                 fields["nationality"] = nationality
                 updates["nationality"] = nationality
+            if preferred_currency and not row["preferred_currency"]:
+                fields["preferred_currency"] = preferred_currency
+                updates["preferred_currency"] = preferred_currency
             assignments = ", ".join(f"{key} = ?" for key in fields)
             connection.execute(
                 f"UPDATE travelers SET {assignments} WHERE traveler_id = ?",
@@ -3158,6 +3170,7 @@ class UnifiedCRMService:
         - passport_expiry TEXT: Expiry date in ISO format (YYYY-MM-DD)
         - passport_nationality TEXT: Nationality as on passport
         - passport_attachment_ref TEXT: Local filesystem reference path (metadata only)
+        - preferred_currency TEXT: Traveler payment preference such as EGP or USD
         These columns are nullable and backward-compatible with existing traveler rows.
         No data is lost on existing records. Added columns will be NULL by default.
         """
@@ -3176,6 +3189,7 @@ class UnifiedCRMService:
             ("passport_expiry", "TEXT"),
             ("passport_nationality", "TEXT"),
             ("passport_attachment_ref", "TEXT"),
+            ("preferred_currency", "TEXT"),
         ]
         for col_name, col_type in passport_columns:
             if col_name not in existing_cols:

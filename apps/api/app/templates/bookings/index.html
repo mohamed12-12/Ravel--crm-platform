@@ -131,7 +131,11 @@
         </div>
         <form action="{{ url_for('bookings.create') }}" method="POST">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="lead_id" id="leadIdInput" value="{{ request.args.get('lead_id', '') }}">
             <div class="grid-2">
+                <div class="form-group col-span-2" id="leadBookingNotice" style="display:none;background:rgba(0,208,146,0.08);border:1px solid rgba(0,208,146,0.24);padding:0.75rem;border-radius:6px;font-size:0.8rem;color:var(--text-main)">
+                    This draft will be linked to lead <strong id="leadBookingNoticeId"></strong>.
+                </div>
                 <div class="form-group col-span-2">
                     <label class="form-label">Trip Selection</label>
                     <select class="form-select" name="trip_id" id="tripSelector" required onchange="handleTripSelection()">
@@ -160,11 +164,11 @@
 
                 <div class="form-group">
                     <label class="form-label">Traveler ID</label>
-                    <input class="form-input" type="text" name="traveler_id" placeholder="e.g. TR001">
+                    <input class="form-input" type="text" name="traveler_id" id="travelerIdInput" placeholder="e.g. TR001" value="{{ request.args.get('traveler_id', '') }}">
                 </div>
                 <div class="form-group">
                     <label class="form-label">Traveler Name</label>
-                    <input class="form-input" type="text" name="traveler_name" placeholder="Full name">
+                    <input class="form-input" type="text" name="traveler_name" id="travelerNameInput" placeholder="Full name" value="{{ request.args.get('traveler_name', '') }}">
                 </div>
                 
                 <div class="form-group">
@@ -233,6 +237,13 @@
 {% block scripts %}
 <script>
 const TRIPS_DATA = {{ trips_data | tojson | safe }};
+const PREFILL_BOOKING_CONTEXT = {
+    openModal: {{ (request.args.get('open_modal') == 'createBooking') | tojson }},
+    leadId: {{ request.args.get('lead_id', '') | tojson }},
+    travelerId: {{ request.args.get('traveler_id', '') | tojson }},
+    travelerName: {{ request.args.get('traveler_name', '') | tojson }},
+    tripId: {{ request.args.get('trip_id', '') | tojson }},
+};
 
 function handleTripSelection() {
     const tripId = document.getElementById('tripSelector').value;
@@ -320,10 +331,48 @@ function handleRoomSelection() {
     roomCard.style.display = 'none';
 }
 
+function prefillBookingModalFromContext() {
+    const leadIdInput = document.getElementById('leadIdInput');
+    const travelerIdInput = document.getElementById('travelerIdInput');
+    const travelerNameInput = document.getElementById('travelerNameInput');
+    const tripSelector = document.getElementById('tripSelector');
+    const leadNotice = document.getElementById('leadBookingNotice');
+    const leadNoticeId = document.getElementById('leadBookingNoticeId');
+
+    if (leadIdInput) {
+        leadIdInput.value = PREFILL_BOOKING_CONTEXT.leadId || '';
+    }
+    if (travelerIdInput && PREFILL_BOOKING_CONTEXT.travelerId) {
+        travelerIdInput.value = PREFILL_BOOKING_CONTEXT.travelerId;
+    }
+    if (travelerNameInput && PREFILL_BOOKING_CONTEXT.travelerName) {
+        travelerNameInput.value = PREFILL_BOOKING_CONTEXT.travelerName;
+    }
+    if (tripSelector && PREFILL_BOOKING_CONTEXT.tripId) {
+        tripSelector.value = PREFILL_BOOKING_CONTEXT.tripId;
+        handleTripSelection();
+    }
+    if (leadNotice && leadNoticeId) {
+        if (PREFILL_BOOKING_CONTEXT.leadId) {
+            leadNotice.style.display = 'block';
+            leadNoticeId.innerText = PREFILL_BOOKING_CONTEXT.leadId;
+        } else {
+            leadNotice.style.display = 'none';
+            leadNoticeId.innerText = '';
+        }
+    }
+}
+
 function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 document.querySelectorAll('.modal-overlay').forEach(m => {
     m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+});
+document.addEventListener('DOMContentLoaded', () => {
+    prefillBookingModalFromContext();
+    if (PREFILL_BOOKING_CONTEXT.openModal) {
+        openModal('createBooking');
+    }
 });
 </script>
 {% endblock %}

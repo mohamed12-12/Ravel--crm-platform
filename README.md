@@ -31,6 +31,7 @@ The system is designed around one rule: CRM data is the source of truth. The AI 
 | `apps/admin-web/` | React/Vite admin UI prototype. |
 | `apps/middleware/` | TypeScript middleware/orchestration prototype. |
 | `database/migrations/` | Alembic migrations for database-backed CRM changes. |
+| `database/postgres/` | Staging-first SQLite to PostgreSQL schema, migration plan, DevOps setup, and rollback docs. |
 | `docs/` | Architecture, testing, production-readiness, data authority, API, and workflow documentation. |
 | `tests/` | Python regression suite covering CRM, agent behavior, workflow policy, auth, and API contracts. |
 | `archive/` | Legacy demo code, old artifacts, and historical source files. |
@@ -39,9 +40,10 @@ The system is designed around one rule: CRM data is the source of truth. The AI 
 
 | Service | Default URL | Notes |
 | --- | --- | --- |
-| CRM app | `http://127.0.0.1:5000` | Employee CRM: travelers, leads, trips, bookings, handoffs. |
-| AI Agent app | `http://127.0.0.1:5001` | Customer-facing agent demo and chat simulator. |
-| Middleware | `http://127.0.0.1:3000` | TypeScript middleware prototype when used. |
+| CRM app | `http://<server>:5000` | Employee CRM: travelers, leads, trips, bookings, handoffs. |
+| AI Agent app | `http://<server>:3001` | Customer-facing agent demo and chat simulator. |
+| Admin web | `http://<server>:3002` | React/Vite operator UI. |
+| Middleware | `http://<server>:3000` | TypeScript middleware prototype when used. |
 
 ## Requirements
 
@@ -81,15 +83,36 @@ Important environment variables:
 | Variable | Purpose |
 | --- | --- |
 | `DATABASE_URL` | CRM database URL. Local default is SQLite. |
+| `POSTGRES_URL` | Explicit PostgreSQL target for migration and validation scripts. Use staging first. |
 | `CRM_AUTH_ENABLED` | Enables employee/API authentication. |
 | `CRM_API_TOKEN` | Token for server-to-server CRM API calls. |
 | `AI_AGENT_MODE` | `tool_calling`, `gemini`, or `deterministic`. Use `tool_calling` for the current agent runtime. |
 | `GEMINI_API_KEY` | Required only for live Gemini calls. |
 | `GEMINI_MODEL` | Gemini model name. |
-| `APP_PORT` | AI Agent app port, default `5001`. |
+| `APP_HOST` | AI Agent bind host, default `0.0.0.0` in deployment. |
+| `APP_PORT` | AI Agent app port, default `3001` in local launcher. |
 | `DEFAULT_COUNTRY_CODE` | Default phone country code, currently `20`. |
 
 Never commit real `.env` files, API keys, customer data, local databases, uploaded documents, logs, or service-account files.
+
+## SQLite To PostgreSQL Migration
+
+The current local CRM database remains SQLite at `apps/api/instance/rahma_traveler_dev.db`. PostgreSQL migration assets are prepared for staging-first validation:
+
+- `database/postgres/001_create_schema.sql`
+- `database/postgres/SQLITE_TO_POSTGRES_MIGRATION_PLAN.md`
+- `database/postgres/DEVOPS_POSTGRES_SETUP_INSTRUCTIONS.md`
+- `database/postgres/POSTGRES_MIGRATION_ROLLBACK_PLAN.md`
+- `tools/migrate_sqlite_to_postgres.py`
+- `tools/validate_postgres_migration.py`
+
+Safe dry-run:
+
+```bash
+python tools/migrate_sqlite_to_postgres.py --dry-run
+```
+
+Do not run production cutover until staging migration, validation, and smoke tests pass.
 
 ## Run The CRM App
 
@@ -103,7 +126,7 @@ python run.py
 The CRM app should run on:
 
 ```text
-http://127.0.0.1:5000
+http://<server>:5000
 ```
 
 Useful CRM pages:
@@ -118,7 +141,7 @@ Useful CRM pages:
 The CRM OpenAPI contract is served at:
 
 ```text
-http://127.0.0.1:5000/api/openapi.json
+http://<server>:5000/api/openapi.json
 ```
 
 ## Run The AI Agent App
@@ -132,7 +155,7 @@ python demo_web/app.py
 The AI Agent app should run on:
 
 ```text
-http://127.0.0.1:5001
+http://<server>:3001
 ```
 
 Useful AI Agent endpoints:
@@ -146,7 +169,7 @@ Useful AI Agent endpoints:
 The AI Agent OpenAPI contract is served at:
 
 ```text
-http://127.0.0.1:5001/api/openapi.json
+http://<server>:3001/api/openapi.json
 ```
 
 ## AI Agent Architecture
@@ -177,15 +200,15 @@ The project exposes machine-readable OpenAPI 3.1 contracts.
 For TestSprite AI agent testing:
 
 ```text
-API Base URL: http://127.0.0.1:5001
-OpenAPI URL:  http://127.0.0.1:5001/api/openapi.json
+API Base URL: http://<server>:3001
+OpenAPI URL:  http://<server>:3001/api/openapi.json
 ```
 
 For TestSprite CRM testing:
 
 ```text
-API Base URL: http://127.0.0.1:5000
-OpenAPI URL:  http://127.0.0.1:5000/api/openapi.json
+API Base URL: http://<server>:5000
+OpenAPI URL:  http://<server>:5000/api/openapi.json
 ```
 
 Detailed TestSprite instructions are in:

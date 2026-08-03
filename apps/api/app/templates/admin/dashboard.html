@@ -342,6 +342,37 @@
         font-size: 0.72rem;
         margin-top: 2px;
     }
+    .login-activity-list {
+        display: grid;
+        gap: 0.7rem;
+    }
+    .login-activity-item {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 0.75rem;
+        align-items: start;
+        padding: 0.8rem 0.95rem;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.03);
+    }
+    .login-activity-name {
+        color: var(--text-main);
+        font-size: 0.84rem;
+        font-weight: 700;
+    }
+    .login-activity-meta {
+        color: var(--text-muted);
+        font-size: 0.73rem;
+        line-height: 1.45;
+        margin-top: 0.18rem;
+    }
+    .login-activity-time {
+        color: var(--text-dim);
+        font-size: 0.72rem;
+        font-weight: 700;
+        white-space: nowrap;
+    }
     @media (max-width: 900px) {
         .dashboard-secondary-grid {
             grid-template-columns: 1fr;
@@ -773,6 +804,47 @@
     {% else %}
     <p style="color:var(--text-muted);font-size:0.83rem;text-align:center;padding:1.5rem">No handoffs yet.</p>
     {% endif %}
+</div>
+
+<div class="dashboard-secondary-grid" style="margin-top:1.25rem;">
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">Recent Sign-ins</span>
+            <span class="badge badge-green">{{ recent_login_activity|length }}</span>
+        </div>
+        {% if recent_login_activity %}
+        <div class="login-activity-list">
+            {% for entry in recent_login_activity %}
+            <div class="login-activity-item">
+                <div>
+                    <div class="login-activity-name">{{ entry.target.display_name if entry.target else 'Unknown employee' }}</div>
+                    <div class="login-activity-meta">
+                        {{ entry.target.username if entry.target else 'unknown' }}
+                        {% if entry.details and 'ip=' in entry.details %}
+                        · {{ entry.details.split('ip=')[-1] }}
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="login-activity-time">{{ entry.created_at.strftime('%d %b %H:%M') if entry.created_at else '—' }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p style="color:var(--text-muted);font-size:0.83rem;text-align:center;padding:1.5rem">No recent sign-ins recorded yet.</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">Quick Access</span>
+        </div>
+        <div class="queue-chip-row">
+            <a href="{{ url_for('admin.users') }}" class="queue-chip"><b>Employees</b> manage access</a>
+            <a href="{{ url_for('handoffs.index') }}" class="queue-chip"><b>Handoffs</b> monitor active queue</a>
+            <a href="{{ url_for('leads.index', queue='assigned_to_me') }}" class="queue-chip"><b>My Leads</b> open personal queue</a>
+            <a href="{{ url_for('bookings.index', queue='assigned_to_me') }}" class="queue-chip"><b>My Bookings</b> continue follow-up</a>
+        </div>
+    </div>
 </div>
 
 <!-- Quick Actions -->

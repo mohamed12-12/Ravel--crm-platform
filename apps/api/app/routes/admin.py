@@ -9,6 +9,7 @@ from app.models.booking import TripBooking
 from app.models.handoff import HandoffQueue
 from app.models.user import User
 from app.models.user_audit import UserAuditLog
+from app.models.booking_status_history import BookingStatusHistory
 from app.services.importer import run_full_import, run_sheets_import
 from app.services.identity import find_duplicates, merge_travelers
 from services.crm.system_services.config import get_database_diagnostics
@@ -204,6 +205,13 @@ def dashboard():
                 'bookings': TripBooking.query.filter_by(assigned_to_user_id=employee.id).count(),
             })
     recent_bookings = TripBooking.query.order_by(TripBooking.draft_created_at.desc()).limit(8).all()
+    recent_login_activity = (
+        UserAuditLog.query
+        .filter(UserAuditLog.action == 'login')
+        .order_by(UserAuditLog.created_at.desc())
+        .limit(8)
+        .all()
+    )
 
     return render_template('admin/dashboard.html',
                            traveler_count=traveler_count,
@@ -226,7 +234,8 @@ def dashboard():
                            inactive_owner_leads=inactive_owner_leads,
                            inactive_owner_bookings=inactive_owner_bookings,
                            team_workload=team_workload,
-                           recent_bookings=recent_bookings)
+                           recent_bookings=recent_bookings,
+                           recent_login_activity=recent_login_activity)
 
 
 @admin_bp.route('/import', methods=['GET', 'POST'])
@@ -321,15 +330,35 @@ def debug_trips_headers():
 
 @admin_bp.route('/db-health')
 def db_health():
-    """Return the active CRM database path and core table counts."""
+    """Return the active CRM database path/backend and core table counts.
+
+    get_database_diagnostics() always reads the legacy SQLite file directly
+    (services/crm/system_services), so it can't be used as-is once
+    SQLALCHEMY_DATABASE_URI points at Postgres - it would silently report
+    stale SQLite counts while the app is actually serving Postgres data.
+    Query the live SQLAlchemy session instead in that case, mirroring the
+    backend check in app/routes/crm.py's _agent_runtime().
+    """
     uri = current_app.config.get("SQLALCHEMY_DATABASE_URI", "")
-    diagnostics = get_database_diagnostics()
+    if str(uri).startswith("sqlite:///"):
+        diagnostics = get_database_diagnostics()
+        active_db = diagnostics["db_path"]
+        counts = diagnostics["counts"]
+    else:
+        active_db = uri
+        counts = {
+            "travelers": Traveler.query.count(),
+            "trips": Trip.query.count(),
+            "trip_bookings": TripBooking.query.count(),
+            "booking_status_history": BookingStatusHistory.query.count(),
+            "leads": Lead.query.count(),
+        }
     return jsonify(
         {
             "status": "ok",
             "sqlalchemyDatabaseUri": uri,
-            "activeDbPath": diagnostics["db_path"],
-            "counts": diagnostics["counts"],
+            "activeDbPath": active_db,
+            "counts": counts,
         }
     )
 

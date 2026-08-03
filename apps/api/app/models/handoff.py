@@ -30,6 +30,7 @@ class HandoffQueue(db.Model):
     owner = db.Column(db.String(100))
     assigned_to = db.Column(db.String(100))
     notes = db.Column(db.Text)
+    idempotency_key = db.Column(db.Text)
 
     def __repr__(self):
         return f'<Handoff {self.handoff_id} - {self.reason}>'
@@ -82,5 +83,6 @@ class HandoffQueue(db.Model):
             "status": self.status,
             "owner": self.owner,
             "assigned_to": self.assigned_to,
-            "notes": self.notes
+            "notes": self.notes,
+            "idempotency_key": self.idempotency_key,
         }

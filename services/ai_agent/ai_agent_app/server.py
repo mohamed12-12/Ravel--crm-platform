@@ -23,7 +23,7 @@ from services.ai_agent.ai_agent_app.system_bridge import get_system_service
 from services.ai_agent.llm import build_llm_provider
 from services.instagram import MetaApiSettings, MetaGraphClient, build_instagram_reply
 from services.instagram.payload_parser import parse_instagram_webhook
-from services.instagram.webhooks import verify_webhook, validate_meta_signature
+from services.instagram.webhooks import verify_webhook, validate_meta_signature, filter_entries_for_page
 from services.ai_agent.ai_agent_app.logger import app_logger, webhook_logger
 from services.ai_agent.validation.validation_rules import normalize_flight_option, normalize_trip_type
 from services.api_contracts import build_agent_openapi_contract
@@ -1792,20 +1792,27 @@ def create_app(
     @app.get("/webhook")
     def webhook_verify():
         settings: Settings = app.config["SETTINGS"]
-        # TODO(production): bind verification to the real Meta app/page setup and rotate verify tokens through secrets management.
         return verify_webhook(settings.meta_verify_token)
 
     @app.post("/webhook")
     def webhook_received():
         # Wrap logic to use decorator with dynamic settings.
-        # TODO(production): add route-level rate limiting, raw-body audit logging, durable retry queues,
-        # and human-review routing before processing real Instagram messages.
+        # TODO(production): add route-level rate limiting and durable retry queues
+        # for outbound Graph API sends before scaling past demo volume.
         settings = app.config["SETTINGS"]
         @validate_meta_signature(settings.meta_app_secret)
         def process_request():
             data = request.get_json(force=True)
             webhook_logger.info(f"Received webhook event")
-            events = parse_instagram_webhook(data if isinstance(data, dict) else {})
+            payload = data if isinstance(data, dict) else {}
+            accepted_entries, rejected_entries = filter_entries_for_page(payload, settings.meta_page_id)
+            if rejected_entries:
+                webhook_logger.warning(
+                    "Skipped %d webhook entr%s not addressed to the configured page",
+                    len(rejected_entries),
+                    "y" if len(rejected_entries) == 1 else "ies",
+                )
+            events = parse_instagram_webhook({**payload, "entry": accepted_entries})
             service = get_system_service(settings)
             persisted = 0
             duplicates = 0

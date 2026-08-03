@@ -1,9 +1,13 @@
 {% extends "base.html" %}
-{% block title %}{{ booking.booking_id }} — Nanovate CRM{% endblock %}
+{% block title %}{{ booking.booking_id }} â€” Nanovate CRM{% endblock %}
 {% block topbar_title %}Booking Detail{% endblock %}
 
 {% block topbar_actions %}
-<a href="{{ url_for('bookings.index') }}" class="btn btn-ghost btn-sm">← All Bookings</a>
+<a href="{{ url_for('bookings.index') }}" class="btn btn-ghost btn-sm">â† All Bookings</a>
+<form action="{{ url_for('bookings.delete', booking_id=booking.booking_id) }}" method="POST" onsubmit="return confirm('Delete this booking permanently?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn btn-danger btn-sm">Delete Booking</button>
+</form>
 {% endblock %}
 
 {% block content %}
@@ -29,7 +33,7 @@
                 {{ booking.traveler_name or 'Unknown Traveler' }}
             </h1>
             <div style="color:var(--text-muted);font-size:0.83rem">
-                {{ booking.trip_name or booking.trip_id or 'No trip linked' }} · {{ booking.room_type or '—' }} Room
+                {{ booking.trip_name or booking.trip_id or 'No trip linked' }} Â· {{ booking.room_type or 'â€”' }} Room
             </div>
         </div>
 
@@ -56,10 +60,10 @@
         <div class="card">
             <div class="card-title" style="margin-bottom:1rem">Booking Details</div>
             <div class="grid-2">
-                <div><div class="form-label">Trip</div><div style="color:var(--text-main)">{{ booking.trip_name or '—' }}</div></div>
-                <div><div class="form-label">Trip ID</div><div class="mono" style="color:var(--accent-2)">{{ booking.trip_id or '—' }}</div></div>
-                <div><div class="form-label">Room Type</div><div style="color:var(--text-main)">{{ booking.room_type or '—' }}</div></div>
-                <div><div class="form-label">Flight Option</div><div style="color:var(--text-main)">{{ booking.flight_option or '—' }}</div></div>
+                <div><div class="form-label">Trip</div><div style="color:var(--text-main)">{{ booking.trip_name or 'â€”' }}</div></div>
+                <div><div class="form-label">Trip ID</div><div class="mono" style="color:var(--accent-2)">{{ booking.trip_id or 'â€”' }}</div></div>
+                <div><div class="form-label">Room Type</div><div style="color:var(--text-main)">{{ booking.room_type or 'â€”' }}</div></div>
+                <div><div class="form-label">Flight Option</div><div style="color:var(--text-main)">{{ booking.flight_option or 'â€”' }}</div></div>
                 <div><div class="form-label">Commercial Review</div>
                     <div style="color:var(--text-main)">
                         {% if commercial_context.vip.recognized %}VIP customer{% else %}Standard customer{% endif %}
@@ -67,10 +71,10 @@
                     </div>
                 </div>
                 <div><div class="form-label">Flight Policy</div><div style="color:var(--text-main)">{{ commercial_context.flight_policy.summary }}</div></div>
-                <div><div class="form-label">Currency</div><div style="color:var(--text-main)">{{ booking.currency or '—' }}</div></div>
-                <div><div class="form-label">Source</div><div style="color:var(--text-main)">{{ booking.booking_source or '—' }}</div></div>
-                <div><div class="form-label">Lead ID</div><div class="mono" style="color:var(--accent-2)">{{ booking.lead_id or '—' }}</div></div>
-                <div><div class="form-label">Created</div><div style="color:var(--text-main)">{{ booking.draft_created_at.strftime('%d %B %Y %H:%M') if booking.draft_created_at else '—' }}</div></div>
+                <div><div class="form-label">Currency</div><div style="color:var(--text-main)">{{ booking.currency or 'â€”' }}</div></div>
+                <div><div class="form-label">Source</div><div style="color:var(--text-main)">{{ booking.booking_source or 'â€”' }}</div></div>
+                <div><div class="form-label">Lead ID</div><div class="mono" style="color:var(--accent-2)">{{ booking.lead_id or 'â€”' }}</div></div>
+                <div><div class="form-label">Created</div><div style="color:var(--text-main)">{{ booking.draft_created_at.strftime('%d %B %Y %H:%M') if booking.draft_created_at else 'â€”' }}</div></div>
                 {% if booking.booking_notes %}
                 <div class="col-span-2"><div class="form-label">Notes</div>
                 <div style="color:var(--text-dim);font-size:0.83rem;white-space:pre-wrap">{{ booking.booking_notes }}</div></div>
@@ -117,8 +121,8 @@
                         <div style="font-weight:700;color:var(--text-main)">{{ event.event_label or event.event_type }}</div>
                         <div style="font-size:0.75rem;color:var(--text-muted)">
                             {{ event.event_id }}
-                            {% if event.interaction_id %} · {{ event.interaction_id }}{% endif %}
-                            {% if event.channel %} · {{ event.channel }}{% endif %}
+                            {% if event.interaction_id %} Â· {{ event.interaction_id }}{% endif %}
+                            {% if event.channel %} Â· {{ event.channel }}{% endif %}
                         </div>
                         {% if event.notes %}
                         <div style="font-size:0.78rem;color:var(--text-dim);margin-top:0.25rem">{{ event.notes }}</div>
@@ -141,10 +145,10 @@
                 {% for item in status_history %}
                 <div style="display:flex;justify-content:space-between;gap:1rem;background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:0.65rem 0.8rem">
                     <div>
-                        <div style="font-weight:700;color:var(--text-main)">{{ item.old_status or '—' }} → {{ item.new_status or '—' }}</div>
-                        <div style="font-size:0.75rem;color:var(--text-muted)">{{ item.changed_by or 'system' }}{% if item.change_source %} · {{ item.change_source }}{% endif %}</div>
+                        <div style="font-weight:700;color:var(--text-main)">{{ item.old_status or 'â€”' }} â†’ {{ item.new_status or 'â€”' }}</div>
+                        <div style="font-size:0.75rem;color:var(--text-muted)">{{ item.changed_by or 'system' }}{% if item.change_source %} Â· {{ item.change_source }}{% endif %}</div>
                     </div>
-                    <div style="font-size:0.75rem;color:var(--text-muted)">{{ item.changed_at.strftime('%d %b %Y %H:%M') if item.changed_at else '—' }}</div>
+                    <div style="font-size:0.75rem;color:var(--text-muted)">{{ item.changed_at.strftime('%d %b %Y %H:%M') if item.changed_at else 'â€”' }}</div>
                 </div>
                 {% endfor %}
             </div>
@@ -158,7 +162,7 @@
         <div class="card">
             <div class="card-header">
                 <span class="card-title">Traveler</span>
-                <a href="{{ url_for('travelers.detail', traveler_id=traveler.traveler_id) }}" class="btn btn-ghost btn-sm">View Profile →</a>
+                <a href="{{ url_for('travelers.detail', traveler_id=traveler.traveler_id) }}" class="btn btn-ghost btn-sm">View Profile â†’</a>
             </div>
             <div style="display:flex;align-items:center;gap:1rem">
                 <div style="width:44px;height:44px;background:linear-gradient(135deg,var(--accent),var(--accent-2));border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;flex-shrink:0">
@@ -166,7 +170,7 @@
                 </div>
                 <div>
                     <div style="font-weight:700;color:var(--text-main)">{{ traveler.full_name }}</div>
-                    <div style="font-size:0.78rem;color:var(--text-muted)">{{ traveler.traveler_id }} · {{ traveler.status }} · {{ traveler.total_trips }} trips · ${{ '{:,.0f}'.format(traveler.lifetime_revenue or 0) }} lifetime</div>
+                    <div style="font-size:0.78rem;color:var(--text-muted)">{{ traveler.traveler_id }} Â· {{ traveler.status }} Â· {{ traveler.total_trips }} trips Â· ${{ '{:,.0f}'.format(traveler.lifetime_revenue or 0) }} USD lifetime</div>
                 </div>
             </div>
         </div>
@@ -189,7 +193,7 @@
                         <option value="{{ s }}" {% if booking.booking_status == s %}selected{% endif %}>{{ s }}</option>
                         {% endfor %}
                     </select>
-                    <div style="color:var(--text-muted);font-size:0.72rem;margin-top:0.35rem">All statuses are available for employee corrections. A reason is required when reopening, reversing, or skipping a normal step.</div>
+                    <div style="color:var(--text-muted);font-size:0.72rem;margin-top:0.35rem">Employee updates are limited to Draft, Completed, and Cancelled. A reason is required when correcting a non-standard flow.</div>
                 </div>
                 <div class="form-group" style="margin-bottom:0.75rem">
                     <label class="form-label">Payment Status</label>
@@ -217,7 +221,7 @@
                             <select class="form-select" name="assigned_to_user_id">
                                 <option value="">Unassigned</option>
                                 {% for employee in employees %}
-                                <option value="{{ employee.id }}" {% if booking.assigned_to_user_id == employee.id %}selected{% endif %}>{{ employee.display_name }} · {{ employee.role }}</option>
+                                <option value="{{ employee.id }}" {% if booking.assigned_to_user_id == employee.id %}selected{% endif %}>{{ employee.display_name }} Â· {{ employee.role }}</option>
                                 {% endfor %}
                             </select>
                             {% if booking.assigned_to and not assigned_user %}<div style="color:var(--text-muted);font-size:0.72rem;margin-top:0.35rem">Legacy owner text: {{ booking.assigned_to }}. Choose an employee to link it.</div>{% endif %}
@@ -279,8 +283,8 @@
                     </div>
                     <div style="color:var(--text-muted);margin-top:0.2rem">
                         {{ item.assigned_by_user.display_name if item.assigned_by_user else 'System' }}
-                        · {{ item.created_at.strftime('%d %b %Y %H:%M') if item.created_at else 'Unknown time' }}
-                        {% if item.reason %} · {{ item.reason }}{% endif %}
+                        Â· {{ item.created_at.strftime('%d %b %Y %H:%M') if item.created_at else 'Unknown time' }}
+                        {% if item.reason %} Â· {{ item.reason }}{% endif %}
                     </div>
                 </div>
                 {% endfor %}

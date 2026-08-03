@@ -1,0 +1,45 @@
+# Rahma Travel OS - consolidated Python dependencies for both services:
+#   - apps/api          (CRM/API Flask service)
+#   - services/ai_agent (AI agent Flask service)
+# Installed by CI (.github/workflows/ci.yml) and used as the source of truth
+# for production deploys. apps/api/requirements.txt is kept as a lighter
+# CRM-only subset for standalone installs; keep the two in sync.
+
+# --- Core web framework ---
+Flask>=3.0.0
+Flask-SQLAlchemy>=3.1.0
+Flask-Migrate>=4.0.5
+Flask-Login>=0.6.3
+Flask-SocketIO>=5.3.6
+
+# --- Database driver ---
+# The app connects via SQLAlchemy's "postgresql+psycopg2://" dialect
+# (see apps/api/app/config.py and services/data_authority.py) - this
+# requires psycopg2, NOT psycopg (v3). Do not swap this for psycopg[binary].
+psycopg2-binary>=2.9.9
+
+# --- Data / spreadsheet backends ---
+pandas>=2.1.0
+openpyxl>=3.1.2
+gspread>=6.0.0
+google-auth>=2.28.0
+google-api-python-client>=2.120.0
+
+# --- AI provider ---
+google-generativeai>=0.8.0
+
+# --- Shared utilities ---
+python-dotenv>=1.0.0
+phonenumbers>=8.13.0
+
+# --- Production WSGI server (see deploy/ for gunicorn/systemd config) ---
+gunicorn>=21.2.0
+# Required so gunicorn can serve the CRM/API service's Flask-SocketIO
+# real-time handoff notifications correctly (see deploy/README.md).
+eventlet>=0.36.0
+
+# --- Test tooling (installed in CI; harmless in production installs) ---
+pytest>=8.0.0
+pytest-flask>=1.3.0
+pytest-asyncio>=0.23.0
+requests>=2.31.0

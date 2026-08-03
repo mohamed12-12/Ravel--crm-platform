@@ -113,6 +113,7 @@ ALLOWED_TRAVELER_UPDATE_FIELDS = {
     "birthday",
     "gender",
     "nationality",
+    "preferred_currency",
     "country_code",
     "raw_phone",
     "passport_attachment_ref",

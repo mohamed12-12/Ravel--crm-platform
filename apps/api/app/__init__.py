@@ -59,6 +59,7 @@ def _ensure_travelers_passport_columns(app: Flask) -> None:
         "passport_expiry": "DATE",
         "passport_nationality": "TEXT",
         "passport_attachment_ref": "TEXT",
+        "preferred_currency": "VARCHAR(20)",
     }
 
     with app.app_context():

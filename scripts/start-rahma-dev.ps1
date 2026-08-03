@@ -1,7 +1,8 @@
 param(
     [string]$Python = "C:\Python314\python.exe",
     [int]$ApiPort = 5000,
-    [int]$DemoPort = 5101,
+    [int]$DemoPort = 3001,
+    [int]$AdminWebPort = 3002,
     [int]$GatewayPort = 8080,
     [switch]$NoNgrok,
     [switch]$NoRestart
@@ -88,7 +89,8 @@ function Start-WithEnvironment {
         [string[]]$Arguments,
         [hashtable]$Environment,
         [string]$OutLog,
-        [string]$ErrLog
+        [string]$ErrLog,
+        [string]$WorkingDirectory = $RepoRoot
     )
 
     $previous = @{}
@@ -101,7 +103,7 @@ function Start-WithEnvironment {
         $process = Start-Process `
             -FilePath $FilePath `
             -ArgumentList $Arguments `
-            -WorkingDirectory $RepoRoot `
+            -WorkingDirectory $WorkingDirectory `
             -WindowStyle Hidden `
             -RedirectStandardOutput $OutLog `
             -RedirectStandardError $ErrLog `
@@ -167,6 +169,15 @@ $demo = Start-WithEnvironment `
     -OutLog (Join-Path $LogDir "demo-web.out.log") `
     -ErrLog (Join-Path $LogDir "demo-web.err.log")
 
+$adminWeb = Start-WithEnvironment `
+    -Name "Rahma admin web" `
+    -FilePath "npm.cmd" `
+    -Arguments @("run", "dev", "--", "--host", "127.0.0.1", "--port", $AdminWebPort) `
+    -Environment @{} `
+    -WorkingDirectory (Join-Path $RepoRoot "apps\admin-web") `
+    -OutLog (Join-Path $LogDir "admin-web.out.log") `
+    -ErrLog (Join-Path $LogDir "admin-web.err.log")
+
 $gateway = Start-WithEnvironment `
     -Name "Rahma dev gateway" `
     -FilePath $Python `
@@ -205,17 +216,19 @@ if (-not $NoNgrok) {
 
 $apiReady = Wait-ForPort -Port $ApiPort
 $demoReady = Wait-ForPort -Port $DemoPort
+$adminReady = Wait-ForPort -Port $AdminWebPort
 $gatewayReady = Wait-ForPort -Port $GatewayPort
 
 Write-Host ""
 Write-Host "Rahma dev services:"
 Write-Host "  API:      http://127.0.0.1:$ApiPort"
 Write-Host "  Demo web: http://127.0.0.1:$DemoPort"
+Write-Host "  Admin web: http://127.0.0.1:$AdminWebPort"
 Write-Host "  Gateway:  http://127.0.0.1:$GatewayPort"
 if ($ngrokUrl) {
     Write-Host "  Ngrok:    $ngrokUrl -> http://127.0.0.1:$GatewayPort"
     Write-Host "  Public API/3000:  $ngrokUrl/p3000/"
-    Write-Host "  Public demo/5001: $ngrokUrl/p5001/"
+    Write-Host "  Public demo/5001: $ngrokUrl/p5001/ (routes to local demo port $DemoPort)"
     Write-Host "  Public CRM alias: $ngrokUrl/crm/"
     Write-Host "  Public demo alias: $ngrokUrl/demo/"
 }
@@ -225,13 +238,15 @@ Write-Host "  $LogDir\api.out.log"
 Write-Host "  $LogDir\api.err.log"
 Write-Host "  $LogDir\demo-web.out.log"
 Write-Host "  $LogDir\demo-web.err.log"
+Write-Host "  $LogDir\admin-web.out.log"
+Write-Host "  $LogDir\admin-web.err.log"
 Write-Host "  $LogDir\gateway.out.log"
 Write-Host "  $LogDir\gateway.err.log"
 if (-not $NoNgrok) {
     Write-Host "  $LogDir\ngrok-gateway.log"
 }
 
-if (-not $apiReady -or -not $demoReady -or -not $gatewayReady) {
+if (-not $apiReady -or -not $demoReady -or -not $adminReady -or -not $gatewayReady) {
     Write-Host ""
     Write-Host "One or more ports did not start listening before the timeout. Check the logs above."
     exit 1

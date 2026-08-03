@@ -12,6 +12,11 @@ from services.ai_agent.ai_agent_app.agent.response_guard import guard_customer_r
 from services.ai_agent.ai_agent_app.agent.privacy_policy import AgentPrivacyPolicy
 from services.ai_agent.ai_agent_app.agent.read_only_tools import ReadOnlyCRMTools
 from services.ai_agent.ai_agent_app.agent.safety import AgentSafetyLayer
+from services.ai_agent.ai_agent_app.agent.tool_contracts import (
+    normalize_tool_result_contract,
+    safe_tool_input_error_result,
+    validate_tool_input_contract,
+)
 from services.ai_agent.ai_agent_app.agent.tool_registry import ToolSpec, build_agent_tool_registry
 from services.ai_agent.ai_agent_app.agent.tool_routing_audit import evaluate_tool_route, should_enforce_tool_route
 from services.ai_agent.ai_agent_app.agent.workflow_policy import ConversationWorkflowPolicy
@@ -277,6 +282,52 @@ class GeminiAgent:
         return False
 
     @staticmethod
+    def _tool_events_contain_failed_contract(tool_events: list[dict[str, Any]]) -> bool:
+        for event in tool_events:
+            result = event.get("result") if isinstance(event, dict) else {}
+            if not isinstance(result, dict):
+                continue
+            if str(result.get("contract_status") or "").strip().lower() == "failed":
+                return True
+            if str(result.get("status") or "").strip().lower() in {"failed", "error", "router_blocked", "workflow_blocked"}:
+                return True
+            contract = result.get("write_result_contract") if isinstance(result.get("write_result_contract"), dict) else {}
+            if str(contract.get("status") or "").strip().lower() in {"failed", "blocked"}:
+                return True
+        return False
+
+    @staticmethod
+    def _grounded_fact_text(session_context: dict[str, Any], tool_events: list[dict[str, Any]]) -> str:
+        payload = {
+            "session_context": session_context,
+            "tool_results": [event.get("result") for event in tool_events if isinstance(event, dict)],
+        }
+        try:
+            return json.dumps(payload, ensure_ascii=False, sort_keys=True).casefold()
+        except Exception:
+            return str(payload).casefold()
+
+    @staticmethod
+    def _sensitive_fact_tokens(reply: str) -> list[str]:
+        text = str(reply or "")
+        patterns = (
+            r"\b(?:TR|RT|BK|LD|LEAD|BOOKING|HANDOFF|HF|HND)[-_]?[A-Z0-9]{2,}\b",
+            r"(?:\$|USD\s*|EGP\s*)\d[\d,]*(?:\.\d+)?|\b\d[\d,]*(?:\.\d+)?\s*(?:USD|EGP)\b",
+            r"\b\d{4}-\d{2}-\d{2}\b",
+            r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\s+\d{1,2}\b",
+        )
+        tokens: list[str] = []
+        seen: set[str] = set()
+        for pattern in patterns:
+            for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+                token = match.group(0).strip()
+                folded = token.casefold()
+                if folded not in seen:
+                    seen.add(folded)
+                    tokens.append(token)
+        return tokens
+
+    @staticmethod
     def _contains_unverified_crm_claim(reply: str) -> bool:
         text = str(reply or "").casefold()
         patterns = (
@@ -309,6 +360,21 @@ class GeminiAgent:
             if isinstance(result, dict) and result.get("status") == "privacy_blocked":
                 return str(result.get("assistant_message") or AgentPrivacyPolicy.EN_RESPONSE).strip()
         workflow = session_context.get("workflow_policy") if isinstance(session_context.get("workflow_policy"), dict) else {}
+        grounded_text = self._grounded_fact_text(session_context, tool_events)
+        ungrounded_tokens = [
+            token for token in self._sensitive_fact_tokens(reply)
+            if token.casefold() not in grounded_text
+        ]
+        if ungrounded_tokens:
+            return str(
+                workflow.get("assistant_message")
+                or "I need to verify that information in the CRM before I can confirm it. Please share the missing detail, or I can connect you with a human agent."
+            ).strip()
+        if self._tool_events_contain_failed_contract(tool_events) and self._contains_unverified_crm_claim(reply):
+            return str(
+                workflow.get("assistant_message")
+                or "I could not verify that information right now. Please try again, or I can connect you with a human agent."
+            ).strip()
         if not workflow or workflow.get("identity_verified"):
             return reply
         if self._tool_events_contain_verified_crm_fact(tool_events):
@@ -504,32 +570,39 @@ class GeminiAgent:
         if spec is None:
             raise GeminiToolLoopError(f"Unsupported tool requested: {name}")
 
-        required = spec.input_schema.get("required") or []
-        if not isinstance(args, dict):
-            raise GeminiToolLoopError(f"Invalid tool input for {name}: expected object.")
-        for field in required:
-            value = args.get(field)
-            if not isinstance(value, str) or not value.strip():
-                raise GeminiToolLoopError(f"Invalid tool input for {name}: missing {field}.")
-
-        properties = spec.input_schema.get("properties") if isinstance(spec.input_schema, dict) else {}
-        if not isinstance(properties, dict):
-            properties = {}
-        for key, value in args.items():
-            if value is None:
-                continue
-            if isinstance(value, str):
-                continue
-            if isinstance(value, (int, float, bool)):
-                continue
-            field_schema = properties.get(key) if isinstance(properties.get(key), dict) else {}
-            allowed_type = field_schema.get("type") if isinstance(field_schema, dict) else ""
-            if isinstance(value, dict) and allowed_type == "object":
-                continue
-            if isinstance(value, list) and allowed_type == "array":
-                continue
-            raise GeminiToolLoopError(f"Invalid tool input for {name}: unsupported field {key}.")
+        validation = validate_tool_input_contract(spec, args)
+        if not validation.ok:
+            raise GeminiToolLoopError(f"Invalid tool input for {name}: {validation.reason_code}.")
         return spec
+
+    def _safe_execute_tool(
+        self,
+        spec: ToolSpec,
+        args: dict[str, Any],
+        session_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        validation = validate_tool_input_contract(spec, args)
+        if not validation.ok:
+            return safe_tool_input_error_result(
+                spec=spec,
+                reason_code=validation.reason_code,
+                errors=validation.errors,
+                session_context=session_context,
+            )
+        try:
+            raw_result = self._execute_tool(spec.name, args, session_context)
+        except Exception as exc:
+            agent_logger.warning("Tool execution failed tool=%s reason=%s", spec.name, type(exc).__name__)
+            return normalize_tool_result_contract(
+                spec=spec,
+                exception=exc,
+                session_context=session_context,
+            )
+        return normalize_tool_result_contract(
+            spec=spec,
+            result=raw_result,
+            session_context=session_context,
+        )
 
     def _execute_tool(self, name: str, args: dict[str, Any], session_context: dict[str, Any] | None = None) -> dict[str, Any]:
         privacy_block = self.privacy_policy.guard_tool_call(name, args, session_context or {})
@@ -870,7 +943,13 @@ class GeminiAgent:
                 if result is None:
                     result = self._workflow_block_result(spec.name, session_context)
                 if result is None:
-                    result = self._execute_tool(spec.name, tool_input, session_context)
+                    result = self._safe_execute_tool(spec, tool_input, session_context)
+                else:
+                    result = normalize_tool_result_contract(
+                        spec=spec,
+                        result=result,
+                        session_context=session_context,
+                    )
                 summary = self._tool_result_summary(result)
                 agent_logger.info(
                     "Gemini tool result prompt_id=%s model=%s round=%s tool=%s call_id_present=%s thought_signature_preserved=%s summary=%s",
@@ -981,8 +1060,8 @@ class GeminiAgent:
                 "reply": fallback_reply or self._safe_refusal(),
                 "tool_requests": [],
                 "mode": self.settings.ai_agent_mode,
-                "error": "" if fallback_reply else str(exc),
-                "warning": str(exc) if fallback_reply else "",
+                "error": "" if fallback_reply else "tool_request_failed",
+                "warning": "tool_request_failed" if fallback_reply else "",
             }
         except GeminiProviderError as exc:
             agent_logger.warning("Gemini chat unavailable prompt_id=%s error=%s", package.prompt_id, exc)
@@ -990,7 +1069,7 @@ class GeminiAgent:
                 "reply": self._safe_refusal(),
                 "tool_requests": [],
                 "mode": self.settings.ai_agent_mode,
-                "error": str(exc),
+                "error": "provider_unavailable",
             }
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)

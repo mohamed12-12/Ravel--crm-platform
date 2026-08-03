@@ -23,7 +23,7 @@ HOP_BY_HOP_HEADERS = {
 def build_landing(bind_port: int, routes: dict[str, tuple[str, int]]) -> bytes:
     labels = {
         "/p3000": "Port 3000",
-        "/p5001": "Port 5001",
+        "/p5001": "Port 3001",
         "/crm": "CRM alias",
         "/demo": "Demo alias",
     }
@@ -92,7 +92,7 @@ def build_landing(bind_port: int, routes: dict[str, tuple[str, int]]) -> bytes:
 <body>
   <main>
     <h1>Rahma Dev Gateway</h1>
-    <p>This single public ngrok domain routes normal CRM paths to port 3000, and demo paths to port 5001. Gateway port: <code>{bind_port}</code>.</p>
+    <p>This single public ngrok domain routes normal CRM paths to port 3000, and demo paths to port 3001. Gateway port: <code>{bind_port}</code>.</p>
     <div class="links">
       {route_links}
     </div>
@@ -253,7 +253,7 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--p3000-target", type=int, default=3000)
-    parser.add_argument("--p5001-target", type=int, default=5001)
+    parser.add_argument("--p5001-target", type=int, default=3001)
     args = parser.parse_args()
 
     GatewayHandler.bind_port = args.port

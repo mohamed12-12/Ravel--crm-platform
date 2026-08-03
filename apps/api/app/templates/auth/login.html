@@ -23,13 +23,13 @@
     <form class="login-card" method="POST">
         <img class="brand-logo" src="{{ url_for('static', filename='nanovate-logo.svg') }}" alt="Nanovate">
         <h1>Nanovate CRM</h1>
-        <p>Employee login is required for CRM changes.</p>
+        <p>Sign in to access the dashboard, CRM pages, and admin tools.</p>
         {% if error %}<div class="error">{{ error }}</div>{% endif %}
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <label>Username</label>
-        <input name="username" autocomplete="username" required>
-        <label>Password</label>
-        <input type="password" name="password" autocomplete="current-password" required>
+        <label for="username">Username</label>
+        <input id="username" name="username" autocomplete="username" required autofocus>
+        <label for="password">Password</label>
+        <input id="password" type="password" name="password" autocomplete="current-password" required>
         <button type="submit">Sign In</button>
     </form>
 </body>

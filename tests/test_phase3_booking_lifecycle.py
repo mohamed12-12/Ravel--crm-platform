@@ -23,12 +23,14 @@ def _create_temp_app():
 def _load_app_objects():
     from app.extensions import db
     from app.models.booking import TripBooking
+    from app.models.booking_event import BookingEventTrail
     from app.models.booking_status_history import BookingStatusHistory
+    from app.models.lead import Lead
     from app.models.traveler import Traveler
     from app.models.trip import Trip
     from services.crm.system_services import UnifiedCRMService
 
-    return db, TripBooking, BookingStatusHistory, Traveler, Trip, UnifiedCRMService
+    return db, TripBooking, BookingEventTrail, BookingStatusHistory, Lead, Traveler, Trip, UnifiedCRMService
 
 
 class Phase3BookingLifecycleTests(unittest.TestCase):
@@ -39,7 +41,7 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
         os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path.resolve().as_posix()}"
         os.environ["RAHMA_SYSTEM_DB_PATH"] = str(self.db_path)
         self.app = _create_temp_app()
-        self.db, self.TripBooking, self.BookingStatusHistory, self.Traveler, self.Trip, UnifiedCRMService = _load_app_objects()
+        self.db, self.TripBooking, self.BookingEventTrail, self.BookingStatusHistory, self.Lead, self.Traveler, self.Trip, UnifiedCRMService = _load_app_objects()
         self.app.config["TESTING"] = True
         with self.app.app_context():
             self.db.drop_all()
@@ -51,6 +53,14 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
                     integrated_whatsapp="20:1000000000",
                     normalized_whatsapp="+201000000000",
                     phone_lookup_key="20:1000000000",
+                )
+            )
+            self.db.session.add(
+                self.Lead(
+                    lead_id="L-BOOK-1",
+                    customer_name="Returning Traveler",
+                    lead_stage="Booking Draft",
+                    traveler_id="TR100",
                 )
             )
             self.db.session.add(
@@ -307,6 +317,87 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
             self.assertEqual(len(history), 1)
             self.assertEqual(history[0].old_status, "Confirmed")
             self.assertEqual(history[0].new_status, "Payment Pending")
+
+    def test_booking_detail_status_selector_is_limited_to_manual_options(self) -> None:
+        with self.app.app_context():
+            booking = self.TripBooking(
+                booking_id="B-STATUS-1",
+                trip_id="TRIP-100",
+                trip_name="Lifecycle Trip",
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type="Double",
+                booking_status="Draft",
+                booking_source="Admin",
+                payment_status="Pending",
+            )
+            self.db.session.add(booking)
+            self.db.session.commit()
+
+        response = self.client.get("/bookings/B-STATUS-1")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        status_select = body.split('<select class="form-select" name="booking_status">', 1)[1].split('</select>', 1)[0]
+        self.assertIn('<option value="Draft" selected>', status_select)
+        self.assertIn('<option value="Completed"', status_select)
+        self.assertIn('<option value="Cancelled"', status_select)
+        self.assertNotIn('<option value="Waiting Customer"', status_select)
+        self.assertNotIn('<option value="Pending Confirmation"', status_select)
+        self.assertNotIn('<option value="Confirmed"', status_select)
+        self.assertNotIn('<option value="Payment Pending"', status_select)
+        self.assertNotIn('<option value="Paid"', status_select)
+
+    def test_delete_booking_removes_links_and_related_history(self) -> None:
+        with self.app.app_context():
+            booking = self.TripBooking(
+                booking_id="B-DELETE-1",
+                trip_id="TRIP-100",
+                trip_name="Lifecycle Trip",
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type="Double",
+                booking_status="Draft",
+                booking_source="Admin",
+                payment_status="Pending",
+                lead_id="L-BOOK-1",
+            )
+            self.db.session.add(booking)
+            self.db.session.commit()
+            lead = self.db.session.get(self.Lead, "L-BOOK-1")
+            lead.booking_id = "B-DELETE-1"
+            traveler = self.db.session.get(self.Traveler, "TR100")
+            traveler.last_booking_id = "B-DELETE-1"
+            self.db.session.add(
+                self.BookingStatusHistory(
+                    booking_id="B-DELETE-1",
+                    old_status="Draft",
+                    new_status="Completed",
+                    changed_by="admin",
+                )
+            )
+            self.db.session.add(
+                self.BookingEventTrail(
+                    event_id="E-DELETE-1",
+                    booking_id="B-DELETE-1",
+                    traveler_id="TR100",
+                    lead_id="L-BOOK-1",
+                    event_type="booking_draft_created",
+                    event_label="Booking draft created",
+                )
+            )
+            self.db.session.commit()
+
+        response = self.client.post("/bookings/B-DELETE-1/delete", follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            self.assertIsNone(self.db.session.get(self.TripBooking, "B-DELETE-1"))
+            self.assertEqual(self.BookingStatusHistory.query.filter_by(booking_id="B-DELETE-1").count(), 0)
+            self.assertEqual(self.BookingEventTrail.query.filter_by(booking_id="B-DELETE-1").count(), 0)
+            lead = self.db.session.get(self.Lead, "L-BOOK-1")
+            self.assertIsNone(lead.booking_id)
+            traveler = self.db.session.get(self.Traveler, "TR100")
+            self.assertIsNone(traveler.last_booking_id)
 
     def test_booking_status_update_recalculates_traveler_summary(self) -> None:
         with self.app.app_context():

@@ -34,8 +34,12 @@
                 </p>
             </div>
             <div style="text-align:right;min-width:180px">
-                <span style="font-size:0.75rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;display:block">Lifetime Revenue</span>
-                <strong style="font-size:1.8rem;font-weight:800;color:var(--green)">${{ "{:,.2f}".format(traveler.lifetime_revenue or 0) }}</strong>
+                <span style="font-size:0.75rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;display:block">{{ revenue_summary.primary_label }}</span>
+                <strong style="font-size:1.8rem;font-weight:800;color:var(--green);display:block">{{ revenue_summary.primary_value }}</strong>
+                <span style="font-size:0.82rem;color:var(--text-muted);display:block;margin-top:0.25rem">{{ revenue_summary.secondary_label }}: {{ revenue_summary.secondary_value }}</span>
+                {% if revenue_summary.exchange_note %}
+                <span style="font-size:0.72rem;color:var(--text-dim);display:block;margin-top:0.2rem">{{ revenue_summary.exchange_note }}</span>
+                {% endif %}
             </div>
         </div>
 
@@ -75,6 +79,10 @@
                     <div style="display:flex;justify-content:space-between;padding-bottom:0.5rem;border-bottom:1px solid var(--border)">
                         <span style="font-size:0.8rem;color:var(--text-muted)">Gender</span>
                         <strong style="font-size:0.85rem;color:var(--text-main)">{{ traveler.gender or '—' }}</strong>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;padding-bottom:0.5rem;border-bottom:1px solid var(--border)">
+                        <span style="font-size:0.8rem;color:var(--text-muted)">Preferred Payment Currency</span>
+                        <strong style="font-size:0.85rem;color:var(--text-main)">{{ traveler.preferred_currency or '—' }}</strong>
                     </div>
                     <div style="display:flex;justify-content:space-between;padding-bottom:0.5rem;border-bottom:1px solid var(--border)">
                         <span style="font-size:0.8rem;color:var(--text-muted)">Room Preference</span>
@@ -512,6 +520,14 @@
                     <input type="text" id="edit_lead_source" value="{{ traveler.lead_source or '' }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
                 </div>
                 <div>
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Preferred Payment Currency</label>
+                    <select id="edit_preferred_currency" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+                        <option value="" {% if not traveler.preferred_currency %}selected{% endif %}>Not set</option>
+                        <option value="EGP" {% if traveler.preferred_currency == 'EGP' %}selected{% endif %}>Egyptian Pound (EGP)</option>
+                        <option value="USD" {% if traveler.preferred_currency == 'USD' %}selected{% endif %}>US Dollar (USD)</option>
+                    </select>
+                </div>
+                <div>
                     <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Primary Language</label>
                     <input type="text" id="edit_primary_language" value="{{ traveler.primary_language or '' }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
                 </div>
@@ -538,7 +554,7 @@
                     <input type="text" id="edit_community_whatsapp" value="{{ traveler.community_whatsapp or '' }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
                 </div>
                 <div>
-                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Lifetime Revenue ($)</label>
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Lifetime Revenue (USD)</label>
                     <input type="number" step="0.01" id="edit_lifetime_revenue" value="{{ traveler.lifetime_revenue or 0.0 }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
                 </div>
             </div>
@@ -593,6 +609,7 @@ async function saveChanges() {
         nationality: document.getElementById('edit_nationality').value,
         residence: document.getElementById('edit_residence').value,
         lead_source: document.getElementById('edit_lead_source').value,
+        preferred_currency: document.getElementById('edit_preferred_currency').value,
         primary_language: document.getElementById('edit_primary_language').value,
         room_preference: document.getElementById('edit_room_preference').value,
         emergency_contact: document.getElementById('edit_emergency_contact').value,

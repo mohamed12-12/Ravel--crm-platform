@@ -79,6 +79,18 @@ class Port2WriteResultResponseGatingTests(unittest.TestCase):
         self.assertNotIn("LD-FAKE", reply)
         self.assertIn("could not save", reply.lower())
 
+    def test_reused_duplicate_lead_uses_already_recorded_language(self) -> None:
+        duplicate = {"status": "duplicate", "executed": False, "reused": True, "record_type": "lead", "record_id": "LD-OLD"}
+        reply = gate_customer_write_reply(
+            proposed_reply="Lead LD-OLD created for Amina.",
+            write_result=duplicate,
+            record_type="lead",
+        )
+
+        self.assertIn("LD-OLD", reply)
+        self.assertIn("already recorded", reply.lower())
+        self.assertNotIn("created for", reply.lower())
+
     def test_gemini_final_reply_is_gated_by_blocked_write_result(self) -> None:
         reply = GeminiAgent._gate_reply_with_write_results(
             "Booking draft B-FAKE created successfully.",

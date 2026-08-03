@@ -2,4 +2,4 @@
 
 React/Vite prototype for the operator admin experience.
 
-It currently talks to `apps/middleware` at `http://localhost:3000/api`. The UI is not yet production hardened and still needs component tests, API contract tests, and auth integration.
+It talks to the API through `VITE_API_BASE_URL` when set, or falls back to a same-origin `/api` path. The UI still needs component tests, API contract tests, and auth integration before production rollout.

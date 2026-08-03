@@ -36,29 +36,30 @@ crm_bp = Blueprint('crm', __name__, url_prefix='/api/crm')
 def _agent_runtime():
     from services.ai_agent.ai_agent_app.agent.read_only_tools import ReadOnlyCRMTools
     from services.ai_agent.ai_agent_app.config import load_settings
+    from app.services.agent_crm_bridge import PostgresAgentCRMTools
     from services.crm.system_services.config import load_system_settings
     from services.crm.system_services.unified_service import UnifiedCRMService
     from services.data_authority import load_data_authority
 
     uri = str(current_app.config.get("SQLALCHEMY_DATABASE_URI") or "").strip()
-    if not uri.startswith("sqlite:///"):
-        raise RuntimeError("The current CRM agent API adapter supports the operational SQLite database only.")
-    db_path = Path(uri.removeprefix("sqlite:///")).resolve()
     authority = load_data_authority(environment=current_app.config.get("ENV", "development"))
-    system_settings = replace(
-        load_system_settings(),
-        db_path=db_path,
-        data_authority=authority.authority,
-        sheet_export_enabled=authority.export_enabled_for(load_system_settings().sheet_backend),
-        allow_source_workbook_writes=False,
-    )
-    service = UnifiedCRMService(system_settings)
     agent_settings = replace(
         load_settings(),
         crm_access_mode="shared_service",
         data_authority="crm",
     )
-    return agent_settings, ReadOnlyCRMTools(agent_settings, service=service)
+    if uri.startswith("sqlite:///"):
+        db_path = Path(uri.removeprefix("sqlite:///")).resolve()
+        system_settings = replace(
+            load_system_settings(),
+            db_path=db_path,
+            data_authority=authority.authority,
+            sheet_export_enabled=authority.export_enabled_for(load_system_settings().sheet_backend),
+            allow_source_workbook_writes=False,
+        )
+        service = UnifiedCRMService(system_settings)
+        return agent_settings, ReadOnlyCRMTools(agent_settings, service=service)
+    return agent_settings, PostgresAgentCRMTools()
 
 
 @crm_bp.route('/agent/read', methods=['POST'])

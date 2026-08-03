@@ -1,0 +1,28 @@
+[Unit]
+Description=Rahma Traveler AI agent service (gunicorn)
+After=network.target rahma-crm-api.service
+Wants=rahma-crm-api.service
+
+[Service]
+Type=simple
+User=rahma
+Group=rahma
+WorkingDirectory=/opt/rahma-traveler
+EnvironmentFile=/etc/rahma-traveler/.env
+# No SocketIO here - plain sync workers are fine. Start with 2-3 workers;
+# tune based on observed CPU/memory on the instance size you pick.
+ExecStart=/opt/rahma-traveler/venv/bin/gunicorn \
+    --workers 3 \
+    --bind 127.0.0.1:3001 \
+    --timeout 60 \
+    --access-logfile /var/log/rahma-traveler/ai-agent-access.log \
+    --error-logfile /var/log/rahma-traveler/ai-agent-error.log \
+    services.ai_agent.wsgi:app
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

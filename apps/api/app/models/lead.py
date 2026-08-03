@@ -44,6 +44,7 @@ class Lead(db.Model):
     assigned_to_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), index=True)
     assigned_at = db.Column(db.DateTime)
     assigned_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), index=True)
+    idempotency_key = db.Column(db.Text)
     last_contact_at = db.Column(db.DateTime)
     customer_response_status = db.Column(db.String(100))
 
@@ -198,6 +199,7 @@ class Lead(db.Model):
             "assigned_user": self.assigned_user.display_name if self.assigned_user else None,
             "assigned_at": self.assigned_at.isoformat() if self.assigned_at else None,
             "assigned_by_user_id": self.assigned_by_user_id,
+            "idempotency_key": self.idempotency_key,
             "last_contact_at": self.last_contact_at.isoformat() if self.last_contact_at else None,
             "customer_response_status": self.customer_response_status,
             "last_interaction_id": self.last_interaction_id,

@@ -84,7 +84,7 @@ class GeminiWriteToolExecutor:
             }
 
         if validation.decision != APPROVED:
-            duplicate_result = self._duplicate_booking_result_if_available(action, validation_payload, session_context, audit)
+            duplicate_result = self._duplicate_write_result_if_available(action, validation_payload, session_context, audit)
             if duplicate_result is not None:
                 return duplicate_result
             audit["reason"] = "; ".join(validation.reasons or validation.missing_information or ["write blocked"])
@@ -195,6 +195,7 @@ class GeminiWriteToolExecutor:
                 birthday=self._value(payload, session_context, "birthday") or "",
                 gender=self._value(payload, session_context, "gender") or "",
                 nationality=self._value(payload, session_context, "nationality") or "",
+                preferred_currency=self._value(payload, session_context, "preferred_currency", "currency") or "",
                 preferred_trip_id=preferred_trip_id or "",
                 language=language,
                 force_create_new_lead=True,
@@ -704,6 +705,107 @@ class GeminiWriteToolExecutor:
             "write_result": {"booking_draft": {"booking_id": booking_id}, "write_result_contract": contract},
             "write_result_contract": contract,
         }
+
+    def _duplicate_lead_result_if_available(
+        self,
+        action: str,
+        validation_payload: dict[str, Any],
+        session_context: dict[str, Any],
+        audit: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if action != "create_lead":
+            return None
+        reasons = " ".join(str(item or "") for item in validation_payload.get("reasons") or []).lower()
+        warnings = [str(item or "") for item in validation_payload.get("warnings") or []]
+        if "open lead already exists" not in reasons:
+            return None
+        lead_id = self._extract_existing_id_from_warnings(warnings, "Existing lead IDs:")
+        if not lead_id:
+            return None
+        lead_update: dict[str, Any] = {"lead_id": lead_id}
+        try:
+            lead_lookup = self.read_only_tools.lookup_lead(lead_id=lead_id)
+            leads = lead_lookup.get("leads") if isinstance(lead_lookup, dict) else []
+            for lead in leads or []:
+                if str(lead.get("lead_id") or "").strip() == lead_id:
+                    lead_update = dict(lead)
+                    break
+        except Exception:
+            lead_update = {"lead_id": lead_id}
+        idempotency_key = str(lead_update.get("idempotency_key") or "").strip()
+        contract = self._write_result_contract(
+            status="duplicate",
+            executed=False,
+            reused=True,
+            record_type="lead",
+            record_id=lead_id,
+            idempotency_key=idempotency_key,
+            customer_confirmation_allowed=True,
+            safe_customer_message_key="lead.duplicate_open",
+            audit={"session_id": str(session_context.get("session_id") or "")},
+        )
+        lead_update["write_result_contract"] = contract
+        reply = customer_message_from_write_result(
+            {"lead_update": lead_update, "write_result_contract": contract},
+            "lead",
+            str(session_context.get("language") or "en"),
+        )
+        audit["executed"] = False
+        audit["result_id"] = lead_id
+        audit["reason"] = "duplicate_open_lead_reused"
+        self._log_audit(audit)
+        return {
+            "action": action,
+            "decision": validation_payload.get("decision") or REJECTED,
+            "executed": False,
+            "validation": validation_payload,
+            "assistant_message": reply,
+            "reply": reply,
+            "result": None,
+            "result_id": lead_id,
+            "lead_update": lead_update,
+            "audit": audit,
+            "write_result": {"lead_update": lead_update, "write_result_contract": contract},
+            "write_result_contract": contract,
+            "session_update": {
+                "lead_status": lead_update.get("lead_stage", ""),
+                "final_result": {
+                    "lead_id": lead_id,
+                    "write_result": {"lead_update": lead_update, "write_result_contract": contract},
+                },
+            },
+        }
+
+    def _duplicate_write_result_if_available(
+        self,
+        action: str,
+        validation_payload: dict[str, Any],
+        session_context: dict[str, Any],
+        audit: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        return self._duplicate_booking_result_if_available(
+            action,
+            validation_payload,
+            session_context,
+            audit,
+        ) or self._duplicate_lead_result_if_available(
+            action,
+            validation_payload,
+            session_context,
+            audit,
+        )
+
+    @staticmethod
+    def _extract_existing_id_from_warnings(warnings: list[str], prefix: str) -> str:
+        for warning in warnings:
+            if prefix not in warning:
+                continue
+            raw_ids = warning.split(prefix, 1)[1].strip()
+            for candidate in raw_ids.split(","):
+                candidate = candidate.strip()
+                if candidate:
+                    return candidate
+        return ""
 
     def _resolve_traveler(self, payload: dict[str, Any], session_context: dict[str, Any]) -> dict[str, Any] | None:
         traveler_id = self._value(payload, session_context, "traveler_id")

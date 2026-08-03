@@ -24,9 +24,31 @@ from services.data_authority import load_data_authority
 
 travelers_bp = Blueprint('travelers', __name__, url_prefix='/travelers')
 ARCHIVE_LIKE_STATUSES = {"inactive", "archived", "blacklisted", "blocked"}
+ARCHIVED_FILTER_STATUSES = {"inactive", "archived"}
+BLACKLIST_FILTER_STATUSES = {"blacklisted", "blocked"}
 _ALLOWED_DOC_EXTENSIONS = {"jpg", "jpeg", "png", "pdf"}
 _ALLOWED_DOC_MIME_TYPES = {"image/jpeg", "image/png", "application/pdf"}
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+def _build_revenue_summary(lifetime_revenue_usd: float | int | None, preferred_currency: str, usd_to_egp_rate: float) -> dict[str, str]:
+    usd_value = float(lifetime_revenue_usd or 0.0)
+    rate = float(usd_to_egp_rate or 0.0)
+    egp_value = usd_value * rate if rate > 0 else 0.0
+    preferred = str(preferred_currency or "USD").strip().upper()
+    if preferred == "EGP":
+        primary = {"label": "Lifetime Revenue (EGP)", "value": f"EGP {egp_value:,.2f}"}
+        secondary = {"label": "Lifetime Revenue (USD)", "value": f"${usd_value:,.2f}"}
+    else:
+        primary = {"label": "Lifetime Revenue (USD)", "value": f"${usd_value:,.2f}"}
+        secondary = {"label": "Lifetime Revenue (EGP)", "value": f"EGP {egp_value:,.2f}"}
+    return {
+        "primary_label": primary["label"],
+        "primary_value": primary["value"],
+        "secondary_label": secondary["label"],
+        "secondary_value": secondary["value"],
+        "exchange_note": f"1 USD = {rate:,.2f} EGP" if rate > 0 else "",
+    }
 
 
 def _allowed_document(filename: str, mimetype: str = "") -> bool:
@@ -109,7 +131,11 @@ def _apply_traveler_filters(query, q: str, status: str, nationality: str):
         query = query.filter(or_(*[field.ilike(term) for field in TRAVELER_SEARCH_FIELDS]))
     normalized_status = (status or "").strip().lower()
     if normalized_status == "archived":
-        query = query.filter(db.func.lower(Traveler.status).in_(ARCHIVE_LIKE_STATUSES))
+        query = query.filter(db.func.lower(Traveler.status).in_(ARCHIVED_FILTER_STATUSES))
+    elif normalized_status == "blacklisted":
+        query = query.filter(db.func.lower(Traveler.status).in_(BLACKLIST_FILTER_STATUSES))
+    elif normalized_status == "blocked":
+        query = query.filter(db.func.lower(Traveler.status).in_(BLACKLIST_FILTER_STATUSES))
     elif normalized_status:
         query = query.filter(db.func.lower(Traveler.status) == normalized_status)
     else:
@@ -163,6 +189,7 @@ def _traveler_update_payload(data):
         "community_whatsapp",
         "phone_code",
         "phone_lookup_key",
+        "preferred_currency",
         "lifetime_revenue",
         "passport_name",
         "passport_number",
@@ -177,6 +204,8 @@ def _traveler_update_payload(data):
                     payload[key] = float(data.get(key))
                 except (ValueError, TypeError):
                     payload[key] = 0.0
+            elif key == "preferred_currency":
+                payload[key] = str(data.get(key) or "").strip().upper() or None
             else:
                 payload[key] = data.get(key)
     if "birthday" in data:
@@ -305,10 +334,16 @@ def detail(traveler_id):
     if trip_ids:
         trips = Trip.query.filter(Trip.trip_id.in_(trip_ids)).all()
         trip_type_map = {t.trip_id: t.type for t in trips}
+    revenue_summary = _build_revenue_summary(
+        traveler.lifetime_revenue,
+        traveler.preferred_currency or "",
+        current_app.config.get("USD_TO_EGP_RATE", 50.0),
+    )
 
     return render_template(
         'travelers/detail.html',
         traveler=traveler,
+        revenue_summary=revenue_summary,
         leads=leads,
         bookings=bookings,
         ce_bookings=ce_bookings,
@@ -386,6 +421,7 @@ def create():
         email=data.get('email') or None,
         residence=data.get('residence') or None,
         lead_source=data.get('lead_source') or None,
+        preferred_currency=(data.get('preferred_currency') or '').strip().upper() or None,
         primary_language=data.get('primary_language') or None,
         room_preference=data.get('room_preference') or None,
         rating=_parse_rating(data.get('rating')) or None,

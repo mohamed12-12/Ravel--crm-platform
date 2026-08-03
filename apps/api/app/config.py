@@ -29,6 +29,16 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return default if value is None else value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return float(value.strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def _looks_weak_secret(value: str) -> bool:
     normalized = str(value or "").strip().lower()
     if not normalized:
@@ -46,6 +56,7 @@ def _default_sqlite_uri() -> str:
 class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', '')
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    USD_TO_EGP_RATE = _env_float("USD_TO_EGP_RATE", 50.0)
     # Google Sheets integration
     GOOGLE_SHEET_ID   = os.environ.get('GOOGLE_SHEET_ID', '')
     GOOGLE_CREDS_PATH = os.environ.get('GOOGLE_CREDS_PATH', 'rahma-496108-a27c767efdaf.json')

@@ -1,8 +1,0 @@
-[desktop] error: Failed to load resource: the server responded with a status of 404 (NOT FOUND)
-[desktop] error: Failed to load resource: the server responded with a status of 400 (BAD REQUEST)
-[desktop] warning: WebSocket connection to 'ws://127.0.0.1:5000/socket.io/?EIO=4&transport=websocket&sid=nZ8nrYn7bwV0p7LEAAAA' failed: WebSocket is closed before the connection is established.
-[desktop] error: Failed to load resource: the server responded with a status of 400 (BAD REQUEST)
-[mobile] error: Failed to load resource: the server responded with a status of 404 (NOT FOUND)
-[mobile] error: Failed to load resource: the server responded with a status of 400 (BAD REQUEST)
-[mobile] warning: WebSocket connection to 'ws://127.0.0.1:5000/socket.io/?EIO=4&transport=websocket&sid=rQQ2spPa4w9TCJMDAAAB' failed: WebSocket is closed before the connection is established.
-[mobile] error: Failed to load resource: the server responded with a status of 400 (BAD REQUEST)

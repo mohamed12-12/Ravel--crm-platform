@@ -19,6 +19,8 @@ ADMIN_WRITE_PREFIXES = (
     "/api/crm/resolve-identity",
 )
 CRM_WRITE_ROLES = {"admin", "manager", "agent", "sales"}
+PROTECTED_BROWSER_BLUEPRINTS = {"admin", "travelers", "leads", "bookings", "trips", "interactions", "handoffs"}
+PUBLIC_BROWSER_ENDPOINTS = {"auth.login", "auth.logout", "static", "trips.public_media", "api_docs.openapi_contract"}
 ROLE_PERMISSIONS = {
     "admin": {"view_all", "manage_users", "assign_work", "update_followup", "manage_handoffs"},
     "manager": {"view_all", "assign_work", "update_followup", "manage_handoffs"},
@@ -49,6 +51,18 @@ def _authenticated() -> bool:
     return _session_authenticated() or _api_token_authenticated()
 
 
+def _browser_auth_required() -> bool:
+    endpoint = str(request.endpoint or "").strip()
+    if not endpoint or endpoint in PUBLIC_BROWSER_ENDPOINTS:
+        return False
+    blueprint = str(request.blueprint or "").strip()
+    if blueprint in PROTECTED_BROWSER_BLUEPRINTS:
+        return True
+    if endpoint == "index":
+        return True
+    return False
+
+
 def _role() -> str:
     user = current_user()
     if user:
@@ -71,9 +85,18 @@ def current_user() -> User | None:
     try:
         user_id = int(raw_id)
     except (TypeError, ValueError):
+        user_id = None
+    user = db.session.get(User, user_id) if user_id is not None else None
+    if user and user.is_active:
+        return user
+
+    if not session.get("logged_in"):
         return None
-    user = db.session.get(User, user_id)
-    return user if user and user.is_active else None
+    fallback_username = str(session.get("username") or os.getenv("ADMIN_USERNAME", "") or os.getenv("CRM_ADMIN_USERNAME", "")).strip()
+    if not fallback_username:
+        return None
+    fallback = db.session.query(User).filter(db.func.lower(User.username) == fallback_username.casefold()).first()
+    return fallback if fallback and fallback.is_active else None
 
 
 def current_user_id() -> int | None:
@@ -188,13 +211,16 @@ def crm_request_guard():
     is_sensitive_read = request.method == "GET" and any(
         marker in request.path for marker in SENSITIVE_READ_MARKERS
     )
-    if request.method not in WRITE_METHODS and not is_sensitive_read:
-        return None
-    if request.path in {"/login", "/api/auth/login"}:
+    if request.path in {"/login", "/api/auth/login", "/logout", "/api/auth/logout"}:
         return None
     if not current_app.config.get("CRM_AUTH_ENABLED", False):
         return None
     wants_json = _wants_json()
+    if request.method == "GET" and _browser_auth_required() and not _authenticated():
+        flash("Login required", "error")
+        return redirect(url_for("auth.login", next=request.url))
+    if request.method not in WRITE_METHODS and not is_sensitive_read:
+        return None
     if not _authenticated():
         if not wants_json:
             flash("Login required", "error")

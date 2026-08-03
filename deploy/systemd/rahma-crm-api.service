@@ -1,0 +1,32 @@
+[Unit]
+Description=Rahma Traveler CRM/API service (gunicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=rahma
+Group=rahma
+WorkingDirectory=/opt/rahma-traveler/apps/api
+EnvironmentFile=/etc/rahma-traveler/.env
+# eventlet worker is required for Flask-SocketIO's real-time handoff
+# notifications (see apps/api/app/extensions.py). Single worker: Socket.IO
+# state is per-process, so scaling past 1 worker needs a Redis message_queue
+# (flask_socketio.SocketIO(message_queue=...)) - not configured yet, see
+# deploy/README.md.
+ExecStart=/opt/rahma-traveler/venv/bin/gunicorn \
+    --worker-class eventlet \
+    --workers 1 \
+    --bind 127.0.0.1:5000 \
+    --timeout 60 \
+    --access-logfile /var/log/rahma-traveler/crm-api-access.log \
+    --error-logfile /var/log/rahma-traveler/crm-api-error.log \
+    run:app
+Restart=on-failure
+RestartSec=5
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

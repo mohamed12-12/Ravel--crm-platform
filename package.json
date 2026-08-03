@@ -8,6 +8,7 @@
     "apps/middleware"
   ],
   "scripts": {
+    "dev": "\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -ExecutionPolicy Bypass -File scripts/start-rahma-dev.ps1",
     "test": "npm run test --workspaces --if-present && python -m pytest tests",
     "build": "npm run build --workspaces --if-present && python -m compileall .",
     "typecheck": "npm run typecheck --workspaces --if-present",

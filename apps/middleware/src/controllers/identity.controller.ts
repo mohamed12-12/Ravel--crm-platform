@@ -7,7 +7,7 @@ const ResolveIdentitySchema = z.object({
   aliasIds: z.array(z.string()).max(50, "Cannot link more than 50 travelers at once to prevent DB locks")
 });
 
-const FLASK_API_URL = process.env.FLASK_API_URL || 'http://localhost:5000/api/crm';
+const FLASK_API_URL = process.env.FLASK_API_URL || 'http://127.0.0.1:5000/api/crm';
 
 export class IdentityController {
   /**

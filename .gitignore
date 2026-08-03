@@ -2,6 +2,9 @@
 node_modules/
 **/node_modules/
 
+# Local Claude Code tooling config (personal, not project source)
+.claude/
+
 # Next.js / React / Node build artifacts
 .next/
 .next-cache/
@@ -56,9 +59,17 @@ instance/
 
 # Logs and temporary files
 logs/
+.tmp-*/
+.tmp-*
 .tmp-test-workdirs/
+.tmp-run/
+.tmp-debug-gemini/
+.tmp-legacy-agent-run/
+.tmp-pytest-*/
+.tmp-test-*/
 scratch/
 *.log
+*.jobid
 *.tmp
 *.temp
 *.resolved
@@ -94,6 +105,10 @@ Thumbs.db
 
 # Local history and caches
 .history/
+.pytest_cache/
 pytest-cache-files-*/
+
+# Local review bucket for cleanup work
+_review_before_delete/
 
 testsprite_tests\tmp\config.json

@@ -278,7 +278,7 @@
                 <button class="btn btn-primary" onclick="advanceStage('{{ lead.lead_id }}')">→ Advance Stage</button>
                 {% endif %}
                 <button class="btn btn-ghost" onclick="openModal('triggerHandoff')">Create Handoff</button>
-                <a href="{{ url_for('bookings.index') }}" class="btn btn-ghost">Create Booking</a>
+                <a href="{{ url_for('bookings.index', open_modal='createBooking', lead_id=lead.lead_id, traveler_id=lead.traveler_id or '', traveler_name=lead.customer_name or '', trip_id=(lead.suggested_trip_ids or lead.interested_trip_ids or '').split(',')[0].strip()) }}" class="btn btn-ghost">Create Booking</a>
                 <button onclick="openModal('editLead')" class="btn btn-ghost">Edit Lead</button>
                 <button class="btn btn-ghost" onclick="runQuickAction('mark_contacted')">Mark Customer Contacted</button>
                 <button class="btn btn-ghost" onclick="runQuickAction('waiting_customer')">Waiting for Customer</button>

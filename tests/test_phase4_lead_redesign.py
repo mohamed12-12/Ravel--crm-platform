@@ -234,6 +234,48 @@ class Phase4LeadRedesignTests(unittest.TestCase):
             booking_row = self.db.session.get(self.TripBooking, booking["booking_id"])
             self.assertEqual(booking_row.traveler_id, "TR900")
 
+        bookings_response = self.client.get("/bookings/")
+        self.assertEqual(bookings_response.status_code, 200)
+        self.assertIn(booking["booking_id"], bookings_response.get_data(as_text=True))
+
+    def test_manual_booking_created_from_lead_context_is_visible_on_bookings_page(self) -> None:
+        with self.app.app_context():
+            lead = self.db.session.get(self.Lead, "L-100")
+            lead.lead_stage = "Qualified"
+            lead.traveler_id = "TR900"
+            self.db.session.commit()
+
+        response = self.client.post(
+            "/bookings/",
+            data={
+                "trip_id": "TR-LEAD-1",
+                "traveler_id": "TR900",
+                "traveler_name": "Existing Traveler",
+                "room_type": "Double",
+                "currency": "USD",
+                "booking_source": "Admin",
+                "lead_id": "L-100",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            booking = self.TripBooking.query.order_by(self.TripBooking.draft_created_at.desc()).first()
+            self.assertIsNotNone(booking)
+            self.assertEqual(booking.lead_id, "L-100")
+            self.assertEqual(booking.traveler_id, "TR900")
+            lead = self.db.session.get(self.Lead, "L-100")
+            self.assertEqual(lead.booking_id, booking.booking_id)
+            self.assertIn(lead.lead_stage, {"Booking Draft", "Booking Draft Created"})
+            booking_id = booking.booking_id
+
+        bookings_response = self.client.get("/bookings/")
+        self.assertEqual(bookings_response.status_code, 200)
+        body = bookings_response.get_data(as_text=True)
+        self.assertIn("TR900", body)
+        self.assertIn(booking_id, body)
+
     def test_delete_lead_hard_deletes_record_and_reuses_highest_id(self) -> None:
         with self.app.app_context():
             traveler = self.db.session.get(self.Traveler, "TR900")

@@ -363,7 +363,7 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
             result["reply"],
             "I cannot save changes automatically in this step. I can only check whether the action is allowed.",
         )
-        self.assertIn("Missing thought signature", result["error"])
+        self.assertEqual(result["error"], "tool_request_failed")
 
     def test_gemini_requests_trip_search(self) -> None:
         with self._patch_service():
@@ -400,7 +400,7 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
             result["reply"],
             "I cannot save changes automatically in this step. I can only check whether the action is allowed.",
         )
-        self.assertIn("Unsupported tool requested", result["error"])
+        self.assertEqual(result["error"], "tool_request_failed")
 
     def test_invalid_tool_input_rejected(self) -> None:
         with self._patch_service():
@@ -411,7 +411,7 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
             result["reply"],
             "I cannot save changes automatically in this step. I can only check whether the action is allowed.",
         )
-        self.assertIn("Invalid tool input", result["error"])
+        self.assertEqual(result["error"], "tool_request_failed")
 
     def test_write_tool_request_rejected(self) -> None:
         with self._patch_service():
@@ -422,7 +422,7 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
             result["reply"],
             "I cannot save changes automatically in this step. I can only check whether the action is allowed.",
         )
-        self.assertIn("Unsupported tool requested", result["error"])
+        self.assertEqual(result["error"], "tool_request_failed")
 
     def test_max_tool_call_limit_enforced(self) -> None:
         with self._patch_service():
@@ -439,7 +439,7 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
             result["reply"],
             "I cannot save changes automatically in this step. I can only check whether the action is allowed.",
         )
-        self.assertIn("Maximum Gemini tool-call limit reached", result["error"])
+        self.assertEqual(result["error"], "tool_request_failed")
 
     def test_max_tool_call_limit_uses_workflow_message_when_available(self) -> None:
         with self._patch_service():
@@ -462,7 +462,7 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
 
         self.assertEqual(result["reply"], "Do you want this trip with flights or without flights?")
         self.assertFalse(result.get("error"))
-        self.assertIn("Maximum Gemini tool-call limit reached", result.get("warning", ""))
+        self.assertEqual(result.get("warning", ""), "tool_request_failed")
 
     def test_final_answer_uses_tool_result(self) -> None:
         with self._patch_service():

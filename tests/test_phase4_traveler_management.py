@@ -187,6 +187,8 @@ class Phase4TravelerManagementTests(unittest.TestCase):
                 nationality="Egyptian",
                 residence="Giza",
                 lead_source="Web Demo",
+                preferred_currency="EGP",
+                lifetime_revenue=100.0,
             )
             lead = self.Lead(
                 lead_id="LD20001",
@@ -266,6 +268,11 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         self.assertIn("B20001", body)
         self.assertIn("INT20001", body)
         self.assertIn("Needs manager review", body)
+        self.assertIn("Lifetime Revenue (EGP)", body)
+        self.assertIn("EGP 0.00", body)
+        self.assertIn("Lifetime Revenue (USD): $0.00", body)
+        self.assertIn("1 USD = 50.00 EGP", body)
+        self.assertIn("Preferred Payment Currency", body)
 
         update_response = client.put(
             "/travelers/TR00200",
@@ -276,6 +283,7 @@ class Phase4TravelerManagementTests(unittest.TestCase):
                 "nationality": "Egyptian",
                 "residence": "Cairo",
                 "lead_source": "Referral",
+                "preferred_currency": "egp",
                 "rating": 4.8,
             },
         )
@@ -301,6 +309,7 @@ class Phase4TravelerManagementTests(unittest.TestCase):
             self.assertEqual(traveler.full_name, "Profile Traveler Updated")
             self.assertEqual(traveler.status, "VIP")
             self.assertEqual(traveler.integrated_whatsapp, "+201099998888")
+            self.assertEqual(traveler.preferred_currency, "EGP")
 
         wb = load_workbook(workbook_path, data_only=True)
         ws = wb["Travelers"]
@@ -308,6 +317,7 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         self.assertEqual(ws.cell(2, headers["Full Name"]).value, "Profile Traveler Updated")
         self.assertEqual(ws.cell(2, headers["Status"]).value, "VIP")
         self.assertEqual(ws.cell(2, headers["Integrated WhatsApp"]).value, "+201099998888")
+        self.assertEqual(ws.cell(2, headers["Preferred Currency"]).value, "EGP")
         wb.close()
 
     def test_index_hides_blank_travelers_from_active_list(self) -> None:
@@ -367,6 +377,24 @@ class Phase4TravelerManagementTests(unittest.TestCase):
                     phone_lookup_key="20:1000000881",
                     status="Inactive",
                 ),
+                Traveler(
+                    traveler_id="TR00882",
+                    full_name="Blacklisted Traveler",
+                    whatsapp_raw="1000000882",
+                    integrated_whatsapp="+201000000882",
+                    normalized_whatsapp="+201000000882",
+                    phone_lookup_key="20:1000000882",
+                    status="Blacklisted",
+                ),
+                Traveler(
+                    traveler_id="TR00883",
+                    full_name="Blocked Traveler",
+                    whatsapp_raw="1000000883",
+                    integrated_whatsapp="+201000000883",
+                    normalized_whatsapp="+201000000883",
+                    phone_lookup_key="20:1000000883",
+                    status="Blocked",
+                ),
             ])
             self.db.session.commit()
 
@@ -374,16 +402,30 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         default_body = default_response.get_data(as_text=True)
         self.assertNotIn("TR00880", default_body)
         self.assertNotIn("TR00881", default_body)
+        self.assertNotIn("TR00882", default_body)
+        self.assertNotIn("TR00883", default_body)
 
         archived_response = client.get("/travelers/?status=Archived")
         archived_body = archived_response.get_data(as_text=True)
         self.assertIn("TR00880", archived_body)
         self.assertIn("TR00881", archived_body)
+        self.assertNotIn("TR00882", archived_body)
+        self.assertNotIn("TR00883", archived_body)
+        self.assertIn("Inactive", archived_body)
+        self.assertIn("Blacklist / Blocked", archived_body)
+        self.assertNotIn(">Blocked<", archived_body)
 
         inactive_response = client.get("/travelers/?status=Inactive")
         inactive_body = inactive_response.get_data(as_text=True)
         self.assertIn("TR00881", inactive_body)
         self.assertNotIn("TR00880", inactive_body)
+
+        blacklist_response = client.get("/travelers/?status=Blacklisted")
+        blacklist_body = blacklist_response.get_data(as_text=True)
+        self.assertIn("TR00882", blacklist_body)
+        self.assertIn("TR00883", blacklist_body)
+        self.assertNotIn("TR00880", blacklist_body)
+        self.assertNotIn("TR00881", blacklist_body)
 
     def test_edit_traveler_preserves_id_and_blocks_phone_conflict(self) -> None:
         app, db, workbook_path = self._build_app()

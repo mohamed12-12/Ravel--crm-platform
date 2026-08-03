@@ -157,6 +157,44 @@
             color: var(--text-dim);
         }
         .topbar-actions { display: flex; align-items: center; gap: 0.75rem; }
+        .session-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.65rem;
+            min-height: 38px;
+            padding: 0.45rem 0.8rem;
+            border: 1px solid rgba(0,208,146,0.18);
+            border-radius: 999px;
+            background: rgba(0,208,146,0.08);
+        }
+        .session-pill-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #00d092, #7df5cd);
+            color: #06120f;
+            font-size: 0.78rem;
+            font-weight: 800;
+        }
+        .session-pill-copy {
+            display: grid;
+            gap: 0.08rem;
+            line-height: 1.1;
+        }
+        .session-pill-name {
+            color: var(--text-main);
+            font-size: 0.76rem;
+            font-weight: 700;
+        }
+        .session-pill-role {
+            color: var(--text-muted);
+            font-size: 0.64rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
 
         .page-body { padding: 2rem; flex: 1; }
 
@@ -169,10 +207,51 @@
             margin-bottom: 0.5rem;
         }
         .flash-success { background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.25); color: #86efac; }
+        .flash-login_success { background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.25); color: #86efac; }
         .flash-error   { background: rgba(239,68,68,0.10); border: 1px solid rgba(239,68,68,0.28); color: #fca5a5; }
         .flash-danger  { background: rgba(239,68,68,0.10); border: 1px solid rgba(239,68,68,0.28); color: #fca5a5; }
         .flash-warning { background: rgba(234,179,8,0.10);  border: 1px solid rgba(234,179,8,0.26);  color: #fde047; }
         .flash-info    { background: rgba(0,208,146,0.1); border: 1px solid rgba(0,208,146,0.25); color: #00d092; }
+        .toast-stack {
+            position: fixed;
+            top: 1.15rem;
+            right: 1.15rem;
+            z-index: 240;
+            display: grid;
+            gap: 0.75rem;
+            pointer-events: none;
+        }
+        .flash-toast {
+            min-width: min(360px, calc(100vw - 2rem));
+            max-width: 420px;
+            border-radius: 14px;
+            border: 1px solid rgba(0,208,146,0.18);
+            background: rgba(13,13,13,0.96);
+            box-shadow: 0 22px 48px rgba(0,0,0,0.38);
+            padding: 0.95rem 1rem;
+            display: grid;
+            gap: 0.25rem;
+            pointer-events: auto;
+            transform: translateY(-8px);
+            opacity: 0;
+            animation: toast-slide-in 220ms ease forwards;
+        }
+        .flash-toast-title {
+            font-size: 0.8rem;
+            font-weight: 800;
+            color: var(--text-main);
+        }
+        .flash-toast-copy {
+            font-size: 0.78rem;
+            line-height: 1.45;
+            color: var(--text-dim);
+        }
+        @keyframes toast-slide-in {
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
 
         /* ── Shared component styles ─────────────────────────── */
         .btn {
@@ -682,15 +761,40 @@
                 <span class="sr-only">Toggle navigation</span>
             </button>
             <span class="topbar-title">{% block topbar_title %}{% endblock %}</span>
-            <div class="topbar-actions">{% block topbar_actions %}{% endblock %}</div>
+            <div class="topbar-actions">
+                {% block topbar_actions %}{% endblock %}
+                {% if current_employee %}
+                <div class="session-pill" title="Signed in employee">
+                    <span class="session-pill-avatar">{{ (current_employee.display_name or current_employee.username or '?')[:1]|upper }}</span>
+                    <span class="session-pill-copy">
+                        <span class="session-pill-name">{{ current_employee.display_name }}</span>
+                        <span class="session-pill-role">{{ current_employee_role or 'employee' }}</span>
+                    </span>
+                </div>
+                <form method="post" action="{{ url_for('auth.logout') }}" style="display:inline-flex; margin:0;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-ghost btn-sm">Logout</button>
+                </form>
+                {% endif %}
+            </div>
         </div>
 
         <div class="page-body">
             {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
+            <div class="toast-stack" id="toast-stack">
+                {% for category, message in messages if category == 'login_success' %}
+                <div class="flash-msg flash-{{ category }} flash-toast" data-toast>
+                    <div class="flash-toast-title">Login Status</div>
+                    <div class="flash-toast-copy">{{ message }}</div>
+                </div>
+                {% endfor %}
+            </div>
             <ul class="flash-list">
                 {% for category, message in messages %}
+                {% if category != 'login_success' %}
                 <li class="flash-msg flash-{{ category }}">{{ message }}</li>
+                {% endif %}
                 {% endfor %}
             </ul>
             {% endif %}
@@ -763,6 +867,15 @@ if (navToggle) {
         }
     });
 }
+
+document.querySelectorAll('[data-toast]').forEach((toast) => {
+    window.setTimeout(() => {
+        toast.style.transition = 'opacity 180ms ease, transform 180ms ease';
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(-10px)';
+        window.setTimeout(() => toast.remove(), 200);
+    }, 3200);
+});
 </script>
 {% block scripts %}{% endblock %}
 </body>
