@@ -706,6 +706,7 @@ class GeminiAgent:
         tool_events: list[dict[str, Any]],
         language: str,
         fallback_message_key: str = "general",
+        allow_inventory_counts: bool = False,
     ) -> str:
         write_result, record_type = GeminiAgent._last_write_result_for_guard(tool_events)
         guarded = guard_customer_response(
@@ -714,6 +715,7 @@ class GeminiAgent:
             write_result=write_result,
             record_type=record_type,
             fallback_message_key=fallback_message_key or record_type or "general",
+            allow_inventory_counts=allow_inventory_counts,
         )
         if guarded.fallback_used:
             agent_logger.warning(
@@ -839,13 +841,18 @@ class GeminiAgent:
                 )
                 if self._contains_internal_instruction_leak(reply_text):
                     reply_text = self._workflow_fallback_reply(session_context)
+                fallback_message_key = (
+                    str((session_context.get("workflow_policy") or {}).get("message_key") or "general")
+                    if isinstance(session_context.get("workflow_policy"), dict)
+                    else "general"
+                )
+                allow_inventory_counts = self._tool_events_contain_verified_crm_fact(tool_events)
                 reply_text = self._guard_final_customer_reply(
                     reply_text,
                     tool_events=tool_events,
                     language=language,
-                    fallback_message_key=str((session_context.get("workflow_policy") or {}).get("message_key") or "general")
-                    if isinstance(session_context.get("workflow_policy"), dict)
-                    else "general",
+                    fallback_message_key=fallback_message_key,
+                    allow_inventory_counts=allow_inventory_counts,
                 )
                 if self._contains_internal_instruction_leak(reply_text):
                     reply_text = self._workflow_fallback_reply(session_context)
@@ -862,9 +869,8 @@ class GeminiAgent:
                     reply_text,
                     tool_events=tool_events,
                     language=language,
-                    fallback_message_key=str((session_context.get("workflow_policy") or {}).get("message_key") or "general")
-                    if isinstance(session_context.get("workflow_policy"), dict)
-                    else "general",
+                    fallback_message_key=fallback_message_key,
+                    allow_inventory_counts=allow_inventory_counts,
                 )
                 memory_key = self._memory_key(session_context)
                 self._memory.setdefault(memory_key, []).extend(

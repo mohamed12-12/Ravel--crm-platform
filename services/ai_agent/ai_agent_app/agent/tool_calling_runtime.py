@@ -126,7 +126,11 @@ _BACKEND_OWNED_COLLECTION_STEPS = {
     "collect_passport_attachment",
 }
 
-_ABUSIVE_OR_HOSTILE_RE = re.compile(r"\b(?:fuck|f\W*u\W*c\W*k|shit|stupid|idiot|dumb|bad bot)\b", re.IGNORECASE)
+_ABUSIVE_OR_HOSTILE_RE = re.compile(
+    r"\b(?:fuck|f\W*u\W*c\W*k|shit|stupid|idiot|dumb|bad bot|"
+    r"غبي|غبية|أحمق|احمق|حمار|كلب|زفت|خرا|خره|قرف|مقرف|تافه|وسخ|حقير)\b",
+    re.IGNORECASE,
+)
 _NAME_TOKEN_RE = re.compile(r"^[A-Za-z\u0600-\u06FF]+(?:[-'][A-Za-z\u0600-\u06FF]+)*$")
 
 
@@ -196,8 +200,8 @@ class ToolCallingSessionRuntime:
 
     def _opening_message(self) -> str:
         return (
-            f"Hello, I am {self.agent_persona_name}, Ravel Traveler's AI travel sales assistant. "
-            "Please share a valid WhatsApp number first so I can check your traveler profile safely, then I will continue with your trip request."
+            f"Hi, I'm {self.agent_persona_name} from Ravel Traveler! I'd love to help you plan your trip. "
+            "Could you share your WhatsApp number first so I can pull up your profile safely, then we'll get started?"
         )
 
     def _safe_status(self, raw: str) -> str:
@@ -1071,6 +1075,32 @@ class ToolCallingSessionRuntime:
                 "\u062a\u0641\u0627\u0635\u064a\u0644",
                 "\u0645\u0639\u0644\u0648\u0645\u0627\u062a",
                 "\u0628\u0631\u0646\u0627\u0645\u062c",
+                "\u0645\u0648\u0627\u0635\u0641\u0627\u062a",
+                "\u0648\u0635\u0641",
+            )
+        )
+
+    @classmethod
+    def _is_trip_quality_question(cls, text: str) -> bool:
+        normalized = cls._normalize_trip_reference(text)
+        if not normalized:
+            return False
+        return any(
+            phrase in normalized
+            for phrase in (
+                "is it good",
+                "is this trip good",
+                "worth it",
+                "worth going",
+                "recommend",
+                "\u0643\u0648\u064a\u0633",
+                "\u0643\u0648\u064a\u0633\u0629",
+                "\u064a\u0633\u062a\u0627\u0647\u0644",
+                "\u062a\u0646\u0635\u062d",
+                "\u0631\u0623\u064a\u0643",
+                "\u0631\u0627\u064a\u0643",
+                "\u0639\u0627\u062c\u0628\u062a\u0643",
+                "\u062d\u0644\u0648\u0629",
             )
         )
 
@@ -1191,6 +1221,7 @@ class ToolCallingSessionRuntime:
             or cls._is_human_agent_request(text)
             or cls._is_name_step_clarification(text)
             or cls._is_asking_for_known_name(text)
+            or cls._is_trip_quality_question(text)
         ):
             return True
         if cls._is_hostile_message(text):

@@ -168,8 +168,8 @@ class SessionFlowManager:
                 "text": self._copy_text(
                     gateway,
                     "session.ask_phone_first",
-                    f"Hello. I am {self.agent_persona_name}, Ravel Traveler's sales agent. "
-                    "Please share a valid WhatsApp number so I can check your profile safely.",
+                    f"Hi, I'm {self.agent_persona_name} from Ravel Traveler! I'd love to help you plan your trip. "
+                    "Could you share your WhatsApp number first so I can pull up your profile safely?",
                     language=session.language,
                     agent_name=self.agent_persona_name,
                 ),
