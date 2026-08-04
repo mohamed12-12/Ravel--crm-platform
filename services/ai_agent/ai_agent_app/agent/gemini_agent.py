@@ -308,6 +308,52 @@ class GeminiAgent:
             return str(payload).casefold()
 
     @staticmethod
+    def _collect_trip_dicts(value: Any, found: list[dict[str, Any]]) -> None:
+        """Recursively collect trip-shaped dicts (have a trip_id plus a trip fact) from a nested structure."""
+        if isinstance(value, dict):
+            if str(value.get("trip_id") or "").strip() and any(
+                key in value for key in ("trip_name", "public_price", "price", "start_date", "end_date")
+            ):
+                found.append(value)
+            for nested in value.values():
+                GeminiAgent._collect_trip_dicts(nested, found)
+        elif isinstance(value, list):
+            for item in value:
+                GeminiAgent._collect_trip_dicts(item, found)
+
+    @classmethod
+    def _trip_fact_texts_by_scope(
+        cls,
+        session_context: dict[str, Any],
+        tool_events: list[dict[str, Any]],
+        selected_trip_id: str,
+    ) -> tuple[str, str]:
+        """Split every trip fact in context into (selected trip text, other trips text).
+
+        _grounded_fact_text flattens every trip ever shown this session into one
+        blob, so a price that is real for trip A also "grounds" that same price
+        misattributed to trip B. Splitting by trip_id lets _ground_reply catch a
+        sensitive token that is only ever real for a *different* trip.
+        """
+        found: list[dict[str, Any]] = []
+        cls._collect_trip_dicts(session_context, found)
+        for event in tool_events:
+            result = event.get("result") if isinstance(event, dict) else None
+            cls._collect_trip_dicts(result, found)
+        selected = [trip for trip in found if str(trip.get("trip_id") or "").strip() == selected_trip_id]
+        other = [trip for trip in found if str(trip.get("trip_id") or "").strip() != selected_trip_id]
+
+        def _dump(trips: list[dict[str, Any]]) -> str:
+            if not trips:
+                return ""
+            try:
+                return json.dumps(trips, ensure_ascii=False, sort_keys=True).casefold()
+            except Exception:
+                return ""
+
+        return _dump(selected), _dump(other)
+
+    @staticmethod
     def _sensitive_fact_tokens(reply: str) -> list[str]:
         text = str(reply or "")
         patterns = (
@@ -326,6 +372,12 @@ class GeminiAgent:
                     seen.add(folded)
                     tokens.append(token)
         return tokens
+
+    @staticmethod
+    def _is_price_or_date_token(token: str) -> bool:
+        return bool(re.match(r"^(?:\$|USD|EGP|\d)", token.strip(), re.IGNORECASE)) and not re.match(
+            r"^(?:TR|RT|BK|LD|LEAD|BOOKING|HANDOFF|HF|HND)[-_]", token.strip(), re.IGNORECASE
+        )
 
     @staticmethod
     def _contains_unverified_crm_claim(reply: str) -> bool:
@@ -361,10 +413,25 @@ class GeminiAgent:
                 return str(result.get("assistant_message") or AgentPrivacyPolicy.EN_RESPONSE).strip()
         workflow = session_context.get("workflow_policy") if isinstance(session_context.get("workflow_policy"), dict) else {}
         grounded_text = self._grounded_fact_text(session_context, tool_events)
-        ungrounded_tokens = [
-            token for token in self._sensitive_fact_tokens(reply)
-            if token.casefold() not in grounded_text
-        ]
+        sensitive_tokens = self._sensitive_fact_tokens(reply)
+        ungrounded_tokens = [token for token in sensitive_tokens if token.casefold() not in grounded_text]
+
+        selected_trip_id = str(session_context.get("selected_trip_id") or "").strip()
+        if selected_trip_id and not ungrounded_tokens:
+            selected_trip_text, other_trip_text = self._trip_fact_texts_by_scope(
+                session_context, tool_events, selected_trip_id
+            )
+            if other_trip_text:
+                for token in sensitive_tokens:
+                    if not self._is_price_or_date_token(token):
+                        continue
+                    folded = token.casefold()
+                    # Grounded overall, but only via a different trip's own
+                    # data — the customer's selected trip never actually said
+                    # this, so a wrong-trip price/date must not slip through.
+                    if folded in other_trip_text and folded not in selected_trip_text:
+                        ungrounded_tokens.append(token)
+
         if ungrounded_tokens:
             return str(
                 workflow.get("assistant_message")

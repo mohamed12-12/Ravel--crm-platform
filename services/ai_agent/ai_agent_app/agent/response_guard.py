@@ -106,7 +106,14 @@ def _record_type_from_text(text: str, explicit_record_type: str = "") -> str:
     normalized = str(text or "").casefold()
     if "booking" in normalized or "\u062d\u062c\u0632" in normalized:
         return "booking"
-    if "handoff" in normalized or "human" in normalized or "\u0645\u0648\u0638\u0641" in normalized:
+    if (
+        "handoff" in normalized
+        or "human" in normalized
+        or "transfer" in normalized
+        or "team member" in normalized
+        or "\u0645\u0648\u0638\u0641" in normalized
+        or "\u062a\u062d\u0648\u064a\u0644" in normalized
+    ):
         return "handoff"
     if "lead" in normalized or "request" in normalized or "\u0637\u0644\u0628" in normalized:
         return "lead"

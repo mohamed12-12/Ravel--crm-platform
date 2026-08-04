@@ -4,12 +4,6 @@ import re
 
 
 _LIST_ITEM_RE = re.compile(r"^\s*(?P<marker>[-*\u2022]|\d+[.)])\s+(?P<text>.*)$")
-_ROOM_COUNT_PATTERNS = (
-    re.compile(r"\((?:only\s+)?\d+\s+available\)", re.IGNORECASE),
-    re.compile(r":\s*(?:only\s+)?\d+\s+available\b", re.IGNORECASE),
-    re.compile(r"\b(?:only\s+)?\d+\s+(?:rooms?|places?|spots?)\s+(?:remaining|left|available)\b", re.IGNORECASE),
-    re.compile(r"\b(?:remaining room capacity|room inventory|inventory levels?)\s+(?:is|are)?\s*\d+\b", re.IGNORECASE),
-)
 _TECHNICAL_REPLACEMENTS = (
     (re.compile(r"\bverified\s+CRM\s+", re.IGNORECASE), ""),
     (re.compile(r"\bCRM\s+profile\b", re.IGNORECASE), "traveler profile"),
@@ -86,9 +80,10 @@ def sanitize_traveler_reply(text: str) -> str:
     arabic_dominant = len(_ARABIC_LETTER_RE.findall(value)) > len(_LATIN_LETTER_RE.findall(value))
     for pattern, replacement in (_ARABIC_TECHNICAL_REPLACEMENTS if arabic_dominant else _TECHNICAL_REPLACEMENTS):
         value = pattern.sub(replacement, value)
-    for pattern in _ROOM_COUNT_PATTERNS:
-        value = pattern.sub("available", value)
-    value = re.sub(r"(?<=[A-Za-z])available\b", " available", value, flags=re.IGNORECASE)
+    # Real room/seat counts are validated by response_guard's context-aware
+    # inventory check (allow_inventory_counts), not stripped unconditionally
+    # here — this used to blank out "2 rooms available" to just "available"
+    # before the guard could ever see or allow the grounded count through.
     value = re.sub(r"\bPassport verified\b", "Passport uploaded and pending review", value, flags=re.IGNORECASE)
     value = re.sub(r"[ \t]{2,}", " ", value)
     value = re.sub(r"\n{3,}", "\n\n", value)

@@ -513,7 +513,11 @@ class TestPhase2GeminiToolLoop(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(result["reply"], "Please choose your room option. Current inventory: Single available.")
+        # The workflow policy is the trusted, deterministic source of this room
+        # count; sanitize_traveler_reply used to blank the real number down to
+        # just "available" unconditionally, destroying correct information
+        # before the customer ever saw it. It must now pass through intact.
+        self.assertEqual(result["reply"], "Please choose your room option. Current inventory: Single: 3 available.")
         self.assertNotIn("disabled", result["reply"].lower())
 
     def test_flight_preference_normalization_is_shared_across_runtime_layers(self) -> None:
