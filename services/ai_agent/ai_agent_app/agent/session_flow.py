@@ -101,6 +101,7 @@ class SessionState:
     previous_booking_result: dict[str, Any] = field(default_factory=dict)
     booking_confirmation_requested: bool = False
     booking_confirmed: bool = False
+    new_traveler_lead_saved: bool = False
     # Passport fields (populated for international trips)
     passport_name: str = ""
     passport_number: str = ""

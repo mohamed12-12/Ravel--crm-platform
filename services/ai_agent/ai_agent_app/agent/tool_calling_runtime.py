@@ -2883,6 +2883,11 @@ class ToolCallingSessionRuntime:
             agent_logger.info("Tool-calling session %s requested booking confirmation before write", session.id)
             return session
 
+        if workflow_decision.required_step == "save_new_traveler_lead":
+            if self._execute_new_traveler_lead(session, session_context, workflow_decision):
+                agent_logger.info("Tool-calling session %s saved new traveler lead deterministically", session.id)
+                return session
+
         preloaded_tool_results = [preloaded_tool_event] if preloaded_tool_event else []
         model_session_context = self._traveler_safe_context(session_context)
         turn = self._coordinator.think(agent_state, crm_facts=model_session_context, conversation=session.messages[-12:], tool_results=preloaded_tool_results)
@@ -3106,6 +3111,91 @@ class ToolCallingSessionRuntime:
         decision,
     ) -> bool:
         return self._execute_policy_handoff(session, session_context, decision)
+
+    def _execute_new_traveler_lead(
+        self,
+        session: SessionState,
+        session_context: dict[str, Any],
+        decision,
+    ) -> bool:
+        """Persist the collected new-traveler details as a CRM lead.
+
+        Without this the workflow reaches `save_new_traveler_lead`, which has no
+        deterministic owner, so every later turn fell through to the model and
+        repeated the same prompt while the collected details were never saved.
+        """
+        if session.new_traveler_lead_saved:
+            return False
+        payload = {
+            "customer_name": session.customer_name,
+            "full_name": session.customer_name,
+            "raw_phone": session.raw_phone or session.pending_raw_phone,
+            "country_code": session.country_code or self.settings.default_country_code,
+            "nationality": session.nationality,
+            "birthday": session.birthday,
+            "currency": session.currency,
+            "preferred_trip_type": self._effective_trip_type(session),
+            "lead_source": "Gemini Agent",
+            "channel": "web",
+            "flow_key": f"tool_calling:{session.id}",
+            "notes": f"New traveler details collected in chat: {decision.reason or decision.state}",
+        }
+        try:
+            result = self._write_executor.execute(
+                action="create_lead",
+                payload=payload,
+                session_context=session_context,
+            )
+        except Exception as exc:
+            agent_logger.warning("New traveler lead could not be saved session=%s error=%s", session.id, exc)
+            return False
+        if not isinstance(result, dict) or not result.get("executed") or not str(result.get("result_id") or "").strip():
+            agent_logger.warning(
+                "New traveler lead write did not execute session=%s result=%s",
+                session.id,
+                (result or {}).get("write_result_contract") if isinstance(result, dict) else None,
+            )
+            return False
+
+        lead_id = str(result.get("result_id") or "").strip()
+        session.new_traveler_lead_saved = True
+        self._apply_result(session, {"write_results": [result], "tool_requests": []})
+        # The response guard validates any "saved" claim against session.final_result,
+        # so record the lead id there or the honest confirmation gets blocked.
+        if not isinstance(session.final_result, dict):
+            session.final_result = {}
+        if not str(session.final_result.get("lead_id") or "").strip():
+            session.final_result = {**session.final_result, "lead_id": lead_id}
+        session.lead_status = session.lead_status or "saved"
+        self._append_authoritative_reply(
+            session,
+            message_key="lead.new_traveler_saved",
+            base_text=self._new_traveler_lead_saved_message(session, lead_id),
+        )
+        session.tools_used = ["create_lead"]
+        session.fallback_used = False
+        session.stage = decision.state
+        agent_logger.info(
+            "New traveler lead persisted session=%s lead=%s",
+            session.id,
+            result.get("result_id", ""),
+        )
+        return True
+
+    @staticmethod
+    def _new_traveler_lead_saved_message(session: SessionState, lead_id: str) -> str:
+        name = str(session.customer_name or "").strip()
+        if session.language.startswith("ar"):
+            greeting = f"شكرا {name}. " if name else "شكرا. "
+            return (
+                f"{greeting}تم حفظ بياناتك وطلبك برقم {lead_id}.\n\n"
+                "هل تفضل رحلة داخلية أم رحلة دولية؟"
+            )
+        greeting = f"Thanks {name}. " if name else "Thanks. "
+        return (
+            f"{greeting}Your details are saved and your request number is {lead_id}.\n\n"
+            "Are you looking for a local trip or an international trip?"
+        )
 
     def handle_passport_attachment(self, session: SessionState, attachment_ref: str) -> None:
         ref = str(attachment_ref or "").strip()
