@@ -194,6 +194,11 @@ class ExcelSheetGateway:
             )
 
     def get_demo_stats(self) -> dict[str, Any]:
+        client = self._crm_api_client()
+        if client is not None:
+            # crm_access_mode=api means Postgres (via the CRM API) is the authority;
+            # let failures surface instead of masking them with stale sqlite/Excel data.
+            return client.read("get_demo_stats", {})
         db_stats = self._get_demo_stats_from_db()
         if db_stats is not None:
             return db_stats
@@ -203,6 +208,11 @@ class ExcelSheetGateway:
         return stats
 
     def crm_preview(self, limit: int = 15) -> list[dict[str, Any]]:
+        client = self._crm_api_client()
+        if client is not None:
+            response = client.read("crm_preview", {"limit": limit})
+            rows = response.get("rows")
+            return rows if isinstance(rows, list) else []
         db_rows = self._crm_preview_from_db(limit)
         if db_rows is not None:
             return db_rows
@@ -210,6 +220,18 @@ class ExcelSheetGateway:
         rows = crm_preview_from_wb(wb, limit)
         wb.close()
         return rows
+
+    def _crm_api_client(self):
+        access_mode = str(getattr(self.settings, "crm_access_mode", "shared_service") or "shared_service").strip().lower()
+        if access_mode != "api":
+            return None
+        base_url = getattr(self.settings, "crm_api_base_url", "")
+        token = getattr(self.settings, "crm_api_token", "")
+        if not base_url or not token:
+            return None
+        from services.ai_agent.ai_agent_app.agent.crm_api_client import CRMApiClient
+
+        return CRMApiClient(base_url=base_url, token=token)
 
     def qualify_lead(self, lead_id: str) -> bool:
         with self._lock:

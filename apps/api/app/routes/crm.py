@@ -22,6 +22,8 @@ AGENT_READ_ACTIONS = {
     "get_booking_status",
     "lookup_lead",
     "get_passport_status",
+    "get_demo_stats",
+    "crm_preview",
 }
 AGENT_WRITE_ACTIONS = {
     "create_lead",

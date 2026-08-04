@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import or_, text
+from sqlalchemy import func, or_, text
 
 from app.extensions import db
-from app.models import BookingStatusHistory, HandoffQueue, Lead, Traveler, TravelerDocument, Trip, TripBooking, TripMedia
+from app.models import BookingStatusHistory, HandoffQueue, Interaction, Lead, Traveler, TravelerDocument, Trip, TripBooking, TripMedia
 from services.crm.system_services.unified_service import UnifiedCRMService
 
 
@@ -198,6 +198,51 @@ class PostgresAgentBridgeService:
     def get_passport_documents(self, traveler_id: str) -> list[dict[str, Any]]:
         rows = TravelerDocument.query.filter_by(traveler_id=traveler_id).order_by(TravelerDocument.document_id.desc()).all()
         return [row.to_dict() for row in rows]
+
+    def get_demo_stats(self) -> dict[str, Any]:
+        trip_status_counts: dict[str, int] = {}
+        for status, count in db.session.query(
+            func.coalesce(Trip.sales_status, "None"), func.count(Trip.trip_id)
+        ).group_by(func.coalesce(Trip.sales_status, "None")):
+            trip_status_counts[str(status)] = int(count)
+
+        lead_stage_counts: dict[str, int] = {}
+        for stage, count in db.session.query(
+            func.coalesce(Lead.lead_stage, "Blank"), func.count(Lead.lead_id)
+        ).group_by(func.coalesce(Lead.lead_stage, "Blank")):
+            lead_stage_counts[str(stage)] = int(count)
+
+        recent_leads = [
+            {"leadId": lead.lead_id, "customerName": lead.customer_name, "leadStage": lead.lead_stage}
+            for lead in Lead.query.order_by(Lead.created_at.desc(), Lead.lead_id.desc()).limit(8).all()
+        ]
+
+        return {
+            "travelerCount": int(Traveler.query.count()),
+            "interactionCount": int(Interaction.query.count()),
+            "tripStatusCounts": trip_status_counts,
+            "leadCount": int(Lead.query.count()),
+            "leadStageCounts": lead_stage_counts,
+            "recentLeads": recent_leads,
+            "bookingDraftCount": int(TripBooking.query.count()),
+            "paymentPendingCount": int(TripBooking.query.filter(TripBooking.booking_status == "Payment Pending").count()),
+            "bookingAlertCount": int(HandoffQueue.query.count()),
+            "qualificationRate": 0,
+            "followUpSummary": {"urgent": 0, "dueToday": 0},
+            "dbSource": "postgres:crm-api",
+        }
+
+    def crm_preview(self, limit: int = 15) -> list[dict[str, Any]]:
+        rows = Traveler.query.order_by(Traveler.traveler_id.asc()).limit(limit).all()
+        return [
+            {
+                "id": str(traveler.traveler_id),
+                "name": str(traveler.full_name or ""),
+                "status": str(traveler.status or "Active"),
+                "phone": str(traveler.integrated_whatsapp or traveler.whatsapp_raw or "N/A"),
+            }
+            for traveler in rows
+        ]
 
     def save_traveler_passport(self, traveler_id: str, **payload: Any) -> dict[str, Any]:
         traveler = db.session.get(Traveler, traveler_id)
@@ -904,6 +949,12 @@ class PostgresAgentCRMTools:
 
     def lookup_lead(self, *, lead_id: str = "", traveler_id: str = "", raw_phone: str = "", country_code: str = "") -> dict[str, Any]:
         return {"leads": self.service.lookup_leads(lead_id=lead_id, traveler_id=traveler_id, raw_phone=raw_phone, country_code=country_code)}
+
+    def get_demo_stats(self) -> dict[str, Any]:
+        return self.service.get_demo_stats()
+
+    def crm_preview(self, *, limit: int = 15) -> dict[str, Any]:
+        return {"rows": self.service.crm_preview(limit)}
 
     def get_passport_status(self, *, traveler_id: str = "", raw_phone: str = "", country_code: str = "") -> dict[str, Any]:
         traveler = None
