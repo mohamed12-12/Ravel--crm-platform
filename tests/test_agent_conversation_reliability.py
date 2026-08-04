@@ -1326,7 +1326,10 @@ def test_arabic_explanation_interruption_is_answered_without_prompt_replay(runti
     reply = session.messages[-1]["text"]
     assert reply != previous_prompt
     assert "CRM" not in reply
-    assert "our records" in reply
+    # An Arabic reply must use the Arabic replacement; substituting the English
+    # wording here produced mixed sentences like "... في our records".
+    assert "سجلاتنا" in reply
+    assert "our records" not in reply
     assert "1" in reply and "2" in reply
     assert session.language == "ar"
     assert session.selected_trip_id == "RT-LOC-26-900"

@@ -26,6 +26,18 @@ _TECHNICAL_REPLACEMENTS = (
     (re.compile(r"\bsystem records?\b", re.IGNORECASE), "records"),
     (re.compile(r"\bAPI responses?\b", re.IGNORECASE), "responses"),
 )
+_ARABIC_TECHNICAL_REPLACEMENTS = (
+    (re.compile(r"\bverified\s+CRM\s+", re.IGNORECASE), ""),
+    (re.compile(r"\bCRM\b", re.IGNORECASE), "سجلاتنا"),
+    (re.compile(r"\bdatabase\b", re.IGNORECASE), "سجلاتنا"),
+    (re.compile(r"\bbackend\b", re.IGNORECASE), "نظامنا"),
+    (re.compile(r"\btool calls?\b", re.IGNORECASE), "المراجعة"),
+    (re.compile(r"\binternal tools?\b", re.IGNORECASE), "المراجعة"),
+    (re.compile(r"\bAPI responses?\b", re.IGNORECASE), "الردود"),
+)
+_ARABIC_LETTER_RE = re.compile(r"[؀-ۿ]")
+_LATIN_LETTER_RE = re.compile(r"[A-Za-z]")
+
 _SUSPICIOUS_ENDINGS = (
     "i will",
     "i can",
@@ -68,7 +80,11 @@ def sanitize_traveler_reply(text: str) -> str:
     """Remove customer-visible implementation terms and exact room inventory."""
 
     value = str(text or "")
-    for pattern, replacement in _TECHNICAL_REPLACEMENTS:
+    # Substituting the English wording into an Arabic sentence produced replies
+    # like "لم أجد رحلة ... في our records", so pick the table matching the
+    # dominant script instead of the language of the term being replaced.
+    arabic_dominant = len(_ARABIC_LETTER_RE.findall(value)) > len(_LATIN_LETTER_RE.findall(value))
+    for pattern, replacement in (_ARABIC_TECHNICAL_REPLACEMENTS if arabic_dominant else _TECHNICAL_REPLACEMENTS):
         value = pattern.sub(replacement, value)
     for pattern in _ROOM_COUNT_PATTERNS:
         value = pattern.sub("available", value)
