@@ -251,6 +251,119 @@ def test_repeated_create_lead_returns_structured_duplicate_in_sqlite_mode(bridge
         assert db.session.query(Lead).count() == 1
 
 
+def test_new_phone_number_creates_a_traveler_record_linked_to_the_lead(bridge_app):
+    """Bug: create_lead for a phone number with no Traveler match saved the
+    Lead with traveler_id=None and never created a Traveler row at all, so
+    find_traveler_by_phone could never match this customer again in a later
+    session -- every returning customer without a completed booking looked
+    brand new forever. The shared_service/sqlite path already creates a
+    Traveler via record_agent_outcome; PostgresAgentBridgeService had no
+    equivalent.
+    """
+    app, db = bridge_app
+    client = app.test_client()
+    app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://staging/redacted"
+    from app.models import Lead, Traveler
+
+    payload = {
+        "action": "create_lead",
+        "payload": {
+            "customer_name": "Brand New Traveler",
+            "raw_phone": "01099998888",
+            "country_code": "20",
+            "preferred_trip_type": "Local",
+            "channel": "web",
+            "birthday": "1998-05-12",
+            "nationality": "Egyptian",
+            "preferred_currency": "EGP",
+        },
+        "session_context": {"session_id": "new-traveler-pg-1", "language": "en"},
+    }
+
+    response = client.post("/api/crm/agent/write", json=payload)
+
+    assert response.status_code == 200
+    result = response.get_json()["result"]
+    lead_id = result["result_id"]
+    assert lead_id
+    with app.app_context():
+        lead = db.session.get(Lead, lead_id)
+        assert lead is not None
+        assert lead.traveler_id, "Lead was saved without a linked Traveler record"
+        traveler = db.session.get(Traveler, lead.traveler_id)
+        assert traveler is not None
+        assert traveler.full_name == "Brand New Traveler"
+        assert traveler.nationality == "Egyptian"
+        assert traveler.birthday.isoformat() == "1998-05-12"
+        assert db.session.query(Traveler).filter_by(phone_lookup_key=traveler.phone_lookup_key).count() == 1
+
+
+def test_retrying_create_lead_for_a_new_phone_does_not_create_a_second_traveler(bridge_app):
+    app, db = bridge_app
+    client = app.test_client()
+    app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://staging/redacted"
+    from app.models import Traveler
+
+    payload = {
+        "action": "create_lead",
+        "payload": {
+            "customer_name": "Retry New Traveler",
+            "raw_phone": "01077776666",
+            "country_code": "20",
+            "channel": "web",
+        },
+        "session_context": {"session_id": "new-traveler-pg-retry", "language": "en"},
+    }
+
+    first = client.post("/api/crm/agent/write", json=payload)
+    second = client.post("/api/crm/agent/write", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_result = first.get_json()["result"]
+    second_result = second.get_json()["result"]
+    assert second_result["result_id"] == first_result["result_id"]
+    assert second_result["write_result_contract"]["status"] == "duplicate"
+    with app.app_context():
+        assert db.session.query(Traveler).filter_by(full_name="Retry New Traveler").count() == 1
+
+
+def test_repeated_handoff_request_surfaces_reused_status_at_the_top_level(bridge_app):
+    """_execute_create_handoff previously never propagated the nested
+    handoff_case.write_result_contract to its own top-level result, so
+    _normalize_result's blanket executed=True default made every handoff
+    -- fresh or a deduplicate_open reuse -- look identical at the top level.
+    Callers that read the top-level contract (like the deterministic manual
+    -handoff path) had no way to tell a reused handoff apart from a real one.
+    """
+    app, _db = bridge_app
+    client = app.test_client()
+    app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://staging/redacted"
+
+    payload = {
+        "action": "create_handoff",
+        "payload": {
+            "traveler_id": "TRPG001",
+            "reason_code": "customer_requested_human",
+            "reason_text": "Customer asked for an agent.",
+            "deduplicate_open": True,
+            "user_requested_human": True,
+        },
+        "session_context": {"session_id": "handoff-reuse-pg-1", "language": "en", "user_requested_human": True},
+    }
+
+    first = client.post("/api/crm/agent/write", json=payload)
+    second = client.post("/api/crm/agent/write", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_result = first.get_json()["result"]
+    second_result = second.get_json()["result"]
+    assert second_result["result_id"] == first_result["result_id"]
+    assert second_result["write_result_contract"]["status"] == "reused"
+    assert second_result["executed"] is False
+
+
 def test_sqlite_mode_still_works(bridge_app):
     app, _db = bridge_app
     client = app.test_client()

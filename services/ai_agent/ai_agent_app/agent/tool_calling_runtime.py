@@ -2546,7 +2546,13 @@ class ToolCallingSessionRuntime:
             agent_logger.warning("Manual handoff could not be created session=%s error=%s", session.id, exc)
             result = {}
         session.messages.append({"role": "user", "text": clean_text})
-        if isinstance(result, dict) and result.get("executed") and str(result.get("result_id") or "").strip():
+        # create_handoff is called with deduplicate_open=True, so a repeat
+        # request reuses the existing open handoff (write_result_contract
+        # status="reused", executed=False by design) instead of creating a
+        # second one. A raw executed check misreads that as a failure and
+        # tells the customer their handoff request failed even though a
+        # valid handoff_id already exists and is being tracked.
+        if isinstance(result, dict) and str(result.get("result_id") or "").strip() and write_result_allows_success(result, "handoff"):
             self._apply_result(session, {"write_results": [result], "tool_requests": []})
             session.handoff_state = "handed_off"
             session.stage = "human_handoff_required"
@@ -2891,6 +2897,12 @@ class ToolCallingSessionRuntime:
 
         preloaded_tool_results = [preloaded_tool_event] if preloaded_tool_event else []
         model_session_context = self._traveler_safe_context(session_context)
+        # Deterministic, pre-model signal for the tool router's narrow existing-lead
+        # handoff exception (tool_routing_audit.py). This is the same keyword
+        # classifier used for the direct handoff short-circuit above, so it never
+        # reflects Gemini's own judgment -- only what the customer's own message
+        # actually said.
+        model_session_context["user_requested_human"] = self._is_human_agent_request(clean_text)
         turn = self._coordinator.think(agent_state, crm_facts=model_session_context, conversation=session.messages[-12:], tool_results=preloaded_tool_results)
         agent_state.subgoal = str(turn.decision.get("reason") or "")
         model_session_context["persona"] = turn.context.get("persona")
@@ -3070,7 +3082,11 @@ class ToolCallingSessionRuntime:
         except Exception as exc:
             agent_logger.warning("Policy handoff could not be created session=%s error=%s", session.id, exc)
             return False
-        if not isinstance(result, dict) or not result.get("executed") or not str(result.get("result_id") or "").strip():
+        # See _execute_manual_handoff: deduplicate_open=True means a repeat
+        # policy handoff reuses the existing open case (executed=False,
+        # status="reused" by design), which a raw executed check misreads as
+        # a failure.
+        if not isinstance(result, dict) or not str(result.get("result_id") or "").strip() or not write_result_allows_success(result, "handoff"):
             return False
         self._apply_result(session, {"write_results": [result], "tool_requests": []})
         session.handoff_state = "handed_off"

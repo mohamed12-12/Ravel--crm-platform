@@ -100,7 +100,7 @@ def customer_message_from_write_result(
     if status in _BLOCKED_STATUSES or not record_id:
         error_code = str(contract.get("error_code") or "").strip().lower()
         if record_type == "booking" and error_code == "capacity_unavailable":
-            return "?? ???? ???? ??? ????? ???? ???????? ???? ??? ?????? ?????. ???? ????? ??? ???? ??? ?? ????? ????? ??????." if arabic else "I could not create the booking request for that option because availability changed. Please choose another room option, or I can connect you with a human agent."
+            return "لم أستطع إنشاء طلب الحجز لهذا الخيار لأن التوافر تغير. من فضلك اختر خيار غرفة آخر، أو يمكنني توصيلك بموظف بشري." if arabic else "I could not create the booking request for that option because availability changed. Please choose another room option, or I can connect you with a human agent."
         if record_type == "booking":
             return "لا أقدر أسجل طلب الحجز الآن. من فضلك راجع التفاصيل أو أكدها مرة أخرى." if arabic else "I could not create the booking request yet. Please review or confirm the details again."
         if record_type == "handoff":

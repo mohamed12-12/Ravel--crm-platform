@@ -187,6 +187,7 @@ SAFE_CUSTOMER_MESSAGE_BY_REASON = {
     "router_off": "continue_normally",
     "allowed_by_state": "continue_normally",
     "allowed_controlled_handoff_review": "continue_normally",
+    "allowed_explicit_handoff_existing_lead": "continue_normally",
     "unknown_tool": "request_not_available",
     "tool_group_not_allowed_for_state": "request_not_ready",
 }
@@ -288,7 +289,7 @@ def _controlled_handoff_precondition(session_context: dict[str, Any] | None) -> 
     workflow_state = str(workflow.get("state") or workflow.get("workflow_state") or context.get("stage") or "").strip().lower()
     if workflow_state in CONTROLLED_HANDOFF_STATES:
         return True
-    if context.get("user_requested_human") or workflow.get("user_requested_human"):
+    if _explicit_human_request_signal(session_context):
         return True
     reason_values = {
         str(workflow.get("reason") or ""),
@@ -302,6 +303,38 @@ def _controlled_handoff_precondition(session_context: dict[str, Any] | None) -> 
     if normalized_reasons & CONTROLLED_HANDOFF_REASONS:
         return True
     return bool(workflow.get("handoff_required")) and bool(normalized_reasons & CONTROLLED_HANDOFF_REASONS)
+
+
+def _explicit_human_request_signal(session_context: dict[str, Any] | None) -> bool:
+    """True only for a deterministic, pre-LLM "customer asked for a human" signal.
+
+    This must never be derived from the tool call the model itself chose to make
+    (e.g. args on the create_handoff function call) -- that would let the model
+    grant itself the exception it's supposed to be gated behind. It reads only
+    session-level context set before the model ran.
+    """
+    context = session_context if isinstance(session_context, dict) else {}
+    workflow = context.get("workflow_policy") if isinstance(context.get("workflow_policy"), dict) else {}
+    if context.get("user_requested_human") or workflow.get("user_requested_human"):
+        return True
+    reason_values = {
+        str(workflow.get("reason") or ""),
+        str(workflow.get("handoff_reason") or ""),
+        str(context.get("reason_code") or ""),
+        str(context.get("handoff_reason") or ""),
+        str(context.get("handoff_reason_code") or ""),
+    }
+    normalized_reasons = {value.strip().lower().split(":", 1)[0] for value in reason_values if value and value.strip()}
+    return bool(normalized_reasons & {"explicit_human_request", "customer_requested_human"})
+
+
+def _has_existing_lead(session_context: dict[str, Any] | None) -> bool:
+    context = session_context if isinstance(session_context, dict) else {}
+    if str(context.get("lead_id") or "").strip():
+        return True
+    workflow = context.get("workflow_policy") if isinstance(context.get("workflow_policy"), dict) else {}
+    return bool(str(workflow.get("lead_id") or "").strip())
+
 
 def tool_group_for_name(tool_name: str) -> ToolGroup:
     return TOOL_GROUP_BY_NAME.get(str(tool_name or "").strip(), ToolGroup.UNKNOWN)
@@ -330,7 +363,20 @@ def evaluate_tool_route(
         and tool_group == ToolGroup.HANDOFF_WRITE
         and _controlled_handoff_precondition(session_context)
     )
-    allowed = tool_group in allowed_groups or controlled_handoff_allowed
+    # Narrow exception: a returning traveler with an existing open lead who has
+    # explicitly asked for a human (a deterministic pre-model signal, not the
+    # model's own tool-call args) may reach create_handoff from any state --
+    # otherwise a returning customer asking for support gets stuck behind
+    # whatever pre-booking state they happen to be in. Spontaneous/unprompted
+    # handoff attempts (no explicit signal, or no existing lead) are still
+    # blocked exactly as before.
+    existing_lead_explicit_handoff_allowed = (
+        tool_group == ToolGroup.HANDOFF_WRITE
+        and state != CanonicalAgentState.IDENTITY_REQUIRED
+        and _has_existing_lead(session_context)
+        and _explicit_human_request_signal(session_context)
+    )
+    allowed = tool_group in allowed_groups or controlled_handoff_allowed or existing_lead_explicit_handoff_allowed
     if router_mode == ToolRouterMode.OFF:
         allowed = True
         reason_code = "router_off"
@@ -338,11 +384,18 @@ def evaluate_tool_route(
         reason_code = "unknown_tool"
     elif controlled_handoff_allowed:
         reason_code = "allowed_controlled_handoff_review"
+    elif existing_lead_explicit_handoff_allowed:
+        reason_code = "allowed_explicit_handoff_existing_lead"
     elif allowed:
         reason_code = "allowed_by_state"
     else:
         reason_code = "tool_group_not_allowed_for_state"
-    would_block = router_mode != ToolRouterMode.OFF and reason_code not in {"allowed_by_state", "allowed_controlled_handoff_review", "router_off"}
+    would_block = router_mode != ToolRouterMode.OFF and reason_code not in {
+        "allowed_by_state",
+        "allowed_controlled_handoff_review",
+        "allowed_explicit_handoff_existing_lead",
+        "router_off",
+    }
     return ToolRouteDecision(
         requested_tool=str(requested_tool_name or ""),
         state=state.value,
@@ -355,6 +408,7 @@ def evaluate_tool_route(
         audit={
             "allowed_tool_groups": sorted(group.value for group in allowed_groups),
             "controlled_handoff_allowed": controlled_handoff_allowed,
+            "existing_lead_explicit_handoff_allowed": existing_lead_explicit_handoff_allowed,
             "write_tool_group": tool_group in WRITE_TOOL_GROUPS,
         },
     )

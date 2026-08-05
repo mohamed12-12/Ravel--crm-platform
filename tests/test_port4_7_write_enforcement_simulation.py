@@ -93,6 +93,48 @@ class Port47WriteEnforcementSimulationTests(unittest.TestCase):
         self.assertTrue(decision.would_block)
         self.assertTrue(should_enforce_tool_route(decision))
 
+    def test_returning_traveler_with_open_lead_and_explicit_request_can_handoff(self) -> None:
+        # Reproduces the reported production case: a returning traveler stuck in
+        # new_traveler_profile_required (or any other pre-booking state) with an
+        # existing lead who explicitly asks for a human should not be blocked.
+        decision = evaluate_tool_route(
+            current_state=CanonicalAgentState.NEW_TRAVELER_PROFILE_REQUIRED,
+            requested_tool_name="create_handoff",
+            session_context={"lead_id": "LD00001", "user_requested_human": True},
+            mode="enforce",
+        )
+
+        self.assertTrue(decision.allowed)
+        self.assertFalse(decision.would_block)
+        self.assertFalse(should_enforce_tool_route(decision))
+        self.assertEqual(decision.reason_code, "allowed_explicit_handoff_existing_lead")
+
+    def test_handoff_still_blocked_without_existing_lead_even_with_explicit_request(self) -> None:
+        decision = evaluate_tool_route(
+            current_state=CanonicalAgentState.NEW_TRAVELER_PROFILE_REQUIRED,
+            requested_tool_name="create_handoff",
+            session_context={"user_requested_human": True},
+            mode="enforce",
+        )
+
+        self.assertFalse(decision.allowed)
+        self.assertTrue(decision.would_block)
+        self.assertTrue(should_enforce_tool_route(decision))
+
+    def test_handoff_still_blocked_with_existing_lead_but_no_explicit_request(self) -> None:
+        # An existing lead alone is not enough -- this must not become a general
+        # "returning customer" bypass. The signal has to be explicit.
+        decision = evaluate_tool_route(
+            current_state=CanonicalAgentState.NEW_TRAVELER_PROFILE_REQUIRED,
+            requested_tool_name="create_handoff",
+            session_context={"lead_id": "LD00001"},
+            mode="enforce",
+        )
+
+        self.assertFalse(decision.allowed)
+        self.assertTrue(decision.would_block)
+        self.assertTrue(should_enforce_tool_route(decision))
+
     def test_read_tools_are_not_blocked_by_write_only_enforcement_simulation(self) -> None:
         decision = evaluate_tool_route(
             current_state=CanonicalAgentState.TRIP_DISCOVERY,

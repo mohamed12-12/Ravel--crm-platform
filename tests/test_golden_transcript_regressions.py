@@ -149,6 +149,77 @@ def test_new_traveler_intake_completes_when_lead_already_exists_for_this_travele
 
 
 # ---------------------------------------------------------------------------
+# Bug: create_handoff is called with deduplicate_open=True, so a customer who
+# asks for a human twice reuses their existing open handoff instead of
+# creating a duplicate (write_result_contract status="reused", executed=False
+# by design -- nothing new was written). _execute_manual_handoff read the raw
+# executed flag and treated that as an outright failure, telling the customer
+# their handoff request failed even though a valid handoff_id already exists.
+# ---------------------------------------------------------------------------
+def test_repeated_human_agent_request_reuses_existing_handoff_instead_of_claiming_failure(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    runtime._write_executor.execute.return_value = {
+        "executed": False,
+        "result_id": "H-0009",
+        "handoff_case": {"handoff_id": "H-0009", "deduplicated": True},
+        "write_result_contract": {
+            "status": "reused",
+            "reused": True,
+            "record_id": "H-0009",
+            "record_type": "handoff",
+            "executed": False,
+        },
+    }
+    session = runtime.create_session()
+    session.customer_name = "Maged Maged Maged"
+    session.raw_phone = "01270482380"
+
+    session = _send(runtime, "I want to talk to a human please", session)
+
+    reply = session.messages[-1]["text"]
+    assert session.handoff_state == "handed_off"
+    assert "failed" not in reply.lower()
+    assert session.final_result.get("handoff_id") == "H-0009"
+
+
+# ---------------------------------------------------------------------------
+# Bug: a write handler raising "not found" (e.g. update_lead_stage given a
+# lead_id that no longer exists) was classified with error_code="not_found"
+# but _safe_failed_write_message ignored the error_code and returned the same
+# "please try again" text as every other lead failure -- misleading, since
+# retrying with the same bad id fails identically every time. Separately, the
+# Arabic strings for this method were corrupted to literal "?" characters in
+# the source (a real, live customer-facing bug, found while reading this
+# code, unrelated to the not_found gap).
+# ---------------------------------------------------------------------------
+def test_not_found_write_failure_gives_a_distinct_honest_message_not_generic_retry() -> None:
+    from services.ai_agent.ai_agent_app.agent.write_tool_executor import GeminiWriteToolExecutor
+
+    error_code = GeminiWriteToolExecutor._safe_error_code_for_exception(ValueError("Lead not found: LD-BAD"))
+    assert error_code == "not_found"
+
+    message = GeminiWriteToolExecutor._safe_failed_write_message("lead", error_code, "en")
+    assert "try again" not in message.lower()
+    assert "couldn't find" in message.lower()
+
+
+def test_arabic_write_failure_messages_are_not_mojibake() -> None:
+    from services.ai_agent.ai_agent_app.agent.write_tool_executor import GeminiWriteToolExecutor
+
+    for record_type, error_code in (
+        ("booking", "capacity_unavailable"),
+        ("booking", ""),
+        ("handoff", ""),
+        ("lead", ""),
+        ("write", ""),
+    ):
+        message = GeminiWriteToolExecutor._safe_failed_write_message(record_type, error_code, "ar")
+        assert "?" not in message
+        assert any("؀" <= ch <= "ۿ" for ch in message)
+
+
+# ---------------------------------------------------------------------------
 # Bug: the agent told a customer "سأقوم بتحويلك الآن" / "جاري تحويلك" (I'm
 # transferring you now) with no create_handoff ever executed, and it never
 # appeared in the CRM's handoff queue. The false-write-success guard existed

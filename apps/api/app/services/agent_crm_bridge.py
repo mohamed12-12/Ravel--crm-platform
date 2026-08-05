@@ -48,6 +48,7 @@ class PostgresAgentBridgeService:
     booking_idempotency_key = UnifiedCRMService.booking_idempotency_key
     lead_idempotency_key = staticmethod(UnifiedCRMService.lead_idempotency_key)
     handoff_idempotency_key = staticmethod(UnifiedCRMService.handoff_idempotency_key)
+    _split_name = staticmethod(UnifiedCRMService._split_name)
 
     ACTIVE_HANDOFF_STATUSES = {"pending", "in progress", "open"}
     ACTIVE_BOOKING_STATUSES = {"draft", "confirmed", "pending"}
@@ -115,6 +116,61 @@ class PostgresAgentBridgeService:
     def get_traveler(self, traveler_id: str) -> dict[str, Any] | None:
         traveler = db.session.get(Traveler, traveler_id)
         return traveler.to_dict() if traveler else None
+
+    def create_traveler(
+        self,
+        *,
+        full_name: str,
+        raw_phone: str,
+        birthday: str = "",
+        gender: str = "",
+        nationality: str = "",
+        preferred_currency: str = "",
+        lead_source: str = "",
+        agent_notes: str = "",
+        country_code: str = "20",
+    ) -> dict[str, Any]:
+        """Create a Traveler record for a phone number with no existing match.
+
+        Mirrors UnifiedCRMService.create_traveler (the shared_service/dev
+        path), which every returning-traveler lookup depends on. Without this,
+        find_traveler_by_phone can never match this customer again in a later
+        session, and every Lead created for them has no Traveler behind it.
+        """
+        phone = self.normalize_phone(raw_phone, country_code)
+        first_name, last_name = self._split_name(full_name)
+        traveler_id = self._next_prefixed_id("travelers", "traveler_id", "TR", 5)
+        traveler = Traveler(
+            traveler_id=traveler_id,
+            status="Active",
+            full_name=_trim(full_name),
+            first_name=first_name or None,
+            last_name=last_name or None,
+            birthday=date.fromisoformat(birthday[:10]) if birthday else None,
+            gender=gender or None,
+            nationality=nationality or None,
+            preferred_currency=preferred_currency or None,
+            phone_code=phone.get("country_code") or None,
+            whatsapp_raw=phone.get("local_number") or None,
+            integrated_whatsapp=phone.get("normalized_whatsapp") or None,
+            normalized_whatsapp=phone.get("normalized_whatsapp") or None,
+            phone_lookup_key=phone.get("lookup_key") or None,
+            lead_source=lead_source or None,
+            agent_notes=agent_notes or None,
+            last_contacted_at=_utc_now(),
+        )
+        db.session.add(traveler)
+        db.session.commit()
+        return {
+            "traveler_id": traveler_id,
+            "full_name": _trim(full_name),
+            "birthday": birthday or None,
+            "gender": gender or None,
+            "nationality": nationality or None,
+            "preferred_currency": preferred_currency or None,
+            "phone_lookup_key": phone.get("lookup_key"),
+            "integrated_whatsapp": phone.get("normalized_whatsapp"),
+        }
 
     def get_trip(self, trip_id: str) -> dict[str, Any] | None:
         trip = db.session.get(Trip, trip_id)

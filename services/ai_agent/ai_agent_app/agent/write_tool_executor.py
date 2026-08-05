@@ -231,6 +231,31 @@ class GeminiWriteToolExecutor:
                 },
             }
 
+        created_traveler: dict[str, Any] | None = None
+        if not traveler_id and customer_name and raw_phone:
+            # No Traveler record exists for this phone number. The
+            # record_agent_outcome path above already creates one for
+            # shared_service/dev mode; this is the equivalent for the
+            # Postgres-native service, which has no combined
+            # "qualify + create traveler + create lead" helper. Without this,
+            # every new-traveler Lead was saved with traveler_id=None, and
+            # find_traveler_by_phone would never match this customer again in
+            # a later session -- they would be re-classified as brand new
+            # every time.
+            created_traveler = self.service.create_traveler(
+                full_name=customer_name,
+                raw_phone=raw_phone,
+                birthday=self._value(payload, session_context, "birthday") or "",
+                gender=self._value(payload, session_context, "gender") or "",
+                nationality=self._value(payload, session_context, "nationality") or "",
+                preferred_currency=self._value(payload, session_context, "preferred_currency", "currency") or "",
+                lead_source=lead_source,
+                agent_notes=notes,
+                country_code=country_code,
+            )
+            traveler_id = str(created_traveler.get("traveler_id") or "").strip()
+            traveler = created_traveler
+
         traveler_status = str((traveler or {}).get("status") or "").strip()
         customer_tier = "VIP" if traveler_status.upper() == "VIP" else ("Repeat" if traveler_status.upper() == "REPEAT" else "")
         match_status = "single_match" if traveler_id else "not_found"
@@ -281,7 +306,7 @@ class GeminiWriteToolExecutor:
             "assistant_message": self._lead_message(result, customer_name, language),
             "lead_update": result,
             "write_result": {
-                "created_traveler": None,
+                "created_traveler": created_traveler,
                 "lead_update": result,
             },
             "traveler": traveler,
@@ -294,7 +319,7 @@ class GeminiWriteToolExecutor:
                     "handoff_required": bool(handoff_required),
                     "handoff_reason": handoff_reason or "",
                     "write_result": {
-                        "created_traveler": None,
+                        "created_traveler": created_traveler,
                         "lead_update": result,
                     },
                 },
@@ -326,7 +351,7 @@ class GeminiWriteToolExecutor:
             "assistant_message": self._stage_message(result),
             "lead_update": result,
             "write_result": {
-                "created_traveler": None,
+                "created_traveler": created_traveler,
                 "lead_update": result,
             },
             "traveler": traveler,
@@ -510,11 +535,21 @@ class GeminiWriteToolExecutor:
             deduplicate_open=self._as_bool(self._value(payload, session_context, "deduplicate_open"), default=True),
             session_id=str(session_context.get("session_id") or ""),
         )
+        # create_handoff_case sets a "reused" contract (executed=False) when
+        # deduplicate_open finds an existing open handoff instead of creating
+        # a new one. Without surfacing that here, _normalize_result's blanket
+        # executed=True default (see below) hides the distinction, and any
+        # caller checking the top-level executed flag can never tell a
+        # deduplicated handoff apart from one that actually failed to write.
+        contract = result.get("write_result_contract") if isinstance(result.get("write_result_contract"), dict) else {}
+        executed = bool(contract.get("executed", True))
         return {
             "result_id": result.get("handoff_id", ""),
             "assistant_message": self._handoff_message(result, str(session_context.get("language") or "en")),
             "handoff_case": result,
+            "executed": executed,
             "write_result": {"handoff_case": result},
+            "write_result_contract": contract,
             "traveler": traveler,
             "session_update": {
                 "handoff_state": "handed_off",
@@ -596,24 +631,36 @@ class GeminiWriteToolExecutor:
     @staticmethod
     def _safe_failed_write_message(record_type: str, error_code: str, language: str) -> str:
         arabic = str(language or "").strip().lower().startswith("ar")
+        if error_code == "not_found":
+            # This is a distinct failure from a generic write error: the id
+            # we tried to update (e.g. update_lead_stage given a lead_id that
+            # doesn't exist for this session) simply doesn't exist, so "try
+            # again" is misleading -- retrying with the same id fails the
+            # same way every time.
+            if record_type == "lead":
+                return "لم أجد طلبك السابق لتحديثه. من فضلك أرسل رقم واتسابك مرة أخرى حتى أتحقق من بياناتك." if arabic else "I couldn't find your previous request to update. Please resend your WhatsApp number so I can check your details again."
+            if record_type == "handoff":
+                return "لم أجد طلب التواصل مع موظف لتحديثه. من فضلك أخبرني إذا كنت لا تزال بحاجة لمساعدة موظف." if arabic else "I couldn't find that human-support request to update. Let me know if you still need to reach a team member."
+            if record_type == "booking":
+                return "لم أجد طلب الحجز لتحديثه. من فضلك أرسل رقم الحجز أو ابدأ طلبًا جديدًا." if arabic else "I couldn't find that booking to update. Please share the booking reference, or we can start a new request."
         if record_type == "booking" and error_code == "capacity_unavailable":
             if arabic:
-                return "?? ???? ???? ??? ????? ???? ???????? ???? ??? ?????? ?????. ???? ????? ??? ???? ??? ?? ????? ????? ??????."
+                return "لم أستطع إنشاء طلب الحجز لهذا الخيار لأن التوافر تغير. من فضلك اختر خيار غرفة آخر، أو يمكنني توصيلك بموظف بشري."
             return "I could not create the booking request for that option because availability changed. Please choose another room option, or I can connect you with a human agent."
         if record_type == "booking":
             if arabic:
-                return "?? ???? ???? ??? ????? ????. ?? ???? ???? ???????? ?? ???? ??? ????."
+                return "لا أقدر أسجل طلب الحجز الآن. من فضلك راجع التفاصيل أو أكدها مرة أخرى."
             return "I could not create the booking request yet. Please review the details or try again."
         if record_type == "handoff":
             if arabic:
-                return "?? ????? ?? ????? ??? ??????? ?? ???? ????. ?? ???? ???? ??? ???? ?? ????? ???? ??????."
+                return "لم أتمكن من تسجيل طلب التواصل مع موظف الآن. من فضلك حاول مرة أخرى أو تواصل معنا مباشرة."
             return "I could not submit the human handoff request right now. Please try again or contact us directly."
         if record_type == "lead":
             if arabic:
-                return "?? ????? ?? ????? ???? ????. ?? ???? ???? ??? ????."
+                return "لم أتمكن من تسجيل طلبك الآن. من فضلك حاول مرة أخرى."
             return "I could not save your request right now. Please try again."
         if arabic:
-            return "?? ????? ?? ????? ????? ????. ?? ???? ???? ??? ????."
+            return "لم أتمكن من إكمال الطلب الآن. من فضلك حاول مرة أخرى."
         return "I could not complete the request right now. Please try again."
 
     def _write_result_contract(

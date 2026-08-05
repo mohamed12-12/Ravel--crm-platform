@@ -748,6 +748,89 @@ class TestPhase5GeminiWriteTools(unittest.TestCase):
         self.assertTrue(result["write_results"][0]["executed"])
         self.assertIn("handoff", result["reply"].lower())
 
+    def test_returning_traveler_with_open_lead_can_handoff_even_when_router_enforces(self) -> None:
+        # Reproduces the production bug end to end: TR00003 is a returning
+        # traveler resolved to a pre-booking canonical state (no selected trip
+        # yet, so the router resolves TRAVELER_VERIFIED) that does not normally
+        # allow create_handoff. With the router in enforce mode, an explicit
+        # human request plus an existing open lead must still get through.
+        enforce_settings = SimpleNamespace(
+            ai_agent_mode="gemini",
+            default_country_code="20",
+            ai_agent_system_prompt="You are Rahvel Agent.",
+            agent_tool_router_mode="enforce",
+        )
+        original_settings = self.settings
+        self.settings = enforce_settings
+        try:
+            with self._patched_service():
+                agent = self._build_agent(
+                    [
+                        function_call_response(
+                            "create_handoff",
+                            {
+                                "traveler_id": "TR00003",
+                                "lead_id": "LD00077",
+                                "user_requested_human": True,
+                                "reason_text": "Traveler asked for a human agent.",
+                            },
+                        ),
+                        text_response("Handoff created."),
+                    ]
+                )
+                result = agent.respond(
+                    user_message="I need support, please connect me with someone",
+                    session_context={
+                        "session_id": "sess-existing-lead-handoff",
+                        "traveler_id": "TR00003",
+                        "lead_id": "LD00077",
+                        "user_requested_human": True,
+                    },
+                )
+        finally:
+            self.settings = original_settings
+
+        self.assertEqual(len(self.service.created_handoffs), 1)
+        self.assertTrue(result["write_results"][0]["executed"])
+        self.assertEqual(result["write_results"][0]["tool_route"]["reason_code"], "allowed_explicit_handoff_existing_lead")
+        self.assertIn("handoff", result["reply"].lower())
+
+    def test_router_still_blocks_spontaneous_handoff_in_enforce_mode_without_explicit_signal(self) -> None:
+        # Same pre-booking state and enforce mode as above, but no explicit
+        # human-request signal and no existing lead -- the anti-hallucination
+        # guardrail must still block this, exactly as before the router fix.
+        enforce_settings = SimpleNamespace(
+            ai_agent_mode="gemini",
+            default_country_code="20",
+            ai_agent_system_prompt="You are Rahvel Agent.",
+            agent_tool_router_mode="enforce",
+        )
+        original_settings = self.settings
+        self.settings = enforce_settings
+        try:
+            with self._patched_service():
+                agent = self._build_agent(
+                    [
+                        function_call_response(
+                            "create_handoff",
+                            {
+                                "traveler_id": "TR00003",
+                                "reason_text": "Let's escalate this to a human.",
+                            },
+                        ),
+                        text_response(""),
+                    ]
+                )
+                result = agent.respond(
+                    user_message="tell me about your trips",
+                    session_context={"session_id": "sess-spontaneous-handoff", "traveler_id": "TR00003"},
+                )
+        finally:
+            self.settings = original_settings
+
+        self.assertEqual(len(self.service.created_handoffs), 0)
+        self.assertFalse(result["write_results"][0]["executed"])
+
     def test_write_audit_log_records_approved_and_rejected_actions(self) -> None:
         with self._patched_service():
             approved_agent = self._build_agent(
