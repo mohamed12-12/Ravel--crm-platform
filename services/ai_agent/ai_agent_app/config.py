@@ -17,6 +17,10 @@ DEFAULT_GEMINI_AGENT_SYSTEM_PROMPT_FILE = (
 
 
 def _load_env_file(path: Path) -> None:
+    if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("PYTEST_ADDOPTS"):
+        # Never let the real dev .env leak into a test process: it defeats
+        # monkeypatch.setenv/delenv for any key the .env file also defines.
+        return
     if not path.exists():
         return
     for raw_line in path.read_text(encoding="utf-8").splitlines():

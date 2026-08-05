@@ -36,7 +36,35 @@ class WriteCRMService(FakeCRMService):
         self.updated_lead_stages: list[dict] = []
         self.created_bookings: list[dict] = []
         self.created_handoffs: list[dict] = []
+        self.created_travelers: list[dict] = []
         self.connection.execute("PRAGMA foreign_keys = OFF")
+
+    def create_traveler(self, **kwargs):
+        traveler_id = f"TR{len(self.created_travelers) + 900:05d}"
+        raw_phone = kwargs.get("raw_phone", "")
+        row = {
+            "traveler_id": traveler_id,
+            "status": "Active",
+            "full_name": kwargs.get("full_name", ""),
+            "phone_code": kwargs.get("country_code", "20"),
+            "whatsapp_raw": raw_phone,
+            "integrated_whatsapp": raw_phone,
+            "normalized_whatsapp": raw_phone,
+            "phone_lookup_key": f"{kwargs.get('country_code', '20')}:{''.join(ch for ch in str(raw_phone) if ch.isdigit())[-10:]}",
+        }
+        self.connection.execute(
+            """
+            INSERT INTO travelers (
+                traveler_id, status, full_name, phone_code, whatsapp_raw,
+                integrated_whatsapp, normalized_whatsapp, phone_lookup_key
+            ) VALUES (:traveler_id, :status, :full_name, :phone_code, :whatsapp_raw,
+                      :integrated_whatsapp, :normalized_whatsapp, :phone_lookup_key)
+            """,
+            row,
+        )
+        self.connection.commit()
+        self.created_travelers.append(dict(row))
+        return dict(row)
 
     def upsert_lead(self, **kwargs):
         created_at = "2026-07-04T10:00:00"
@@ -459,7 +487,9 @@ class TestPhase5GeminiWriteTools(unittest.TestCase):
 
         self.assertEqual(len(self.service.created_leads), 0)
         self.assertFalse(result["write_results"][0]["executed"])
-        self.assertIn("open lead", result["reply"].lower())
+        # The raw validator reason ("open lead already exists") is no longer
+        # surfaced verbatim; customers get the polished duplicate-write message.
+        self.assertIn("already recorded", result["reply"].lower())
 
     def test_duplicate_lead_blocked(self) -> None:
         with self._patched_service():
@@ -907,7 +937,10 @@ class TestPhase5GeminiWriteTools(unittest.TestCase):
             )
             result = agent.respond(user_message="create traveler", session_context={"session_id": "sess-forbidden", "raw_phone": "4445556666"})
 
-        self.assertIn("unsupported tool requested", result["error"].lower())
+        # respond() no longer leaks the raw exception text into "error" (it's
+        # generalized to a stable code so internal tool names never reach a
+        # customer-facing field); the raw reason is still logged as a warning.
+        self.assertEqual(result["error"], "tool_request_failed")
         self.assertEqual(len(self.service.created_leads), 0)
 
 

@@ -9,6 +9,10 @@ from services.data_authority import load_data_authority
 
 
 def _load_env_file(path: Path) -> None:
+    if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("PYTEST_ADDOPTS"):
+        # Never let the real dev .env leak into a test process: it defeats
+        # monkeypatch.setenv/delenv and os.environ.pop for any key .env also defines.
+        return
     if not path.exists():
         return
     for raw_line in path.read_text(encoding="utf-8").splitlines():

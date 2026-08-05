@@ -403,6 +403,19 @@ class GeminiAgent:
         )
         return any(re.search(pattern, text) for pattern in patterns)
 
+    @staticmethod
+    def _reply_is_trusted_tool_message(reply: str, tool_events: list[dict[str, Any]]) -> bool:
+        cleaned = str(reply or "").strip()
+        if not cleaned:
+            return False
+        for event in tool_events:
+            if not isinstance(event, dict):
+                continue
+            candidate = str(event.get("assistant_message") or "").strip()
+            if candidate and candidate == cleaned:
+                return True
+        return False
+
     def _ground_reply(
         self,
         *,
@@ -440,6 +453,12 @@ class GeminiAgent:
                 workflow.get("assistant_message")
                 or "I need to verify that information in the CRM before I can confirm it. Please share the missing detail, or I can connect you with a human agent."
             ).strip()
+        if self._reply_is_trusted_tool_message(reply, tool_events):
+            # The reply is a tool executor's own deterministic message (e.g. "I
+            # still need: WhatsApp number or traveler ID."), not model output -
+            # words like "traveler id" inside it are a request, not a claim, so
+            # the unverified-CRM-claim heuristic below must not override it.
+            return reply
         if self._tool_events_contain_failed_contract(tool_events) and self._contains_unverified_crm_claim(reply):
             return str(
                 workflow.get("assistant_message")

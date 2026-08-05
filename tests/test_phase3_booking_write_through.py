@@ -11,6 +11,7 @@ from pathlib import Path
 from openpyxl import Workbook, load_workbook
 
 from demo_web.app import create_app
+from services.crm.system_services.unified_service import UnifiedCRMService
 
 
 def create_operational_tables(connection: sqlite3.Connection) -> None:
@@ -149,6 +150,14 @@ def create_operational_tables(connection: sqlite3.Connection) -> None:
         );
         """
     )
+    # Keep the hand-rolled schema above in sync with the columns UnifiedCRMService's
+    # raw SQL expects, by reusing the same ALTER-based migrations it applies to a
+    # real (older) sqlite database, instead of duplicating column lists here.
+    UnifiedCRMService._migrate_travelers_passport_columns(connection)
+    UnifiedCRMService._migrate_trips_room_columns(connection)
+    UnifiedCRMService._migrate_trip_booking_passport_columns(connection)
+    UnifiedCRMService._migrate_lead_columns(connection)
+    UnifiedCRMService._migrate_idempotency_columns(connection)
 
 
 def create_workbook(path: Path) -> None:

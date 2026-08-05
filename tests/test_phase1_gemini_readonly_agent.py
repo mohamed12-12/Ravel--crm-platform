@@ -312,7 +312,7 @@ class TestPhase1GeminiReadOnlyAgent(unittest.TestCase):
 
         self.assertEqual(
             result["reply"],
-            "I cannot save changes automatically in this step. I can only check whether the action is allowed.",
+            "Sorry, I couldn't prepare that response properly. Could you try that again?",
         )
 
     def test_gemini_provider_retries_after_timeout(self) -> None:

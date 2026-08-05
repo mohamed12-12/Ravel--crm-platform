@@ -47,6 +47,13 @@ def _record_id_from(write_result: dict[str, Any] | None, record_type: str) -> st
     record_id = str(contract.get("record_id") or "").strip()
     if record_id:
         return record_id
+    # "result_id" is the generic identifier every write executor (shared_service
+    # and API mode alike) sets regardless of record type - see
+    # GeminiWriteToolExecutor._result_id(). Record-type-specific keys below are
+    # a fallback for callers that only populate those.
+    generic_result_id = str(contract.get("result_id") or write_result.get("result_id") or "").strip()
+    if generic_result_id:
+        return generic_result_id
     if record_type == "booking":
         booking = write_result.get("booking_draft") if isinstance(write_result.get("booking_draft"), dict) else {}
         return str(write_result.get("booking_id") or booking.get("booking_id") or "").strip()

@@ -118,7 +118,7 @@ class ContextAwareGeminiSessionAgent(DummyGeminiSessionAgent):
         lowered = user_message.lower()
         if context.get("candidate_language_question"):
             return {
-                "reply": "Ø£ÙŠÙˆÙ‡ØŒ Ø£Ù‚Ø¯Ø± Ø£Ø³Ø§Ø¹Ø¯Ùƒ Ø¨Ø§Ù„Ø¹Ø±Ø¨ÙŠ. ØªØ­Ø¨ Ø±Ø­Ù„Ø© Ø¯Ø§Ø®Ù„ Ù…ØµØ± ÙˆÙ„Ø§ Ø±Ø­Ù„Ø© Ø®Ø§Ø±Ø¬ÙŠØ©ØŸ",
+                "reply": "أيوه، أقدر أساعدك بالعربي. تحب رحلة داخل مصر ولا رحلة خارجية؟",
                 "tool_requests": [],
                 "mode": "gemini",
             }
@@ -163,43 +163,43 @@ class ExactConversationGeminiSessionAgent(DummyGeminiSessionAgent):
         )
         lowered = user_message.strip().lower()
         known_traveler = context.get("known_traveler") if isinstance(context.get("known_traveler"), dict) else {}
-        if lowered in {"Ù‡Ù„Ø§", "Ù…Ø±Ø­Ø¨Ø§", "Ø§Ù„Ø³Ù„Ø§Ù… Ø¹Ù„ÙŠÙƒÙ…"}:
+        if lowered in {"هلا", "مرحبا", "السلام عليكم"}:
             return {
-                "reply": "Ù‡Ù„Ø§ Ø¨ÙŠÙƒ. Ø£Ù‚Ø¯Ø± Ø£Ø³Ø§Ø¹Ø¯Ùƒ Ø¨Ø§Ù„Ø¹Ø±Ø¨ÙŠ. ØªØ­Ø¨ Ø±Ø­Ù„Ø© Ù…Ø­Ù„ÙŠØ© ÙˆÙ„Ø§ Ø¯ÙˆÙ„ÙŠØ©ØŸ",
+                "reply": "هلا بيك. أقدر أساعدك بالعربي. تحب رحلة محلية ولا دولية؟",
                 "tool_requests": [],
                 "mode": "gemini",
             }
-        if lowered == "Ù„Ø§":
+        if lowered == "لا":
             return {
-                "reply": "ØªÙ…Ø§Ù…ØŒ ÙˆÙ„Ø§ ÙŠÙ‡Ù…Ùƒ. Ù„Ùˆ Ø­Ø§Ø¨Ø¨ Ù†ÙƒÙ…Ù„ØŒ Ù‚ÙˆÙ„ÙŠ ØªØ­Ø¨ Ø±Ø­Ù„Ø© Ù…Ø­Ù„ÙŠØ© ÙˆÙ„Ø§ Ø¯ÙˆÙ„ÙŠØ©.",
+                "reply": "تمام، ولا يهمك. لو حابب نكمل، قولي تحب رحلة محلية ولا دولية.",
                 "tool_requests": [],
                 "mode": "gemini",
             }
-        if "Ø§Ø­Ø¬Ø²" in user_message:
+        if "احجز" in user_message:
             return {
-                "reply": "Ø£ÙƒÙŠØ¯. Ù‚Ø¨Ù„ Ù…Ø§ Ø£Ø¬Ù‡Ø² Ø§Ù„Ø­Ø¬Ø²ØŒ ØªØ­Ø¨ Ø±Ø­Ù„Ø© Ù…Ø­Ù„ÙŠØ© ÙˆÙ„Ø§ Ø¯ÙˆÙ„ÙŠØ©ØŸ",
+                "reply": "أكيد. قبل ما أجهز الحجز، تحب رحلة محلية ولا دولية؟",
                 "tool_requests": [],
                 "mode": "gemini",
             }
         if context.get("candidate_trip_type") == "international":
             return {
-                "reply": "ØªÙ…Ø§Ù…ØŒ Ø±Ø­Ù„Ø© Ø¯ÙˆÙ„ÙŠØ©. ØªØ­Ø¨ Ø§Ù„Ø³ÙØ± ØªÙ‚Ø±ÙŠØ¨Ù‹Ø§ Ø¥Ù…ØªÙ‰ØŸ ÙˆÙ…Ø¹Ø§Ùƒ ÙƒØ§Ù… Ø´Ø®ØµØŸ",
+                "reply": "تمام، رحلة دولية. تحب السفر تقريبًا إمتى؟ ومعاك كام شخص؟",
                 "tool_requests": [],
                 "mode": "gemini",
             }
         if context.get("raw_phone") and known_traveler and lowered.isdigit():
             return {
                 "reply": (
-                    f"Ø£Ù‡Ù„Ø§ {known_traveler.get('full_name') or 'Ø¨Ø­Ø¶Ø±ØªÙƒ'}. "
-                    f"Ù„Ù‚ÙŠØª Ù…Ù„ÙÙƒ ÙÙŠ Rahma CRM Ø¨Ø±Ù‚Ù… {known_traveler.get('traveler_id') or ''} "
-                    f"ÙˆØ­Ø§Ù„ØªÙƒ {known_traveler.get('status') or 'Active'}. "
-                    "ØªØ­Ø¨ Ø±Ø­Ù„Ø© Ù…Ø­Ù„ÙŠØ© ÙˆÙ„Ø§ Ø¯ÙˆÙ„ÙŠØ©ØŸ"
+                    f"أهلا {known_traveler.get('full_name') or 'بحضرتك'}. "
+                    f"لقيت ملفك في Rahma CRM برقم {known_traveler.get('traveler_id') or ''} "
+                    f"وحالتك {known_traveler.get('status') or 'Active'}. "
+                    "تحب رحلة محلية ولا دولية؟"
                 ),
                 "tool_requests": [],
                 "mode": "gemini",
             }
         return {
-            "reply": "Ù…Ù…ÙƒÙ† ØªÙˆØ¶Ù‘Ø­ Ù„ÙŠ Ù†ÙˆØ¹ Ø§Ù„Ø±Ø­Ù„Ø© Ø£Ùˆ Ø§Ù„ØªØ§Ø±ÙŠØ® Ø§Ù„Ù…Ù†Ø§Ø³Ø¨ Ù„ÙƒØŸ",
+            "reply": "ممكن توضّح لي نوع الرحلة أو التاريخ المناسب لك؟",
             "tool_requests": [],
             "mode": "gemini",
         }
@@ -377,11 +377,11 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
         session = client.post("/api/session", json={}).get_json()["session"]
         session = client.post(
             f"/api/session/{session['id']}/message",
-            json={"text": "Ø¨ØªØ­ÙƒÙŠ Ø¹Ø±Ø¨ÙŠØŸ"},
+            json={"text": "بتحكي عربي؟"},
         ).get_json()["session"]
 
         reply = session["messages"][-1]["text"]
-        self.assertIn("Ø£ÙŠÙˆÙ‡", reply)
+        self.assertIn("أيوه", reply)
         self.assertNotIn("WhatsApp", reply)
 
     def test_gemini_mode_trip_search_before_phone_asks_trip_type(self) -> None:
@@ -451,7 +451,7 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
             self._enable_gemini(app, agent)
             session = client.post("/api/session", json={}).get_json()["session"]
             transcript = []
-            for text in ("01012345678", "Ù‡Ù„Ø§", "Ù„Ø§", "Ø¹Ø§ÙŠØ² Ø§Ø­Ø¬Ø²", "Ø¯ÙˆÙ„ÙŠÙ‡", "2"):
+            for text in ("01012345678", "هلا", "لا", "عايز احجز", "دوليه", "2"):
                 session = client.post(
                     f"/api/session/{session['id']}/message",
                     json={"text": text},
@@ -462,11 +462,11 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
         self.assertIn("Mina Andrawes", transcript[0])
         self.assertIn("TR00585", transcript[0])
         self.assertIn("VIP", transcript[0])
-        self.assertIn("Ù‡Ù„Ø§ Ø¨ÙŠÙƒ", transcript[1])
-        self.assertIn("ÙˆÙ„Ø§ ÙŠÙ‡Ù…Ùƒ", transcript[2])
-        self.assertIn("ØªØ­Ø¨ Ø±Ø­Ù„Ø© Ù…Ø­Ù„ÙŠØ© ÙˆÙ„Ø§ Ø¯ÙˆÙ„ÙŠØ©", transcript[3])
-        self.assertIn("Ø±Ø­Ù„Ø© Ø¯ÙˆÙ„ÙŠØ©", transcript[4])
-        self.assertIn("Ø±Ø­Ù„Ø© Ø¯ÙˆÙ„ÙŠØ©", transcript[5])
+        self.assertIn("هلا بيك", transcript[1])
+        self.assertIn("ولا يهمك", transcript[2])
+        self.assertIn("تحب رحلة محلية ولا دولية", transcript[3])
+        self.assertIn("رحلة دولية", transcript[4])
+        self.assertIn("رحلة دولية", transcript[5])
         self.assertNotIn("{", full_log)
         self.assertNotIn("}", full_log)
         self.assertNotIn("Please share your WhatsApp", full_log)
@@ -645,9 +645,12 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
             json={"text": "create lead for me"},
         ).get_json()["session"]
 
+        # Internal system/vendor terms are redacted from customer-facing replies
+        # (see response_format.py's "CRM" -> "our records" rewrite), so the
+        # stubbed reply's literal "CRM" is expected to come back rewritten.
         self.assertEqual(
             session["messages"][-1]["text"],
-            "Automatic CRM writes are disabled in this phase. I can only validate whether the action is allowed.",
+            "Automatic our records writes are disabled in this phase. I can only validate whether the action is allowed.",
         )
         self.assertFalse(session["fallbackUsed"])
         self.assertEqual(session["toolsUsed"], [])
@@ -694,7 +697,7 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
                 }
             )
             if str((session_context or {}).get("language") or "").startswith("ar"):
-                return {"reply": "Ø£Ù‡Ù„Ø§Ù‹ Ø¨ÙƒØŒ ÙƒÙŠÙ Ø£Ø³Ø§Ø¹Ø¯Ùƒ Ø§Ù„ÙŠÙˆÙ…ØŸ", "tool_requests": [], "mode": "gemini"}
+                return {"reply": "أهلاً بك، كيف أساعدك اليوم؟", "tool_requests": [], "mode": "gemini"}
             return {"reply": "Hello, how can I help you today?", "tool_requests": [], "mode": "gemini"}
 
         agent.respond = respond_for_language  # type: ignore[method-assign]
@@ -703,9 +706,9 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
         session = client.post("/api/session", json={}).get_json()["session"]
         session = client.post(
             f"/api/session/{session['id']}/message",
-            json={"text": "Ù…Ø±Ø­Ø¨Ø§"},
+            json={"text": "مرحبا"},
         ).get_json()["session"]
-        self.assertEqual(session["messages"][-1]["text"], "Ø£Ù‡Ù„Ø§Ù‹ Ø¨ÙƒØŒ ÙƒÙŠÙ Ø£Ø³Ø§Ø¹Ø¯Ùƒ Ø§Ù„ÙŠÙˆÙ…ØŸ")
+        self.assertEqual(session["messages"][-1]["text"], "أهلاً بك، كيف أساعدك اليوم؟")
 
         second = client.post("/api/session", json={}).get_json()["session"]
         second = client.post(
@@ -737,7 +740,7 @@ class TestPhase3GeminiLiveSession(unittest.TestCase):
         session = client.post("/api/session", json={}).get_json()["session"]
         session = client.post(
             f"/api/session/{session['id']}/message",
-            json={"text": "Ø¹Ø§ÙŠØ² Ø±Ø­Ù„Ø© Ø¯Ø§Ø®Ù„ÙŠØ©"},
+            json={"text": "عايز رحلة داخلية"},
         ).get_json()["session"]
 
         self.assertIn("local trips", session["messages"][-1]["text"])

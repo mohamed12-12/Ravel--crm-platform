@@ -25,6 +25,11 @@ class UiLayoutRegressionTests(unittest.TestCase):
         self.tmpdir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.tmpdir / "app.db"
         self.original_env = dict(os.environ)
+        # apps/api/app/__init__.py defaults CRM_AUTH_ENABLED to "true" when the
+        # env var is absent; these page-render checks don't exercise auth, so
+        # set it explicitly rather than depending on another test file having
+        # left the ambient environment at "false".
+        os.environ["CRM_AUTH_ENABLED"] = "false"
         os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path.resolve().as_posix()}"
         os.environ["RAHMA_SYSTEM_DB_PATH"] = str(self.db_path)
         os.environ["SHEET_BACKEND"] = "excel"
@@ -74,7 +79,11 @@ class UiLayoutRegressionTests(unittest.TestCase):
         with app.test_client() as client:
             response = client.get("/")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Agent Interaction Studio", response.data)
+        # "Agent Interaction Studio" was removed by the live-chat UI simplification
+        # (internal demo panels dropped in favor of a single compact chat layout);
+        # assert on the compact layout's own markers instead.
+        self.assertIn(b'class="chat-area glass-panel"', response.data)
+        self.assertIn(b'id="message-input"', response.data)
 
     def test_demo_css_keeps_chat_and_inspector_scroll_contained(self) -> None:
         css = DEMO_CSS.read_text(encoding="utf-8")

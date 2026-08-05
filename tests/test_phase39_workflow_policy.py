@@ -187,12 +187,14 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
 
         session = client.post(f"/api/session/{session_id}/message", json={"text": "01112223333"}).get_json()["session"]
         self.assertEqual(session["stage"], "trip_type_required")
-        self.assertEqual(len(provider.calls), 1)
+        # Trip type collection is backend-owned deterministic (see
+        # _BACKEND_OWNED_COLLECTION_STEPS): the model is never called.
+        self.assertEqual(len(provider.calls), 0)
 
         session = client.post(f"/api/session/{session_id}/message", json={"text": "2"}).get_json()["session"]
         self.assertEqual(session["stage"], "trip_selection_required")
         # Trip search and numbered result rendering are backend-owned.
-        self.assertEqual(len(provider.calls), 1)
+        self.assertEqual(len(provider.calls), 0)
 
         expected_trip_id = "RT-INT-26-001"
         session = client.post(f"/api/session/{session_id}/message", json={"text": "yes"}).get_json()["session"]
@@ -217,7 +219,9 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
         self.assertEqual(session["selectedTripId"], expected_trip_id)
         self.assertEqual(session["selectedTripName"], "Istanbul Explorer")
         self.assertIn("passport", session["messages"][-1]["text"].lower())
-        self.assertEqual(len(provider.calls), 1)
+        # The entire booking-collection flow (gender, room, group size, flight,
+        # passport) is backend-owned deterministic - the model is never called.
+        self.assertEqual(len(provider.calls), 0)
         self.assertNotIn("Sinai Trek", "\n".join(message["text"] for message in session["messages"]))
 
     def test_arabic_digit_phone_submission_runs_crm_lookup(self) -> None:
@@ -249,11 +253,16 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
 
         session = client.post("/api/session", json={}).get_json()["session"]
         session = client.post(f"/api/session/{session['id']}/message", json={"text": "01112223333"}).get_json()["session"]
-        payload = self._extract_prompt_payload(provider)
 
-        self.assertEqual(payload["session_context"]["workflow_policy"]["state"], "trip_type_required")
-        self.assertFalse(payload["session_context"]["workflow_policy"]["trip_search_allowed"])
-        self.assertNotIn("trip_search", payload["crm_context"])
+        # The trip-type question is a backend-owned deterministic step (see
+        # _BACKEND_OWNED_COLLECTION_STEPS): it must never reach the model, so
+        # there is no risk of it hallucinating a premature trip search.
+        self.assertEqual(len(provider.calls), 0)
+        self.assertEqual(session["stage"], "trip_type_required")
+        reply_text = session["messages"][-1]["text"]
+        self.assertIn("local", reply_text.lower())
+        self.assertIn("international", reply_text.lower())
+        self.assertNotIn("trip_search", reply_text)
         self.assertEqual(session["customer_status"], "Ready")
 
     def test_booking_collection_steps_are_backend_ordered(self) -> None:

@@ -57,7 +57,13 @@ class TestProductionAgentBehavior(unittest.TestCase):
         app.config["SESSIONS"]._conversation_ai = agent
         with patch.object(app.config["SESSIONS"]._coordinator, "think", wraps=app.config["SESSIONS"]._coordinator.think) as think_spy:
             session = client.post("/api/session", json={}).get_json()["session"]
-            client.post(f"/api/session/{session['id']}/message", json={"text": "hello"})
+            # A bare greeting before identity is a deterministic, backend-owned
+            # reply (never spend a model call on "hello"), so use free-form
+            # content that requires the model's interpretation instead.
+            client.post(
+                f"/api/session/{session['id']}/message",
+                json={"text": "We are four people going to Turkey in August without flights."},
+            )
         self.assertGreaterEqual(think_spy.call_count, 1)
 
     def test_persona_and_memory_reach_model_context(self) -> None:

@@ -197,14 +197,20 @@ class EmployeeFollowupWorkspaceTests(unittest.TestCase):
             self.assertIsNotNone(event)
 
     def test_booking_detail_offers_full_employee_status_menu(self) -> None:
+        self._login()
         response = self.client.get("/bookings/B-FU-1")
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
+        # The manual status menu is intentionally simplified to the current
+        # value plus Draft/Completed/Cancelled (see _allowed_status_options) -
+        # intermediate lifecycle statuses like Payment Pending/Paid are driven
+        # elsewhere, not hand-picked from this dropdown.
         self.assertIn('<option value="Confirmed" selected>', body)
         self.assertIn('<option value="Draft" >', body)
-        self.assertIn('<option value="Payment Pending" >', body)
         self.assertIn('<option value="Cancelled" >', body)
-        self.assertIn('<option value="Paid" >', body)
+        self.assertIn('<option value="Completed" >', body)
+        self.assertNotIn('<option value="Payment Pending"', body)
+        self.assertNotIn('<option value="Paid"', body)
         self.assertIn('More follow-up details', body)
 
     def test_employee_can_confirm_draft_directly_with_reason(self) -> None:
@@ -353,6 +359,7 @@ class EmployeeFollowupWorkspaceTests(unittest.TestCase):
             self.assertEqual(booking.booking_status, "Confirmed")
 
     def test_lead_detail_displays_followup_summary_and_overdue(self) -> None:
+        self._login()
         response = self.client.get("/leads/L-FU-1")
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)

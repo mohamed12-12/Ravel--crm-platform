@@ -275,14 +275,28 @@ class GeminiWriteToolExecutor:
                     "lead_update": lead_update,
                 },
             }
+            lead_id = str(lead_update.get("lead_id") or "")
+            contract = self._write_result_contract(
+                status="success" if lead_id else "failed",
+                executed=bool(lead_id),
+                reused=False,
+                record_type="lead",
+                record_id=lead_id,
+                customer_confirmation_allowed=False,
+                error_code="" if lead_id else "write_failed",
+                safe_customer_message_key="lead.created" if lead_id else "lead.write_failed",
+                audit={"session_id": str(session_context.get("session_id") or "")},
+            )
             return {
-                "result_id": str(lead_update.get("lead_id") or ""),
+                "result_id": lead_id,
                 "assistant_message": self._lead_message(lead_update, customer_name, language),
                 "lead_update": lead_update,
                 "write_result": {
                     "created_traveler": created_traveler,
                     "lead_update": lead_update,
+                    "write_result_contract": contract,
                 },
+                "write_result_contract": contract,
                 "traveler": result.get("traveler") if isinstance(result.get("traveler"), dict) else traveler,
                 "session_update": {
                     "lead_status": lead_update.get("lead_stage", ""),
@@ -360,14 +374,28 @@ class GeminiWriteToolExecutor:
             session_id=str(session_context.get("session_id") or ""),
         )
 
+        lead_id = str(result.get("lead_id") or "")
+        contract = self._write_result_contract(
+            status="success" if lead_id else "failed",
+            executed=bool(lead_id),
+            reused=False,
+            record_type="lead",
+            record_id=lead_id,
+            customer_confirmation_allowed=False,
+            error_code="" if lead_id else "write_failed",
+            safe_customer_message_key="lead.created" if lead_id else "lead.write_failed",
+            audit={"session_id": str(session_context.get("session_id") or "")},
+        )
         return {
-            "result_id": result.get("lead_id", ""),
+            "result_id": lead_id,
             "assistant_message": self._lead_message(result, customer_name, language),
             "lead_update": result,
             "write_result": {
                 "created_traveler": created_traveler,
                 "lead_update": result,
+                "write_result_contract": contract,
             },
+            "write_result_contract": contract,
             "traveler": traveler,
             "session_update": {
                 "lead_status": result.get("lead_stage", ""),

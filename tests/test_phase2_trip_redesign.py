@@ -29,6 +29,22 @@ def _create_temp_app(db_path: Path):
 
 class Phase2TripRedesignTests(unittest.TestCase):
     def setUp(self) -> None:
+        # Other test files (e.g. test_admin_login_protection.py) pop "app.*"
+        # from sys.modules to force a fresh app/db per test and don't restore
+        # it afterward. If that happens to run before this file, the module-
+        # level `db`/Trip imported at collection time end up bound to a stale
+        # SQLAlchemy instance that create_app() never registers, raising
+        # "app not registered with this SQLAlchemy instance". Force our own
+        # consistent, fresh import here and rebind the module-level names so
+        # every reference below matches the app this test actually creates.
+        global db, Trip
+        for module_name in list(sys.modules):
+            if module_name == "app" or module_name.startswith("app."):
+                sys.modules.pop(module_name, None)
+        from app.extensions import db as _fresh_db
+        from app.models.trip import Trip as _fresh_trip
+        db, Trip = _fresh_db, _fresh_trip
+
         self.tmpdir = Path(".tmp-test-workdirs") / f"phase2-trip-{uuid.uuid4().hex}"
         self.tmpdir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.tmpdir / "app.db"
