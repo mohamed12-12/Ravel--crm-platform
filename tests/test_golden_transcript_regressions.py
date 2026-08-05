@@ -108,6 +108,45 @@ def test_new_traveler_lead_save_failure_does_not_falsely_claim_success(runtime: 
 
 
 # ---------------------------------------------------------------------------
+# Bug: a returning tester who already had an open lead on file got stuck in
+# an infinite "Which payment currency do you prefer?" loop. The action
+# validator correctly rejects create_lead as a duplicate and hands back the
+# existing lead_id (write_result_contract status="duplicate", executed=False)
+# but _execute_new_traveler_lead treated any executed=False as an outright
+# failure, discarding the existing lead_id and falling through to a live
+# model call that produced an empty/rejected reply every single turn.
+# ---------------------------------------------------------------------------
+def test_new_traveler_intake_completes_when_lead_already_exists_for_this_traveler(runtime: ToolCallingSessionRuntime) -> None:
+    runtime._write_executor.execute.return_value = {
+        "executed": False,
+        "result_id": "LD00004",
+        "reply": "Your request LD00004 is already recorded. We will follow up with you.",
+        "assistant_message": "Your request LD00004 is already recorded. We will follow up with you.",
+        "lead_update": {"lead_id": "LD00004", "lead_stage": "New"},
+        "write_result_contract": {
+            "status": "duplicate",
+            "reused": True,
+            "record_id": "LD00004",
+            "record_type": "lead",
+            "executed": False,
+        },
+        "session_update": {"lead_status": "New", "final_result": {"lead_id": "LD00004"}},
+    }
+    session = runtime.create_session()
+    for text in ("01270482380", "MAGED MAGED MAGED", "EGY", "28/4/2006"):
+        session = _send(runtime, text, session)
+    assert session.stage == "currency_required"
+
+    session = _send(runtime, "1", session)
+
+    reply = session.messages[-1]["text"]
+    assert session.new_traveler_lead_saved is True
+    assert "LD00004" in reply
+    assert "I need one more detail" not in reply
+    runtime._write_executor.execute.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # Bug: the agent told a customer "سأقوم بتحويلك الآن" / "جاري تحويلك" (I'm
 # transferring you now) with no create_handoff ever executed, and it never
 # appeared in the CRM's handoff queue. The false-write-success guard existed
@@ -245,3 +284,35 @@ def test_ground_reply_allows_browsing_multiple_trips_before_selection() -> None:
     reply = "Siwa Wellness Demo starts 2026-09-20 and costs 2200 EGP."
     grounded = agent._ground_reply(reply=reply, session_context=_two_trip_context(None), tool_events=[])
     assert grounded == reply
+
+
+# ---------------------------------------------------------------------------
+# Bug: a customer asked "what is details you need" (meaning: what info does
+# the bot still need from me) mid-intake and got the "I can't share another
+# traveler's details in this chat" privacy block instead of an answer. The
+# bare word "details" alone was enough to trip AgentPrivacyPolicy's
+# other-traveler classifier, which fires on any bound session.
+# ---------------------------------------------------------------------------
+def test_asking_what_details_are_needed_is_not_treated_as_another_traveler_request() -> None:
+    from services.ai_agent.ai_agent_app.agent.privacy_policy import AgentPrivacyPolicy
+
+    bound_context = {"customer_name": "Maged Maged Maged", "raw_phone": "01270482380"}
+    response = AgentPrivacyPolicy.evaluate_user_message("what is details you need", bound_context)
+    assert response is None
+
+
+def test_asking_about_own_profile_or_data_is_not_blocked() -> None:
+    from services.ai_agent.ai_agent_app.agent.privacy_policy import AgentPrivacyPolicy
+
+    bound_context = {"customer_name": "Maged Maged Maged", "raw_phone": "01270482380"}
+    for text in ("can you show my trip details", "what data do you have on me", "tell me more details"):
+        assert AgentPrivacyPolicy.evaluate_user_message(text, bound_context) is None
+
+
+def test_actual_other_traveler_request_is_still_blocked() -> None:
+    from services.ai_agent.ai_agent_app.agent.privacy_policy import AgentPrivacyPolicy
+
+    bound_context = {"customer_name": "Maged Maged Maged", "raw_phone": "01270482380"}
+    response = AgentPrivacyPolicy.evaluate_user_message("please share another customer's booking status", bound_context)
+    assert response is not None
+    assert response.intent == "other_traveler_data_request"

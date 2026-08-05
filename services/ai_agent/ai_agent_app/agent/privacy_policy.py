@@ -48,14 +48,35 @@ class AgentPrivacyPolicy:
         "\u0631\u0642\u0645 \u062a\u0639\u0631\u064a\u0641",
         "\u062a\u0631\u0627\u0641\u0644\u0631",
     )
+    # Bare English nouns like "details"/"profile"/"data" are far too common in
+    # ordinary customer questions ("what details do you need?") to use alone as
+    # a signal \u2014 require the phrase to actually reference a *different*
+    # person's data, not just any mention of data/profile/details.
     _OTHER_TRAVELER_EN = (
-        "profile",
-        "details",
-        "data",
-        "traveler",
-        "customer",
-        "passport",
-        "booking status",
+        "another traveler",
+        "other traveler",
+        "different traveler",
+        "another customer",
+        "other customer",
+        "different customer",
+        "someone else",
+        "somebody else",
+        "another person",
+        "other person",
+        "my friend's",
+        "his booking",
+        "her booking",
+        "their booking",
+        "his profile",
+        "her profile",
+        "their profile",
+        "his passport",
+        "her passport",
+        "their passport",
+        "his details",
+        "her details",
+        "their details",
+        "someone's",
     )
     _SELF_AR = (
         "\u0628\u064a\u0627\u0646\u0627\u062a\u064a",

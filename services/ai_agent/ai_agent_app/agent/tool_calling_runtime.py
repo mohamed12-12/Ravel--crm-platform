@@ -22,6 +22,7 @@ from services.ai_agent.ai_agent_app.agent.read_only_tools import ReadOnlyCRMTool
 from services.ai_agent.ai_agent_app.agent.session_flow import SessionState, detect_language
 from services.ai_agent.ai_agent_app.agent.tool_manager import ToolManager
 from services.ai_agent.ai_agent_app.agent.tool_registry import build_agent_tool_registry
+from services.ai_agent.ai_agent_app.agent.write_response_gating import write_result_allows_success
 from services.ai_agent.ai_agent_app.agent.write_tool_executor import GeminiWriteToolExecutor
 from services.ai_agent.ai_agent_app.agent.workflow_policy import ConversationWorkflowPolicy
 from services.ai_agent.ai_agent_app.config import Settings
@@ -3149,7 +3150,13 @@ class ToolCallingSessionRuntime:
         except Exception as exc:
             agent_logger.warning("New traveler lead could not be saved session=%s error=%s", session.id, exc)
             return False
-        if not isinstance(result, dict) or not result.get("executed") or not str(result.get("result_id") or "").strip():
+        # A rejected write with an existing open lead (write_result_contract
+        # status "duplicate"/"reused") is an idempotent success, not a
+        # failure: the executor already found and returned that lead's id.
+        # Treating it as a hard failure left the customer stuck in a loop
+        # retrying a save that will never succeed, because their lead was
+        # already on file.
+        if not isinstance(result, dict) or not str(result.get("result_id") or "").strip() or not write_result_allows_success(result, "lead"):
             agent_logger.warning(
                 "New traveler lead write did not execute session=%s result=%s",
                 session.id,
