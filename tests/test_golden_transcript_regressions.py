@@ -184,6 +184,59 @@ def test_repeated_human_agent_request_reuses_existing_handoff_instead_of_claimin
 
 
 # ---------------------------------------------------------------------------
+# Bug: a returning traveler with an existing open lead asked for "support"
+# ("الدعم") and got stuck -- _is_human_agent_request only recognized
+# human/real agent/person/employee/call me (and their Arabic equivalents), so
+# this message fell through to Gemini, which the router then blocked from an
+# unrelated pre-booking state. The classifier now also recognizes
+# support/help/دعم/مساعدة, so this reaches the deterministic handoff path
+# directly instead of depending on Gemini/the router at all.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "message_text",
+    [
+        "I need support with my booking",
+        "can someone help me please",
+        "عايز الدعم الفني",
+        "محتاج مساعدة",
+    ],
+)
+def test_existing_lead_traveler_support_request_reaches_handoff(
+    runtime: ToolCallingSessionRuntime, message_text: str
+) -> None:
+    runtime._write_executor.execute.return_value = {
+        "executed": True,
+        "result_id": "H-0042",
+        "handoff_case": {"handoff_id": "H-0042"},
+        "write_result_contract": {
+            "status": "success",
+            "record_id": "H-0042",
+            "record_type": "handoff",
+            "executed": True,
+        },
+    }
+    session = runtime.create_session()
+    session.customer_name = "Returning Traveler"
+    session.raw_phone = "01270482380"
+    # Simulate a returning traveler with an already-linked traveler and open lead.
+    session.final_result = {
+        "traveler": {"traveler_id": "TR00099", "full_name": "Returning Traveler", "status": "Active"},
+        "lead_id": "LD00001",
+    }
+
+    session = _send(runtime, message_text, session)
+
+    reply = session.messages[-1]["text"]
+    assert session.handoff_state == "handed_off"
+    assert "failed" not in reply.lower()
+    assert session.final_result.get("handoff_id") == "H-0042"
+    runtime._write_executor.execute.assert_called_once()
+    call_kwargs = runtime._write_executor.execute.call_args.kwargs
+    assert call_kwargs["action"] == "create_handoff"
+    assert call_kwargs["payload"]["lead_id"] == "LD00001"
+
+
+# ---------------------------------------------------------------------------
 # Bug: a write handler raising "not found" (e.g. update_lead_stage given a
 # lead_id that no longer exists) was classified with error_code="not_found"
 # but _safe_failed_write_message ignored the error_code and returned the same

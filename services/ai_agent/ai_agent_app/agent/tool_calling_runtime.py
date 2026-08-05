@@ -1134,9 +1134,15 @@ class ToolCallingSessionRuntime:
                 "person",
                 "employee",
                 "call me",
+                "support",
+                "help",
                 "\u0645\u0648\u0638\u0641",
                 "\u0627\u0646\u0633\u0627\u0646",
                 "\u0643\u0644\u0645\u0646\u064a",
+                "\u062f\u0639\u0645",
+                # "help/support" (masa'ada), spelled with a plain ha: normalization
+                # maps ta marbuta to ha before this check runs.
+                "\u0645\u0633\u0627\u0639\u062f\u0647",
             )
         )
 
