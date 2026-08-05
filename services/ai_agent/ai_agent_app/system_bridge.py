@@ -174,6 +174,15 @@ def sync_system_live_agent_lead(
     lead_id: str,
     **payload: Any,
 ) -> dict[str, Any]:
+    if settings.crm_access_mode == "api":
+        # This is a best-effort enrichment of the lead's notes with a live
+        # progress snapshot (current step, room choice, etc.), not the lead
+        # write itself — create_lead already persists to Postgres via the CRM
+        # API bridge. There is no Postgres-backed equivalent for this snapshot
+        # yet, so skip cleanly instead of pointing UnifiedCRMService at a
+        # local SQLite file (apps/api/instance/rahma_traveler_dev.db) that
+        # doesn't exist in this deployment.
+        return {}
     service = get_system_service(settings)
     if service is None:
         raise RuntimeError("System DB write-through is unavailable; refusing live lead sync.")

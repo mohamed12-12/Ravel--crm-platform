@@ -313,6 +313,29 @@ def test_passport_metadata_routes_to_crm_api_in_api_mode(monkeypatch):
     assert captured["payload"]["passport_attachment_ref"] == "uploads/passport.pdf"
 
 
+def test_live_lead_sync_skips_local_sqlite_in_api_mode(monkeypatch):
+    """Bug: every message after a lead was created logged "Lead sync from
+    session failed ... error=unable to open database file" because this
+    best-effort CRM-notes enrichment step always pointed UnifiedCRMService at
+    the local dev SQLite file, regardless of CRM_ACCESS_MODE. There is no
+    Postgres-backed equivalent yet, so it should no-op cleanly in api mode
+    instead of trying (and failing) to open a file that was never created in
+    this deployment.
+    """
+    from services.ai_agent.ai_agent_app.config import load_settings
+    from services.ai_agent.ai_agent_app.system_bridge import sync_system_live_agent_lead
+
+    def fail_if_called(_settings=None):
+        raise AssertionError("get_system_service must not be called in api mode")
+
+    monkeypatch.setattr("services.ai_agent.ai_agent_app.system_bridge.get_system_service", fail_if_called)
+    settings = replace(load_settings(), crm_access_mode="api", crm_api_base_url="http://crm.test", crm_api_token="token")
+
+    result = sync_system_live_agent_lead(settings, "LD00005", customer_name="Test Traveler")
+
+    assert result == {}
+
+
 def test_disabled_sheet_mirror_cannot_write_source_or_runtime(tmp_path: Path):
     from services.crm.system_services.config import SystemServiceSettings
     from services.crm.system_services.unified_service import UnifiedCRMService

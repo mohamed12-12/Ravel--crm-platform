@@ -73,7 +73,7 @@ class PromptBuilder:
             system_prompt=self.system_prompt,
             messages=[{"role": "user", "parts": [{"text": json.dumps(payload, ensure_ascii=False)}]}],
             tools=[self._tool_schema(spec) for spec in self.tool_registry.values()],
-            generation_config={"temperature": 0.25, "topP": 0.9, "maxOutputTokens": 512},
+            generation_config={"temperature": 0.25, "topP": 0.9, "maxOutputTokens": 1024},
         )
 
     def build_chat_prompt(
@@ -120,7 +120,7 @@ class PromptBuilder:
             system_prompt=self.system_prompt,
             messages=[{"role": "user", "parts": [{"text": json.dumps(payload, ensure_ascii=False)}]}],
             tools=[self._tool_schema(spec) for spec in self.tool_registry.values()],
-            generation_config={"temperature": 0.35, "topP": 0.9, "maxOutputTokens": 768},
+            generation_config={"temperature": 0.35, "topP": 0.9, "maxOutputTokens": 1536},
         )
 
     @staticmethod

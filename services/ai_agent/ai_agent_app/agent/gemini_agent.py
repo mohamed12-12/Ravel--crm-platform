@@ -551,7 +551,19 @@ class GeminiAgent:
                 system_prompt=package.system_prompt,
                 messages=[{"role": "user", "parts": [{"text": json.dumps(payload, ensure_ascii=False)}]}],
                 tools=[],
-                generation_config={"temperature": 0.2, "topP": 0.9, "maxOutputTokens": 384},
+                # No tools are offered on this call, so there is no function-call
+                # thought signature to preserve (unlike _run_tool_loop's shared
+                # config). Turning thinking off here means the whole budget goes
+                # to the visible reply, instead of hidden reasoning tokens
+                # silently eating it and hitting MAX_TOKENS a second time in a
+                # row with an even smaller cap than the call it was recovering
+                # from.
+                generation_config={
+                    "temperature": 0.2,
+                    "topP": 0.9,
+                    "maxOutputTokens": 512,
+                    "thinkingConfig": {"thinkingBudget": 0},
+                },
                 request_id=f"{package.prompt_id}-completion-retry",
             )
         except GeminiProviderError as exc:

@@ -12,6 +12,7 @@ import shutil
 import uuid
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -27,6 +28,7 @@ from services.ai_agent.ai_agent_app.agent.tool_calling_runtime import ToolCallin
 from services.ai_agent.ai_agent_app.agent.write_response_gating import response_claims_write_success
 from tests.test_agent_conversation_reliability import PassiveAgent, RecordingReadTools
 from tests.test_phase11_demo_features import _make_app_with_db
+from tests.test_phase2_gemini_tool_loop import LoopProviderStub, text_response
 
 
 @pytest.fixture()
@@ -316,3 +318,37 @@ def test_actual_other_traveler_request_is_still_blocked() -> None:
     response = AgentPrivacyPolicy.evaluate_user_message("please share another customer's booking status", bound_context)
     assert response is not None
     assert response.intent == "other_traveler_data_request"
+
+
+# ---------------------------------------------------------------------------
+# Bug: right after a duplicate-lead reuse, the very next assistant turn (a
+# conversational-interruption reply generated live by Gemini) hit
+# finish_reason=MAX_TOKENS, got rejected, retried once, and the retry ALSO
+# hit MAX_TOKENS — surfacing the generic "couldn't prepare that response"
+# apology to the customer. The retry call requested only 384 output tokens
+# with no way to stop the model spending them on invisible reasoning first,
+# so a retry meant to recover from a token-budget failure was, if anything,
+# more likely to hit the same wall again. The retry offers no tools, so —
+# unlike the shared tool-loop config, which must keep thinking on to
+# preserve function-call thought signatures — it can safely turn thinking
+# off entirely so the whole budget goes to the visible reply.
+# ---------------------------------------------------------------------------
+def test_max_tokens_retry_disables_thinking_and_has_a_real_token_budget() -> None:
+    provider = LoopProviderStub([text_response("I can help you with Today Demo. What would you like next?", "resp-retry")])
+    agent = GeminiAgent.__new__(GeminiAgent)
+    agent.provider = provider
+
+    replacement, response_id, issue = agent._regenerate_complete_reply(
+        package=SimpleNamespace(system_prompt="You are Rahvel Agent.", prompt_id="prompt-tokens"),
+        session_context={"session_id": "sess-tokens", "language": "en", "selected_trip_name": "Today Demo"},
+        user_message="how can you help?",
+        partial_reply="I can help you with Today Demo and",
+        reason="token_limit_finish",
+    )
+
+    assert replacement == "I can help you with Today Demo. What would you like next?"
+    assert response_id == "resp-retry"
+    assert issue == ""
+    retry_config = provider.calls[0]["generation_config"]
+    assert retry_config["thinkingConfig"] == {"thinkingBudget": 0}
+    assert retry_config["maxOutputTokens"] >= 512
