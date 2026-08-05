@@ -8,7 +8,10 @@ from typing import Any
 
 from services.ai_agent.ai_agent_app.agent.prompt_builder import PromptBuilder
 from services.ai_agent.ai_agent_app.agent.response_format import format_agent_reply, response_completeness_issue
-from services.ai_agent.ai_agent_app.agent.response_guard import guard_customer_response
+from services.ai_agent.ai_agent_app.agent.response_guard import (
+    guard_customer_response,
+    known_record_ids_from_context,
+)
 from services.ai_agent.ai_agent_app.agent.privacy_policy import AgentPrivacyPolicy
 from services.ai_agent.ai_agent_app.agent.read_only_tools import ReadOnlyCRMTools
 from services.ai_agent.ai_agent_app.agent.safety import AgentSafetyLayer
@@ -786,6 +789,7 @@ class GeminiAgent:
         language: str,
         fallback_message_key: str = "general",
         allow_inventory_counts: bool = False,
+        session_context: dict[str, Any] | None = None,
     ) -> str:
         write_result, record_type = GeminiAgent._last_write_result_for_guard(tool_events)
         guarded = guard_customer_response(
@@ -795,6 +799,7 @@ class GeminiAgent:
             record_type=record_type,
             fallback_message_key=fallback_message_key or record_type or "general",
             allow_inventory_counts=allow_inventory_counts,
+            known_record_ids=known_record_ids_from_context(session_context),
         )
         if guarded.fallback_used:
             agent_logger.warning(
@@ -932,6 +937,7 @@ class GeminiAgent:
                     language=language,
                     fallback_message_key=fallback_message_key,
                     allow_inventory_counts=allow_inventory_counts,
+                    session_context=session_context,
                 )
                 if self._contains_internal_instruction_leak(reply_text):
                     reply_text = self._workflow_fallback_reply(session_context)
@@ -950,6 +956,7 @@ class GeminiAgent:
                     language=language,
                     fallback_message_key=fallback_message_key,
                     allow_inventory_counts=allow_inventory_counts,
+                    session_context=session_context,
                 )
                 memory_key = self._memory_key(session_context)
                 self._memory.setdefault(memory_key, []).extend(

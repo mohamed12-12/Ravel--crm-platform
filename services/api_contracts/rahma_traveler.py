@@ -81,7 +81,7 @@ def _agent_read_actions() -> list[str]:
 
 
 def _agent_write_actions() -> list[str]:
-    return ["create_lead", "update_lead_stage", "create_booking_draft", "create_handoff"]
+    return ["create_traveler", "create_lead", "update_lead_stage", "create_booking_draft", "create_handoff"]
 
 
 def _base_contract(*, title: str, description: str, base_url: str | None = None) -> JsonDict:

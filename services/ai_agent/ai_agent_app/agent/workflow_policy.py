@@ -93,6 +93,19 @@ class ConversationWorkflowPolicy:
             )
 
         if lookup_status == "not_found":
+            # A saved new-traveler lead means the write layer already created (or
+            # matched) a Traveler record for this phone number. Re-running the
+            # new-traveler intake branch after that point returns
+            # save_new_traveler_lead forever, which has no work left to do, so
+            # the conversation can never reach trip selection or booking. Treat
+            # the linked traveler as verified and continue the real workflow.
+            saved_traveler = self._saved_new_traveler(session_context)
+            if saved_traveler:
+                return self._post_identity_decision(
+                    session_context,
+                    traveler=saved_traveler,
+                    status=str(saved_traveler.get("status") or "Active"),
+                )
             return self._new_traveler_decision(session_context)
 
         if lookup_status == "invalid_phone":
@@ -145,6 +158,22 @@ class ConversationWorkflowPolicy:
             assistant_message="Please share your WhatsApp number first so I can check your Ravel Traveler profile safely.",
             reason="missing_identity",
         )
+
+    @staticmethod
+    def _saved_new_traveler(session_context: dict[str, Any]) -> dict[str, Any]:
+        """Return the traveler record linked to an already-saved new-traveler lead."""
+
+        if not session_context.get("new_traveler_lead_saved"):
+            return {}
+        known = session_context.get("known_traveler") if isinstance(session_context.get("known_traveler"), dict) else {}
+        traveler_id = str(known.get("traveler_id") or session_context.get("traveler_id") or "").strip()
+        if not traveler_id:
+            return {}
+        traveler = dict(known) if known.get("traveler_id") else {"traveler_id": traveler_id}
+        traveler.setdefault("full_name", str(session_context.get("customer_name") or ""))
+        if not str(traveler.get("status") or "").strip():
+            traveler["status"] = "Active"
+        return traveler
 
     def _post_identity_decision(self, session_context: dict[str, Any], *, traveler: dict[str, Any], status: str) -> WorkflowDecision:
         trip_type = str(session_context.get("trip_type") or "").strip().lower()
@@ -221,9 +250,9 @@ class ConversationWorkflowPolicy:
                 required_step="collect_traveler_gender",
                 customer_message_key="traveler_gender_required",
                 assistant_message=(
-                    "Ù‡Ù„ Ø§Ù„Ù…Ø³Ø§ÙØ±ÙˆÙ† Ø´Ø¨Ø§Ø¨ Ø£Ù… Ø¨Ù†Ø§ØªØŸ (Traveler group)\n\n"
-                    "1) Ø´Ø¨Ø§Ø¨ (Boys / Male)\n"
-                    "2) Ø¨Ù†Ø§Øª (Girls / Female)"
+                    "هل المسافرون شباب أم بنات؟\n\n"
+                    "1) شباب (Boys / Male)\n"
+                    "2) بنات (Girls / Female)"
                     if arabic
                     else "Are the travelers boys/male or girls/female?\n\n1) Boys / Male\n2) Girls / Female"
                 ),
@@ -537,8 +566,8 @@ class ConversationWorkflowPolicy:
         if not lines:
             if room_group in {"boys", "girls"}:
                 return (
-                    "Ù„Ø§ ØªÙˆØ¬Ø¯ ØºØ±Ù Ù…ØªØ§Ø­Ø© Ù„Ù‡Ø°Ø§ Ø§Ù„Ø§Ø®ØªÙŠØ§Ø± Ø­Ø§Ù„ÙŠØ§Ù‹ Ø­Ø³Ø¨ Ø¨ÙŠØ§Ù†Ø§Øª CRM.\n"
-                    "Ø³Ø£Ø±Ø³Ù„ Ø·Ù„Ø¨Ùƒ Ø¥Ù„Ù‰ ÙØ±ÙŠÙ‚ Ø±Ø­Ù…Ø© ØªØ±Ø§ÙÙ„ Ù„Ù…Ø±Ø§Ø¬Ø¹Ø© Ø§Ù„Ø¨Ø¯Ø§Ø¦Ù„."
+                    "لا توجد غرف متاحة لهذا الاختيار حاليا حسب بياناتنا.\n"
+                    "سأرسل طلبك إلى فريق Ravel Traveler لمراجعة البدائل المتاحة."
                     if arabic
                     else "That room option is currently unavailable for this traveler group.\n"
                     "I will send your request to the Ravel Traveler team to review the alternatives."

@@ -59,19 +59,47 @@ def _send(rt: ToolCallingSessionRuntime, text: str, session: SessionState | None
 # detail" forever, because required_step=save_new_traveler_lead had no
 # deterministic handler and the collected details were never saved.
 # ---------------------------------------------------------------------------
-def test_new_traveler_intake_saves_lead_instead_of_looping(runtime: ToolCallingSessionRuntime) -> None:
-    runtime._write_executor.execute.return_value = {
+def _write_results_by_action(**results: dict) -> object:
+    """Route a mocked write executor by action, mirroring the real dispatch."""
+
+    def _execute(*, action: str, payload: dict, session_context: dict) -> dict:
+        if action not in results:
+            raise AssertionError(f"unexpected write action: {action}")
+        return results[action]
+
+    return _execute
+
+
+NEW_TRAVELER_WRITE = {
+    "executed": True,
+    "result_id": "TR00007",
+    "traveler": {"traveler_id": "TR00007", "full_name": "MAGED MAGED MAGED", "status": "Active"},
+    "write_result": {"created_traveler": {"traveler_id": "TR00007", "status": "Active"}},
+    "write_result_contract": {
+        "status": "success",
+        "record_id": "TR00007",
+        "record_type": "traveler",
         "executed": True,
-        "result_id": "LD00003",
-        "assistant_message": "Lead saved.",
-        "lead_update": {"lead_id": "LD00003"},
-        "write_result_contract": {
-            "status": "success",
-            "record_id": "LD00003",
-            "record_type": "lead",
+    },
+}
+
+
+def test_new_traveler_intake_saves_lead_instead_of_looping(runtime: ToolCallingSessionRuntime) -> None:
+    runtime._write_executor.execute.side_effect = _write_results_by_action(
+        create_traveler=NEW_TRAVELER_WRITE,
+        create_lead={
             "executed": True,
+            "result_id": "LD00003",
+            "assistant_message": "Lead saved.",
+            "lead_update": {"lead_id": "LD00003"},
+            "write_result_contract": {
+                "status": "success",
+                "record_id": "LD00003",
+                "record_type": "lead",
+                "executed": True,
+            },
         },
-    }
+    )
     session = runtime.create_session()
     for text in ("01270482380", "MAGED MAGED MAGED", "EGY", "28/4/2006"):
         session = _send(runtime, text, session)
@@ -84,16 +112,21 @@ def test_new_traveler_intake_saves_lead_instead_of_looping(runtime: ToolCallingS
     assert session.new_traveler_lead_saved is True
     assert "LD00003" in reply
     assert "I need one more detail" not in reply
-    runtime._write_executor.execute.assert_called_once()
-    assert runtime._write_executor.execute.call_args.kwargs["action"] == "create_lead"
+    # A new traveler must get a Traveler record before the lead is written, so the
+    # lead is linked and the same customer is recognized in every later session.
+    actions = [call.kwargs["action"] for call in runtime._write_executor.execute.call_args_list]
+    assert actions == ["create_traveler", "create_lead"]
 
     # The loop must not resurface on the following turn either: the runtime
     # should have moved on to the next step (trip type) rather than re-asking
     # for a currency it already has.
     session = _send(runtime, "1", session)
     assert "Which payment currency" not in session.messages[-1]["text"]
-    # Guard against double-saving the same lead.
-    assert runtime._write_executor.execute.call_count == 1
+    # Guard against double-saving the same lead / traveler.
+    assert [call.kwargs["action"] for call in runtime._write_executor.execute.call_args_list] == [
+        "create_traveler",
+        "create_lead",
+    ]
 
 
 def test_new_traveler_lead_save_failure_does_not_falsely_claim_success(runtime: ToolCallingSessionRuntime) -> None:
@@ -119,21 +152,24 @@ def test_new_traveler_lead_save_failure_does_not_falsely_claim_success(runtime: 
 # model call that produced an empty/rejected reply every single turn.
 # ---------------------------------------------------------------------------
 def test_new_traveler_intake_completes_when_lead_already_exists_for_this_traveler(runtime: ToolCallingSessionRuntime) -> None:
-    runtime._write_executor.execute.return_value = {
-        "executed": False,
-        "result_id": "LD00004",
-        "reply": "Your request LD00004 is already recorded. We will follow up with you.",
-        "assistant_message": "Your request LD00004 is already recorded. We will follow up with you.",
-        "lead_update": {"lead_id": "LD00004", "lead_stage": "New"},
-        "write_result_contract": {
-            "status": "duplicate",
-            "reused": True,
-            "record_id": "LD00004",
-            "record_type": "lead",
+    runtime._write_executor.execute.side_effect = _write_results_by_action(
+        create_traveler=NEW_TRAVELER_WRITE,
+        create_lead={
             "executed": False,
+            "result_id": "LD00004",
+            "reply": "Your request LD00004 is already recorded. We will follow up with you.",
+            "assistant_message": "Your request LD00004 is already recorded. We will follow up with you.",
+            "lead_update": {"lead_id": "LD00004", "lead_stage": "New"},
+            "write_result_contract": {
+                "status": "duplicate",
+                "reused": True,
+                "record_id": "LD00004",
+                "record_type": "lead",
+                "executed": False,
+            },
+            "session_update": {"lead_status": "New", "final_result": {"lead_id": "LD00004"}},
         },
-        "session_update": {"lead_status": "New", "final_result": {"lead_id": "LD00004"}},
-    }
+    )
     session = runtime.create_session()
     for text in ("01270482380", "MAGED MAGED MAGED", "EGY", "28/4/2006"):
         session = _send(runtime, text, session)
@@ -145,7 +181,10 @@ def test_new_traveler_intake_completes_when_lead_already_exists_for_this_travele
     assert session.new_traveler_lead_saved is True
     assert "LD00004" in reply
     assert "I need one more detail" not in reply
-    runtime._write_executor.execute.assert_called_once()
+    assert [call.kwargs["action"] for call in runtime._write_executor.execute.call_args_list] == [
+        "create_traveler",
+        "create_lead",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -476,3 +515,430 @@ def test_max_tokens_retry_disables_thinking_and_has_a_real_token_budget() -> Non
     retry_config = provider.calls[0]["generation_config"]
     assert retry_config["thinkingConfig"] == {"thinkingBudget": 0}
     assert retry_config["maxOutputTokens"] >= 512
+
+
+# ===========================================================================
+# Live transcript, 2026-08-05 (new traveler 01554158741 / "Mohamed Ashraf
+# Safwat"). One session produced six separate failures in a row: the name was
+# asked twice, the trip-type answer dead-ended on "your request LD00001 is
+# already recorded", a plain "which local trips do you have?" was answered
+# with "I could not find a trip with that name", and two follow-up questions
+# came back as the generic "sorry, I couldn't prepare that response" apology.
+# ===========================================================================
+
+
+def _verified_runtime(runtime: ToolCallingSessionRuntime, **traveler: str) -> ToolCallingSessionRuntime:
+    identity = {"traveler_id": "TR00042", "full_name": "Returning Traveler", "status": "Active"}
+    identity.update(traveler)
+    runtime._read_only_tools = RecordingReadTools(identity=identity)
+    return runtime
+
+
+# Bug 1: "Mohamed Ashraf Safwat." (with the sentence-ending period people type)
+# failed the three-part-name check, so the agent asked the identical question
+# again as if the customer had sent nothing.
+@pytest.mark.parametrize(
+    "typed_name",
+    ["Mohamed Ashraf Safwat.", "Mohamed Ashraf Safwat!", "محمد أشرف صفوت."],
+)
+def test_full_name_with_trailing_punctuation_is_accepted(typed_name: str) -> None:
+    extracted = ToolCallingSessionRuntime._extract_valid_full_name(typed_name)
+    assert extracted
+    assert extracted == typed_name.rstrip(".!")
+
+
+def test_new_traveler_name_question_is_not_repeated_after_a_valid_answer(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    session = runtime.create_session()
+    session = _send(runtime, "01554158741", session)
+    name_prompt = session.messages[-1]["text"]
+
+    session = _send(runtime, "Mohamed Ashraf Safwat.", session)
+
+    assert session.customer_name == "Mohamed Ashraf Safwat"
+    assert session.messages[-1]["text"] != name_prompt
+    assert session.stage == "nationality_required"
+
+
+# Bug 2: once the new-traveler lead was saved, the stored workflow still said
+# lookup_status="not_found", so every later turn re-entered the new-traveler
+# intake branch, asked the model to save an already-saved lead, and the write
+# gate replaced the whole reply with "your request LD00001 is already
+# recorded" -- forever. The traveler could never reach the trip questions.
+def test_saved_new_traveler_lead_continues_into_the_trip_workflow(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    runtime._write_executor.execute.side_effect = _write_results_by_action(
+        create_traveler=NEW_TRAVELER_WRITE,
+        create_lead={
+            "executed": True,
+            "result_id": "LD00001",
+            "lead_update": {"lead_id": "LD00001"},
+            "write_result_contract": {
+                "status": "success",
+                "record_id": "LD00001",
+                "record_type": "lead",
+                "executed": True,
+            },
+        },
+    )
+    session = runtime.create_session()
+    for text in ("01554158741", "Mohamed Ashraf Safwat.", "Egyptian", "28/4/2003", "1"):
+        session = _send(runtime, text, session)
+    assert session.new_traveler_lead_saved is True
+    # The traveler is now a verified CRM identity, not a "new traveler" any more.
+    assert session.preview["workflow"]["identity_verified"] is True
+    assert session.preview["traveler"]["traveler_id"] == "TR00007"
+    assert session.stage == "trip_type_required"
+
+    session = _send(runtime, "local", session)
+
+    reply = session.messages[-1]["text"]
+    assert session.trip_type == "local"
+    assert "already recorded" not in reply.lower()
+    assert "مسجل بالفعل" not in reply
+    # Real verified trips from CRM, offered for selection.
+    assert "Siwa Discovery Demo" in reply
+    assert session.stage == "trip_selection_required"
+    # And no second lead write was attempted for the same customer.
+    assert [call.kwargs["action"] for call in runtime._write_executor.execute.call_args_list] == [
+        "create_traveler",
+        "create_lead",
+    ]
+
+
+def test_workflow_policy_does_not_reask_intake_for_a_saved_new_traveler() -> None:
+    from services.ai_agent.ai_agent_app.agent.workflow_policy import ConversationWorkflowPolicy
+
+    context = {
+        "workflow": {"lookup_status": "not_found"},
+        "known_traveler": {"traveler_id": "TR00007", "status": "Active"},
+        "new_traveler_lead_saved": True,
+        "customer_name": "Mohamed Ashraf Safwat",
+        "trip_type": "",
+    }
+    decision = ConversationWorkflowPolicy().evaluate(context)
+    assert decision.required_step == "collect_trip_type"
+    assert decision.identity_verified is True
+
+
+# Bug 3: "ايه الرحلات الداخليه ؟" (which local trips do you have?) was routed
+# through the trip-name resolver, matched nothing, and was answered with "I
+# could not find a confirmed trip with that name" -- which reads as if Ravel
+# has no trips at all.
+@pytest.mark.parametrize(
+    "question",
+    [
+        "ايه الرحلات الداخليه ؟",
+        "في رحلات متاحة؟",
+        "what trips do you have?",
+        "show me the available trips",
+    ],
+)
+def test_trip_discovery_questions_are_recognized(question: str) -> None:
+    assert ToolCallingSessionRuntime._is_trip_discovery_request(question) is True
+
+
+@pytest.mark.parametrize("question", ["رحلة اسطنبول", "Siwa Discovery Demo", "1"])
+def test_trip_name_references_are_not_treated_as_discovery(question: str) -> None:
+    assert ToolCallingSessionRuntime._is_trip_discovery_request(question) is False
+
+
+def test_trip_discovery_question_lists_verified_trips(runtime: ToolCallingSessionRuntime) -> None:
+    _verified_runtime(runtime)
+    session = runtime.create_session()
+    session = _send(runtime, "01554158741", session)
+
+    session = _send(runtime, "ايه الرحلات الداخليه ؟", session)
+
+    reply = session.messages[-1]["text"]
+    assert "لم أجد" not in reply
+    assert "could not find" not in reply.lower()
+    assert "Siwa Discovery Demo" in reply
+    assert "Siwa Wellness Demo" in reply
+    # Arabic session -> Arabic framing around the verified trip names.
+    assert "الرحلات" in reply
+
+
+def test_trip_list_is_written_in_arabic_for_an_arabic_session() -> None:
+    session = SessionState(id="s1", agent_mode="tool_calling", language="ar", trip_type="local")
+    session.preview = {
+        "trip_result": {
+            "open_trips": [
+                {
+                    "trip_id": "RT-LOC-26-900",
+                    "trip_name": "Siwa Discovery Demo",
+                    "start_date": "2026-09-10",
+                    "end_date": "2026-09-14",
+                    "public_price": "2000 EGP",
+                }
+            ],
+            "date_tbd_trips": [],
+        }
+    }
+
+    reply = ToolCallingSessionRuntime._canonical_trip_search_reply(session)
+
+    assert "Here are the" not in reply
+    assert "Please reply" not in reply
+    assert "التاريخ" in reply
+    assert "السعر" in reply
+    assert "Siwa Discovery Demo" in reply
+
+
+# Bug 4: after the lead was saved, any later turn where the agent truthfully
+# mentioned the saved request ("تم تسجيل طلبك") was rejected by the
+# false-write-success guard, because that guard only ever looked at the
+# current turn's tool results. The customer saw the generic apology instead.
+def test_reply_may_reference_a_record_saved_on_an_earlier_turn() -> None:
+    reply_text = "تم تسجيل طلبك LD00001 وسنتابع معك خطوات الرحلة."
+    issue, _terms = response_guard_issue(reply_text, write_result=None, record_type="")
+    assert issue == "false_write_success_claim"
+
+    issue, _terms = response_guard_issue(
+        reply_text,
+        write_result=None,
+        record_type="",
+        known_record_ids={"lead": "LD00001"},
+    )
+    assert issue == ""
+
+
+def test_write_success_claim_is_still_blocked_without_any_saved_record() -> None:
+    issue, _terms = response_guard_issue(
+        "تم تسجيل طلب الحجز الخاص بك.",
+        write_result=None,
+        record_type="",
+        known_record_ids={},
+    )
+    assert issue == "false_write_success_claim"
+
+
+# Bug 5: the Arabic boys/girls question (the gender step that gates room
+# availability) was stored double-encoded in the source, so Arabic customers
+# were shown mojibake -- and the response guard's own mojibake check would
+# reject any reply that echoed it.
+def test_traveler_gender_and_room_prompts_are_valid_arabic() -> None:
+    from services.ai_agent.ai_agent_app.agent.workflow_policy import ConversationWorkflowPolicy
+
+    policy = ConversationWorkflowPolicy()
+    decision = policy._post_identity_decision(
+        {"language": "ar", "trip_type": "local", "selected_trip_id": "RT-LOC-26-900"},
+        traveler={"traveler_id": "TR00042", "status": "Active"},
+        status="Active",
+    )
+    assert decision.required_step == "collect_traveler_gender"
+    for message in (
+        decision.assistant_message,
+        policy._room_inventory_prompt({"available_single": 0}, room_group="boys", arabic=True),
+    ):
+        issue, _terms = response_guard_issue(message)
+        assert issue != "mojibake_text", message
+        assert any("؀" <= ch <= "ۿ" for ch in message)
+
+
+# Bug 6: nothing in the runtime ever created the booking draft. The workflow
+# collected every answer, asked for confirmation, and then handed the turn to
+# the model and hoped it would call create_booking_draft on its own. When it
+# did not, the traveler had confirmed a booking that was never written to the
+# booking page.
+BOOKING_DRAFT_WRITE = {
+    "executed": True,
+    "result_id": "BK00001",
+    "booking_result": {"booking_id": "BK00001", "booking_status": "Draft"},
+    "write_result_contract": {
+        "status": "success",
+        "record_id": "BK00001",
+        "record_type": "booking",
+        "executed": True,
+    },
+    "session_update": {
+        "booking_result": {"booking_id": "BK00001", "booking_status": "Draft"},
+        "booking_status": "Draft",
+    },
+}
+
+
+def _answer_booking_questions(runtime: ToolCallingSessionRuntime) -> SessionState:
+    """Walk the full verified-traveler booking flow up to the confirmation step."""
+
+    _verified_runtime(runtime)
+    session = runtime.create_session()
+    for text in ("01554158741", "local", "1", "boys", "single", "2"):
+        session = _send(runtime, text, session)
+    return session
+
+
+def test_full_booking_flow_asks_every_step_in_order_then_confirms(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    runtime._write_executor.execute.side_effect = _write_results_by_action(
+        create_booking_draft=BOOKING_DRAFT_WRITE
+    )
+    _verified_runtime(runtime)
+    session = runtime.create_session()
+
+    session = _send(runtime, "01554158741", session)
+    assert session.stage == "trip_type_required"
+    session = _send(runtime, "local", session)
+    assert session.stage == "trip_selection_required"
+    assert "Siwa Discovery Demo" in session.messages[-1]["text"]
+    session = _send(runtime, "1", session)
+    assert session.selected_trip_id == "RT-LOC-26-900"
+    # Gender is asked before the room options, because room inventory is split
+    # by boys/girls in CRM.
+    assert session.stage == "traveler_gender_required"
+    session = _send(runtime, "boys", session)
+    assert session.stage == "room_type_required"
+    session = _send(runtime, "single", session)
+    assert session.stage == "group_size_required"
+    session = _send(runtime, "2", session)
+    assert session.stage == "booking_confirmation_required"
+    summary = session.messages[-1]["text"]
+    assert "Siwa Discovery Demo" in summary
+    assert "confirm" in summary.lower()
+
+
+def test_confirmed_booking_writes_the_draft_without_relying_on_the_model(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    runtime._write_executor.execute.side_effect = _write_results_by_action(
+        create_booking_draft=BOOKING_DRAFT_WRITE
+    )
+    session = _answer_booking_questions(runtime)
+    assert session.stage == "booking_confirmation_required"
+
+    session = _send(runtime, "yes", session)
+
+    reply = session.messages[-1]["text"]
+    assert "BK00001" in reply
+    assert session.booking_completed is True
+    assert session.booking_status == "Draft"
+    call = runtime._write_executor.execute.call_args_list[-1]
+    assert call.kwargs["action"] == "create_booking_draft"
+    payload = call.kwargs["payload"]
+    assert payload["trip_id"] == "RT-LOC-26-900"
+    assert payload["room_type"] == "Single"
+    assert payload["room_group"] == "boys"
+    assert payload["group_size"] == 2
+    # The room count is derived from the traveler count, which is collected
+    # after the room type: 2 travelers in single rooms means 2 rooms, not the
+    # 1 room that was derived while the group size was still unknown.
+    assert payload["boys_rooms_requested"] == 2
+    assert payload["traveler_id"] == "TR00042"
+    # A second "yes" must not create a duplicate booking.
+    session = _send(runtime, "yes", session)
+    assert sum(
+        1 for entry in runtime._write_executor.execute.call_args_list if entry.kwargs["action"] == "create_booking_draft"
+    ) == 1
+
+
+def test_international_trip_requires_a_passport_attachment_before_the_draft(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    runtime._write_executor.execute.side_effect = _write_results_by_action(
+        create_booking_draft=BOOKING_DRAFT_WRITE
+    )
+    _verified_runtime(runtime)
+    session = runtime.create_session()
+    for text in ("01554158741", "international", "1", "boys", "single", "2"):
+        session = _send(runtime, text, session)
+
+    # International trips add two steps a local trip does not have: the flight
+    # question and the passport attachment.
+    assert session.stage == "flight_option_required"
+    session = _send(runtime, "2", session)
+    assert session.flight_option == "Without Flight"
+    assert session.stage == "awaiting_passport_upload"
+    assert "passport" in session.messages[-1]["text"].lower()
+
+    # Typing instead of attaching must not skip the requirement.
+    session = _send(runtime, "I will send it later", session)
+    assert session.stage == "awaiting_passport_upload"
+
+    runtime.handle_passport_attachment(session, "passport-scan.pdf")
+    session = _send(runtime, "done", session)
+
+    assert session.stage == "booking_confirmation_required"
+    session = _send(runtime, "yes", session)
+    payload = runtime._write_executor.execute.call_args_list[-1].kwargs["payload"]
+    assert payload["trip_id"] == "RT-INT-26-001"
+    assert payload["passport_attachment_ref"] == "passport-scan.pdf"
+    assert "BK00001" in session.messages[-1]["text"]
+
+
+def test_booking_draft_write_failure_never_claims_a_booking(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    runtime._write_executor.execute.side_effect = _write_results_by_action(
+        create_booking_draft={
+            "executed": False,
+            "result_id": "",
+            "assistant_message": "I could not create the booking request yet. Please review the details or try again.",
+            "write_result_contract": {
+                "status": "failed",
+                "record_type": "booking",
+                "executed": False,
+                "error_code": "write_failed",
+            },
+        }
+    )
+    session = _answer_booking_questions(runtime)
+
+    session = _send(runtime, "yes", session)
+
+    reply = session.messages[-1]["text"]
+    assert "BK" not in reply
+    assert session.booking_completed is False
+    assert session.booking_confirmed is False
+    assert "could not" in reply.lower()
+
+
+# Bug 7: the handoff write failed for this customer, and the agent answered
+# with only "I couldn't submit the review request" and parked the session on a
+# dead "waiting" stage, so the conversation had nothing left to answer.
+def test_failed_handoff_keeps_the_pending_workflow_question_alive(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    runtime._write_executor.execute.side_effect = _write_results_by_action(
+        create_handoff={"executed": False, "result_id": ""}
+    )
+    _verified_runtime(runtime)
+    session = runtime.create_session()
+    for text in ("01554158741", "local", "1"):
+        session = _send(runtime, text, session)
+    assert session.stage == "traveler_gender_required"
+
+    session = _send(runtime, "I want to talk to a human", session)
+
+    reply = session.messages[-1]["text"]
+    assert session.handoff_state == "handoff_failed"
+    # Honest about the failure...
+    assert "couldn't submit" in reply.lower() or "could not" in reply.lower()
+    # ...but the workflow still has a live question, not a dead end.
+    assert "boys" in reply.lower()
+    assert session.stage == "traveler_gender_required"
+
+
+# Bug 8: _execute_update_lead_stage referenced an undefined `created_traveler`,
+# so every stage update that ran through this path raised NameError and was
+# reported to the customer as a generic write failure.
+def test_update_lead_stage_builds_a_result_without_a_name_error() -> None:
+    from services.ai_agent.ai_agent_app.agent.write_tool_executor import GeminiWriteToolExecutor
+
+    executor = GeminiWriteToolExecutor.__new__(GeminiWriteToolExecutor)
+    executor.settings = SimpleNamespace(default_country_code="20")
+    executor.service = SimpleNamespace(
+        update_lead_stage=lambda lead_id, **kwargs: {"lead_id": lead_id, "lead_stage": kwargs.get("requested_stage") or ""}
+    )
+
+    result = executor._execute_update_lead_stage(
+        {"lead_id": "LD00001", "requested_stage": "Qualified"},
+        {},
+        SimpleNamespace(decision="APPROVED", traveler_id=""),
+    )
+
+    assert result["result_id"] == "LD00001"
+    assert result["write_result"]["created_traveler"] is None
+    assert result["lead_update"]["lead_stage"] == "Qualified"

@@ -15,7 +15,10 @@ from services.ai_agent.ai_agent_app.agent.persona import AgentPersona
 from services.ai_agent.ai_agent_app.agent.planner import AgentPlanner
 from services.ai_agent.ai_agent_app.agent.privacy_policy import AgentPrivacyPolicy
 from services.ai_agent.ai_agent_app.agent.response_format import format_agent_reply, response_completeness_issue
-from services.ai_agent.ai_agent_app.agent.response_guard import response_guard_issue
+from services.ai_agent.ai_agent_app.agent.response_guard import (
+    known_record_ids_from_context,
+    response_guard_issue,
+)
 from services.ai_agent.ai_agent_app.agent.production_agent import ProductionAgentCoordinator
 from services.ai_agent.ai_agent_app.agent.safety import AgentSafetyLayer
 from services.ai_agent.ai_agent_app.agent.read_only_tools import ReadOnlyCRMTools
@@ -119,6 +122,10 @@ _BACKEND_OWNED_COLLECTION_STEPS = {
     "collect_nationality",
     "collect_birthday",
     "collect_payment_currency",
+    # The local/international question is a fixed two-option choice. Leaving it to
+    # the model meant an unclear answer produced a free-form reply (or a stray
+    # write attempt) instead of simply re-asking the one pending question.
+    "collect_trip_type",
     "select_trip",
     "collect_traveler_gender",
     "collect_room_type",
@@ -133,6 +140,7 @@ _ABUSIVE_OR_HOSTILE_RE = re.compile(
     re.IGNORECASE,
 )
 _NAME_TOKEN_RE = re.compile(r"^[A-Za-z\u0600-\u06FF]+(?:[-'][A-Za-z\u0600-\u06FF]+)*$")
+_NAME_EDGE_PUNCTUATION = ".,;:!?\u060C\u061B\u061F\"'()[]{}*_"
 
 
 class ToolCallingSessionRuntime:
@@ -345,6 +353,10 @@ class ToolCallingSessionRuntime:
             "workflow": workflow,
             "trip_result": trip_result,
             "selected_trip": selected_trip,
+            "new_traveler_lead_saved": bool(session.new_traveler_lead_saved),
+            # Lets the response guard tell a truthful reference to a record saved
+            # earlier in this session apart from an invented write claim.
+            "handoff_id": self._handoff_id(session),
             "collection_state": self._collection_state(session),
             "customer_preferences": {
                 "trip_type": self._effective_trip_type(session),
@@ -410,13 +422,32 @@ class ToolCallingSessionRuntime:
         *,
         write_result: dict[str, Any] | None = None,
         record_type: str = "",
+        known_record_ids: dict[str, str] | None = None,
     ) -> str:
         if ToolCallingSessionRuntime._customer_reply_has_structural_leak(reply):
             return "structural_leak"
-        issue, _terms = response_guard_issue(reply, write_result=write_result, record_type=record_type)
+        issue, _terms = response_guard_issue(
+            reply,
+            write_result=write_result,
+            record_type=record_type,
+            known_record_ids=known_record_ids,
+        )
         if issue:
             return issue
         return response_completeness_issue(reply)
+
+    @classmethod
+    def _session_known_record_ids(cls, session: SessionState) -> dict[str, str]:
+        """Record ids this session already persisted, for the write-claim guard."""
+
+        linked = cls._linked_ids(session)
+        return known_record_ids_from_context(
+            {
+                "lead_id": linked["lead_id"],
+                "booking_id": linked["booking_id"],
+                "handoff_id": cls._handoff_id(session),
+            }
+        )
 
     @staticmethod
     def _response_write_result_for_message(session: SessionState, message_key: str) -> tuple[dict[str, Any] | None, str]:
@@ -458,7 +489,12 @@ class ToolCallingSessionRuntime:
             return self._handoff_already_under_review_message(session)
         fallback = self._normalize_reply(base_text, session.language)
         write_result, record_type = self._response_write_result_for_message(session, message_key)
-        if self._customer_reply_validation_issue(fallback, write_result=write_result, record_type=record_type):
+        if self._customer_reply_validation_issue(
+            fallback,
+            write_result=write_result,
+            record_type=record_type,
+            known_record_ids=self._session_known_record_ids(session),
+        ):
             if session.language.startswith("ar"):
                 return "\u0645\u0639\u0644\u0634\u060c \u0645\u0642\u062f\u0631\u062a\u0634 \u0623\u062c\u0647\u0632 \u0627\u0644\u0631\u062f \u0628\u0634\u0643\u0644 \u0635\u062d\u064a\u062d. \u0645\u0645\u0643\u0646 \u062a\u0628\u0639\u062a \u0637\u0644\u0628\u0643 \u0645\u0631\u0629 \u062a\u0627\u0646\u064a\u0629\u061f"
             return "Sorry, I couldn\u2019t prepare that response properly. Could you try that again?"
@@ -523,7 +559,12 @@ class ToolCallingSessionRuntime:
             return fallback
         reply = self._normalize_reply(str(rewritten or ""), session.language)
         write_result, record_type = self._response_write_result_for_message(session, message_key)
-        validation_issue = self._customer_reply_validation_issue(reply, write_result=write_result, record_type=record_type)
+        validation_issue = self._customer_reply_validation_issue(
+            reply,
+            write_result=write_result,
+            record_type=record_type,
+            known_record_ids=self._session_known_record_ids(session),
+        )
         if validation_issue:
             agent_logger.warning(
                 "AI reply rejected session=%s key=%s reason=%s text=%r",
@@ -648,6 +689,19 @@ class ToolCallingSessionRuntime:
         result = result if isinstance(result, dict) else {}
         status = str(result.get("status") or "").strip()
         traveler = result.get("traveler") if isinstance(result.get("traveler"), dict) else {}
+        if (
+            status == "not_found"
+            and not traveler
+            and ToolCallingSessionRuntime._preview_has_verified_traveler(session)
+        ):
+            # A traveler this session already verified (or just created) must not be
+            # downgraded back to "new traveler" by a later lookup that missed, or
+            # the whole intake restarts and the workflow can never move forward.
+            agent_logger.warning(
+                "Ignored not_found identity result for an already verified session=%s",
+                session.id,
+            )
+            return
         workflow = {
             "lookup_status": status,
             "identity_verified": status == "found" and bool(traveler.get("traveler_id") and traveler.get("status")),
@@ -1028,7 +1082,6 @@ class ToolCallingSessionRuntime:
         session.preview = preview
         self._select_trip(session, trip)
         return trip
-        return None
 
     @staticmethod
     def _trip_reference_choices_reply(matches: list[dict[str, Any]], language: str) -> str:
@@ -1080,6 +1133,61 @@ class ToolCallingSessionRuntime:
                 "\u0648\u0635\u0641",
             )
         )
+
+    @classmethod
+    def _is_trip_discovery_request(cls, text: str) -> bool:
+        """Detect a request for the trip list rather than for one trip by name.
+
+        Without this, the trip-name resolver treats a question like "which trips
+        do you have?" as a trip name, finds nothing, and answers "I could not
+        find a trip with that name" - which reads as if there are no trips at all.
+        """
+        normalized = cls._normalize_trip_reference(text)
+        if not normalized:
+            return False
+        english_phrases = (
+            "what trips",
+            "which trips",
+            "any trips",
+            "available trips",
+            "trips available",
+            "trips do you have",
+            "trips you have",
+            "show me trips",
+            "show me the trips",
+            "show trips",
+            "list of trips",
+            "what do you have",
+            "what is available",
+            "whats available",
+            "where can i go",
+            "what destinations",
+        )
+        arabic_phrases = (
+            "ايه الرحلات",
+            "اي الرحلات",
+            "ايه رحلات",
+            "ايه المتاح",
+            "ايه الموجود",
+            "في رحلات",
+            "فيه رحلات",
+            "هل يوجد رحلات",
+            "يوجد رحلات",
+            "الرحلات المتاحه",
+            "الرحلات المتوفره",
+            "رحلات متاحه",
+            "رحلات متوفره",
+            "عرض الرحلات",
+            "وريني الرحلات",
+            "ورينى الرحلات",
+            "اعرض الرحلات",
+            "ما الرحلات",
+            "الرحلات المتاح",
+            "عندكم رحلات",
+            "عندكو رحلات",
+            "الرحلات عندكم",
+        )
+        return any(phrase in normalized for phrase in (*english_phrases, *arabic_phrases))
 
     @classmethod
     def _is_trip_quality_question(cls, text: str) -> bool:
@@ -1268,7 +1376,7 @@ class ToolCallingSessionRuntime:
             return "I hear you. I’ll keep this simple and help you step by step. Are the travelers boys/male or girls/female? Reply with 1 for boys or 2 for girls."
         if self._is_identity_question(clean_text):
             if language.startswith("ar"):
-                return "أنا مساعد المبيعات بالذكاء الاصطناعي من Rahma Traveler. أراجع الرحلات المؤكدة في CRM وأساعدك في تجهيز طلب الحجز. نكمل: المسافرون شباب ولا بنات؟"
+                return "أنا مساعد المبيعات بالذكاء الاصطناعي من Ravel Traveler. أراجع الرحلات المؤكدة وأساعدك في تجهيز طلب الحجز. نكمل: المسافرون شباب ولا بنات؟"
             return "I’m Ravel Traveler’s AI sales assistant. I check available trips and help prepare your booking request. To continue, are the travelers boys/male or girls/female?"
         if self._is_human_agent_request(clean_text):
             if language.startswith("ar"):
@@ -1296,6 +1404,22 @@ class ToolCallingSessionRuntime:
                 f"No problem, I’m with you on {trip_name}. Let’s take it one step at a time: "
                 "are the travelers boys or girls? Reply with 1 for boys or 2 for girls."
             )
+        if step == "select_trip":
+            if self._is_explanation_request(clean_text):
+                if language.startswith("ar"):
+                    return (
+                        "بسألك تختار رحلة عشان كل رحلة ليها تواريخ وأسعار وغرف مختلفة، "
+                        "ومقدرش أكمل الحجز قبل ما أعرف الرحلة اللي تناسبك.\n\n"
+                        "اكتب رقم الرحلة أو اسمها من القائمة اللي فوق، أو قولي الوجهة أو التاريخ اللي تفضله."
+                    )
+                return (
+                    "I ask you to pick a trip because each one has its own dates, price and rooms, "
+                    "and I cannot prepare the booking before I know which one you want.\n\n"
+                    "Reply with the trip number or name from the list above, or tell me the destination or date you prefer."
+                )
+            if language.startswith("ar"):
+                return "محتاج بس تختار رحلة من القائمة بالرقم أو بالاسم. ولو مفيش رحلة مناسباك، اكتب الوجهة أو التاريخ اللي تفضله."
+            return "I only need you to choose one of the listed trips by number or name. If none of them works for you, tell me the destination or date you prefer."
         if step == "collect_room_type":
             if language.startswith("ar"):
                 return "تمام، عشان أكمل الحجز محتاج اختيار الغرفة فقط. اكتب اسم الغرفة أو رقمها من الاختيارات الظاهرة."
@@ -1495,7 +1619,31 @@ class ToolCallingSessionRuntime:
             return ToolCallingSessionRuntime._no_matching_trip_reply(session.trip_query or session.selected_trip_name, session.language)
 
         trip_type = str(session.trip_type or "").strip().lower()
-        type_label = f" {trip_type}" if trip_type in {"local", "international"} else ""
+        arabic = session.language.startswith("ar")
+        if arabic:
+            # This list is sent as authoritative copy (no model rewrite), so it has
+            # to already be in the customer's language.
+            type_label = {"local": "الداخلية", "international": "الدولية"}.get(trip_type, "")
+            heading = f"دي الرحلات {type_label} المتاحة حاليا:" if type_label else "دي الرحلات المتاحة حاليا:"
+            lines = [heading, ""]
+            for index, trip in enumerate(trips, start=1):
+                name = str(trip.get("trip_name") or trip.get("trip_id") or "رحلة بدون اسم").strip()
+                lines.append(f"{index}) {name}")
+                start_date = str(trip.get("start_date") or "").strip()
+                end_date = str(trip.get("end_date") or "").strip()
+                if start_date and end_date:
+                    lines.append(f"التاريخ: من {start_date} إلى {end_date}")
+                elif start_date:
+                    lines.append(f"التاريخ: {start_date}")
+                else:
+                    lines.append("التاريخ: لم يتحدد بعد")
+                price = str(trip.get("public_price") or "").strip()
+                if price:
+                    lines.append(f"السعر: {price}")
+                lines.append("")
+            lines.append("من فضلك اكتب رقم الرحلة أو اسمها بالكامل.")
+            return "\n".join(lines)
+
         if trip_type in {"local", "international"}:
             heading = f"Here are the {trip_type} trips currently available:"
         else:
@@ -1638,6 +1786,12 @@ class ToolCallingSessionRuntime:
             room = room_request
         flight = session.flight_option or "not specified"
         if session.language.startswith("ar"):
+            flight = {
+                "With Flight": "مع طيران",
+                "Without Flight": "بدون طيران",
+                "Not Applicable": "غير متاح لهذه الرحلة",
+                "": "لم يتحدد",
+            }.get(str(session.flight_option or ""), str(session.flight_option or "لم يتحدد"))
             return (
                 "قبل إنشاء طلب الحجز، هذه هي التفاصيل المؤكدة:\n"
                 f"الرحلة: {trip_name}\n"
@@ -1661,7 +1815,10 @@ class ToolCallingSessionRuntime:
 
     @classmethod
     def _ensure_room_requirements_for_group(cls, session: SessionState) -> None:
-        if isinstance(session.room_requirements, dict) and session.room_requirements.get("requirements"):
+        existing = session.room_requirements if isinstance(session.room_requirements, dict) else {}
+        if existing.get("requirements") and existing.get("source") != "derived_from_group_size":
+            # The customer spelled the rooms out themselves (for example a mixed
+            # boys/girls request); never overwrite that with a derived count.
             return
         room_type = str(session.room_type or "").strip().title()
         room_group = str(session.room_group or "").strip().lower()
@@ -1674,6 +1831,9 @@ class ToolCallingSessionRuntime:
             "requirements": [{"room_type": room_type, "room_group": room_group, "rooms": rooms}],
             "boys_rooms_requested": rooms if room_group == "boys" else 0,
             "girls_rooms_requested": rooms if room_group == "girls" else 0,
+            # Marks this as derived, so it is recalculated when the traveler count
+            # changes instead of booking a stale room count.
+            "source": "derived_from_group_size",
         }
 
     @staticmethod
@@ -1682,6 +1842,8 @@ class ToolCallingSessionRuntime:
         requirements = data.get("requirements") if isinstance(data.get("requirements"), list) else []
         if not requirements:
             return ""
+        arabic = session.language.startswith("ar")
+        arabic_groups = {"boys": "شباب", "girls": "بنات"}
         parts = []
         for item in requirements:
             if not isinstance(item, dict):
@@ -1691,12 +1853,19 @@ class ToolCallingSessionRuntime:
                 continue
             group = str(item.get("room_group") or "").strip()
             room_type = str(item.get("room_type") or "room").strip().lower()
+            if arabic:
+                group_label = arabic_groups.get(group.lower(), group)
+                room_word = "غرفة" if rooms == 1 else "غرف"
+                parts.append(" ".join(part for part in (f"{rooms} {room_word}", room_type.title(), group_label) if part.strip()))
+                continue
             label = f"{rooms} {group} {room_type} room"
             if rooms != 1:
                 label += "s"
             parts.append(label)
         if not parts:
             return ""
+        if arabic:
+            return "المطلوب: " + " و ".join(parts)
         return "Requested: " + " and ".join(parts)
 
     def _handle_booking_confirmation_reply(self, session: SessionState, clean_text: str) -> bool:
@@ -1905,6 +2074,45 @@ class ToolCallingSessionRuntime:
         session.fallback_used = False
         return True
 
+    def _handle_trip_discovery_request_if_ready(self, session: SessionState, clean_text: str) -> bool:
+        """Answer "which trips do you have?" with the verified list for that trip type."""
+
+        if session.selected_trip_id or not self._is_trip_discovery_request(clean_text):
+            return False
+        if not self._preview_has_verified_traveler(session):
+            # Trip inventory for a verified traveler is only shown after the
+            # phone-first identity step; the normal flow asks for that.
+            return False
+        session.messages.append({"role": "user", "text": clean_text})
+        trip_type = self._effective_trip_type(session)
+        if trip_type not in {"local", "international"}:
+            decision = self._workflow_policy.evaluate(self._build_context(session, clean_text))
+            session.stage = decision.state
+            self._append_authoritative_reply(
+                session,
+                message_key="trip.discovery.trip_type_required",
+                base_text=self._backend_required_step_reply(session, decision, clean_text),
+            )
+            session.tools_used = []
+            session.fallback_used = False
+            return True
+        self._load_verified_trip_results(session)
+        decision = self._workflow_policy.evaluate(self._build_context(session, clean_text))
+        session.stage = decision.state
+        self._append_authoritative_reply(
+            session,
+            message_key="trip.discovery.results",
+            base_text=self._canonical_trip_search_reply(session),
+        )
+        session.tools_used = ["search_trips"]
+        session.fallback_used = False
+        agent_logger.info(
+            "Tool-calling session %s answered a trip discovery question type=%s",
+            session.id,
+            trip_type,
+        )
+        return True
+
     def _handle_public_trip_reference_if_present(self, session: SessionState, clean_text: str) -> bool:
         if session.selected_trip_id:
             return False
@@ -1959,6 +2167,7 @@ class ToolCallingSessionRuntime:
             return True
         if (
             self._has_trip_reference_words(clean_text)
+            and not self._is_trip_discovery_request(clean_text)
             and not self._extract_phone_candidate(clean_text)
             and len(self._trip_reference_tokens(query)) <= 4
         ):
@@ -2522,8 +2731,29 @@ class ToolCallingSessionRuntime:
 
     def _execute_manual_handoff(self, session: SessionState, clean_text: str) -> bool:
         session_context = self._build_context(session, clean_text)
+        traveler_id = str(session_context.get("traveler_id") or "").strip()
+        if not traveler_id:
+            # A handoff row with no traveler behind it is hard for the team to work
+            # and can be rejected by the CRM, so resolve the identity first when
+            # the session already knows the WhatsApp number.
+            raw_phone = str(session.raw_phone or session.pending_raw_phone or "").strip()
+            if raw_phone:
+                try:
+                    lookup = self._read_only_tools.find_traveler_by_phone(
+                        raw_phone=raw_phone,
+                        country_code=session.country_code or self.settings.default_country_code,
+                    )
+                    found = lookup.get("traveler") if isinstance(lookup, dict) else {}
+                    if isinstance(found, dict) and str(found.get("traveler_id") or "").strip():
+                        traveler_id = str(found["traveler_id"]).strip()
+                        self._mark_traveler_verified(session, found)
+                        session_context = self._build_context(session, clean_text)
+                except Exception as exc:
+                    agent_logger.warning(
+                        "Traveler lookup before handoff failed session=%s error=%s", session.id, exc
+                    )
         payload = {
-            "traveler_id": session_context.get("traveler_id") or "",
+            "traveler_id": traveler_id,
             "raw_phone": session.raw_phone or session.pending_raw_phone,
             "country_code": session.country_code or self.settings.default_country_code,
             "lead_id": session_context.get("lead_id") or "",
@@ -2581,16 +2811,34 @@ class ToolCallingSessionRuntime:
             agent_logger.info("Handoff created session=%s handoff=%s reason=customer_requested_human", session.id, result.get("result_id"))
             return True
 
-        self._append_agent_reply(
+        agent_logger.error(
+            "Manual handoff write did not execute session=%s traveler=%s lead=%s contract=%s",
+            session.id,
+            payload.get("traveler_id") or "",
+            payload.get("lead_id") or "",
+            (result or {}).get("write_result_contract") if isinstance(result, dict) else None,
+        )
+        # A failed handoff must stay honest, but it must not end the conversation:
+        # keep the pending workflow step alive so the traveler can continue here
+        # instead of being left on a dead "waiting" stage with nothing to answer.
+        failure_text = self._safe_response_fallback(
             session,
             message_key="workflow.handoff_failed.customer_requested_human",
-            base_text=self._safe_response_fallback(session, message_key="workflow.handoff_failed.customer_requested_human"),
-            user_text=clean_text,
-            required_action="Tell the traveler the automatic handoff could not be submitted. Do not claim success.",
-            session_context=session_context,
         )
-        session.stage = "waiting"
+        pending_decision = self._resolve_next_step_decision(session, clean_text)
+        pending_question = self._next_step_prompt(session, pending_decision, clean_text).strip()
+        if pending_question:
+            connector = "\n\nولو تحب نكمل هنا:\n" if session.language.startswith("ar") else "\n\nIf you would like to continue here:\n"
+            failure_text = f"{failure_text}{connector}{pending_question}"
         session.handoff_state = "handoff_failed"
+        # Deliberately not the "handoff_failed" message key: that key is a hard
+        # override in _safe_response_fallback and would drop the pending question.
+        self._append_authoritative_reply(
+            session,
+            message_key="workflow.handoff_unavailable.customer_requested_human",
+            base_text=failure_text,
+        )
+        session.stage = pending_decision.state or "waiting"
         session.tools_used = []
         session.fallback_used = True
         return True
@@ -2740,6 +2988,8 @@ class ToolCallingSessionRuntime:
         if not media_intent and self._handle_trip_details_request_if_ready(session, clean_text):
             agent_logger.info("Tool-calling session %s answered trip follow-up details from session CRM context", session.id)
             return session
+        if not media_intent and self._handle_trip_discovery_request_if_ready(session, clean_text):
+            return session
         if not media_intent and self._handle_public_trip_reference_if_present(session, clean_text):
             agent_logger.info("Tool-calling session %s resolved public trip reference from CRM", session.id)
             return session
@@ -2825,15 +3075,41 @@ class ToolCallingSessionRuntime:
             if not step_value_captured:
                 # An unclear customer input is not an incomplete assistant output.
                 # Keep the pending field unchanged and answer from the deterministic policy.
-                self._append_authoritative_reply(
-                    session,
-                    message_key=f"workflow.unclear_input.{workflow_decision.required_step}",
-                    base_text=(
+                step_just_started = capture_stage != workflow_decision.state
+                pending_base_text = (
+                    # A step that just became current gets its own plain question;
+                    # only a genuine unclear answer gets the softer re-ask copy.
+                    self._next_step_prompt(session, workflow_decision, clean_text)
+                    if step_just_started
+                    else (
                         self._canonical_trip_search_reply(session)
                         if workflow_decision.required_step == "select_trip"
                         else self._natural_interruption_fallback(session, workflow_decision, clean_text)
-                    ),
+                    )
                 )
+                if step_just_started:
+                    # This step only became current on this turn (for example the
+                    # CRM lookup just verified the traveler), so the customer never
+                    # gave an unclear answer to it. Let the agent voice the question
+                    # instead of firing the re-ask copy at someone who did nothing
+                    # wrong.
+                    self._append_agent_reply(
+                        session,
+                        message_key=f"workflow.required_step.{workflow_decision.required_step}",
+                        base_text=pending_base_text,
+                        user_text=clean_text,
+                        required_action=(
+                            "Ask only this one required workflow question. Preserve every listed "
+                            "verified trip name and option exactly as given."
+                        ),
+                        session_context=session_context,
+                    )
+                else:
+                    self._append_authoritative_reply(
+                        session,
+                        message_key=f"workflow.unclear_input.{workflow_decision.required_step}",
+                        base_text=pending_base_text,
+                    )
                 session.stage = workflow_decision.state
                 session.tools_used = [str(preloaded_tool_event["name"])] if preloaded_tool_event else []
                 session.fallback_used = False
@@ -2875,6 +3151,10 @@ class ToolCallingSessionRuntime:
                 session.selected_trip_id,
             )
             return session
+
+        if workflow_decision.required_step == "create_booking_draft" and session.booking_confirmed:
+            if self._execute_booking_draft(session, session_context, workflow_decision):
+                return session
 
         if workflow_decision.required_step == "create_booking_draft" and not session.booking_confirmed:
             session.booking_confirmation_requested = True
@@ -2943,18 +3223,13 @@ class ToolCallingSessionRuntime:
             session.messages.append({"role": "assistant", "text": error_reply})
             session.fallback_used = True
             return session
-            session.messages.append(
-                {
-                    "role": "assistant",
-                    "text": "I’m having trouble completing that request right now. Please try again in a moment.",
-                }
-            )
-            session.fallback_used = True
-            return session
 
         media = self._media_from_agent_result(result)
         response_fallback_used = False
-        validation_issue = self._customer_reply_validation_issue(reply)
+        validation_issue = self._customer_reply_validation_issue(
+            reply,
+            known_record_ids=self._session_known_record_ids(session),
+        )
         if validation_issue:
             agent_logger.warning(
                 "Model reply rejected session=%s reason=%s text=%r",
@@ -3149,9 +3424,11 @@ class ToolCallingSessionRuntime:
         """
         if session.new_traveler_lead_saved:
             return False
+        traveler = self._ensure_traveler_record(session, session_context)
         payload = {
             "customer_name": session.customer_name,
             "full_name": session.customer_name,
+            "traveler_id": str(traveler.get("traveler_id") or ""),
             "raw_phone": session.raw_phone or session.pending_raw_phone,
             "country_code": session.country_code or self.settings.default_country_code,
             "nationality": session.nationality,
@@ -3196,35 +3473,303 @@ class ToolCallingSessionRuntime:
         if not str(session.final_result.get("lead_id") or "").strip():
             session.final_result = {**session.final_result, "lead_id": lead_id}
         session.lead_status = session.lead_status or "saved"
+        # Persist the traveler identity as verified. Without this the stored
+        # workflow keeps lookup_status="not_found", every later turn re-enters the
+        # new-traveler intake branch, and the conversation dead-ends on a lead
+        # that is already saved instead of moving on to the trip questions.
+        traveler = self._traveler_from_write_result(result) or traveler
+        if traveler.get("traveler_id"):
+            self._mark_traveler_verified(session, traveler)
+        else:
+            agent_logger.error(
+                "New traveler lead %s saved without a linked traveler id session=%s",
+                lead_id,
+                session.id,
+            )
+        next_decision = self._resolve_next_step_decision(session)
         self._append_authoritative_reply(
             session,
             message_key="lead.new_traveler_saved",
-            base_text=self._new_traveler_lead_saved_message(session, lead_id),
+            base_text=self._new_traveler_lead_saved_message(session, lead_id, next_decision),
         )
         session.tools_used = ["create_lead"]
         session.fallback_used = False
-        session.stage = decision.state
+        session.stage = next_decision.state or decision.state
         agent_logger.info(
-            "New traveler lead persisted session=%s lead=%s",
+            "New traveler lead persisted session=%s lead=%s traveler=%s next_step=%s",
             session.id,
-            result.get("result_id", ""),
+            lead_id,
+            traveler.get("traveler_id") or "",
+            next_decision.required_step,
         )
         return True
 
+    def _execute_booking_draft(
+        self,
+        session: SessionState,
+        session_context: dict[str, Any],
+        decision,
+    ) -> bool:
+        """Create the confirmed booking draft in CRM from verified session state.
+
+        The booking draft used to depend on the model deciding to call the write
+        tool on its own. When it did not, the traveler had answered every question
+        and confirmed, and nothing was ever written to the booking page.
+        """
+        if session.booking_completed or str(self._linked_ids(session)["booking_id"] or "").strip():
+            return False
+        if not session.booking_confirmed or not session.selected_trip_id:
+            return False
+        linked = self._linked_ids(session)
+        requirements = session.room_requirements if isinstance(session.room_requirements, dict) else {}
+        payload = {
+            "traveler_id": linked["traveler_id"],
+            "raw_phone": session.raw_phone or session.pending_raw_phone,
+            "country_code": session.country_code or self.settings.default_country_code,
+            "lead_id": linked["lead_id"],
+            "trip_id": session.selected_trip_id,
+            "traveler_name": session.customer_name,
+            "customer_name": session.customer_name,
+            "room_type": session.room_type,
+            "room_group": session.room_group,
+            "room_requirements": dict(requirements),
+            "boys_rooms_requested": requirements.get("boys_rooms_requested") or 0,
+            "girls_rooms_requested": requirements.get("girls_rooms_requested") or 0,
+            "flight_option": session.flight_option,
+            # A returning traveler is never re-asked for their currency, so fall
+            # back to the preference already stored on their CRM profile instead
+            # of writing the booking draft with an empty currency.
+            "currency": session.currency or self._traveler_preferred_currency(session),
+            "passport_attachment_ref": session.passport_attachment_ref,
+            "group_size": session.group_size,
+            "channel": "web",
+            "source": "Gemini Agent",
+            "flow_key": f"tool_calling:{session.id}",
+            "agent_notes": (
+                f"Confirmed in chat. Trip: {session.selected_trip_name or session.selected_trip_id}, "
+                f"room: {session.room_type or 'n/a'} {session.room_group or ''}".strip()
+            ),
+        }
+        try:
+            result = self._write_executor.execute(
+                action="create_booking_draft",
+                payload=payload,
+                session_context={**session_context, "booking_confirmed": True},
+            )
+        except Exception as exc:
+            agent_logger.error("Booking draft could not be created session=%s error=%s", session.id, exc)
+            result = {}
+        booking_id = str((result or {}).get("result_id") or "").strip() if isinstance(result, dict) else ""
+        if booking_id and write_result_allows_success(result, "booking"):
+            self._apply_result(session, {"write_results": [result], "tool_requests": []})
+            session.booking_completed = True
+            booking_result = session.booking_result if isinstance(session.booking_result, dict) else {}
+            session.booking_status = str(booking_result.get("booking_status") or session.booking_status or "Draft")
+            session.booking_confirmation_requested = False
+            if not isinstance(session.final_result, dict):
+                session.final_result = {}
+            if not str(session.final_result.get("booking_id") or "").strip():
+                session.final_result = {**session.final_result, "booking_id": booking_id}
+            session.stage = "post_booking_support"
+            self._append_authoritative_reply(
+                session,
+                message_key="booking.draft_created",
+                base_text=self._booking_draft_created_message(session, booking_id),
+            )
+            session.tools_used = ["create_booking_draft"]
+            session.fallback_used = False
+            agent_logger.info(
+                "Booking draft persisted session=%s booking=%s trip=%s",
+                session.id,
+                booking_id,
+                session.selected_trip_id,
+            )
+            return True
+
+        contract = (result or {}).get("write_result_contract") if isinstance(result, dict) else None
+        agent_logger.error(
+            "Booking draft write did not execute session=%s trip=%s contract=%s",
+            session.id,
+            session.selected_trip_id,
+            contract,
+        )
+        session.booking_confirmed = False
+        session.booking_confirmation_requested = False
+        session.stage = decision.state
+        honest_message = str((result or {}).get("assistant_message") or "").strip() if isinstance(result, dict) else ""
+        self._append_authoritative_reply(
+            session,
+            message_key="booking.draft_failed",
+            base_text=honest_message or self._booking_draft_failed_message(session),
+        )
+        session.tools_used = []
+        session.fallback_used = True
+        return True
+
     @staticmethod
-    def _new_traveler_lead_saved_message(session: SessionState, lead_id: str) -> str:
+    def _traveler_preferred_currency(session: SessionState) -> str:
+        preview = session.preview if isinstance(session.preview, dict) else {}
+        traveler = preview.get("traveler") if isinstance(preview.get("traveler"), dict) else {}
+        return str(traveler.get("preferred_currency") or "").strip()
+
+    def _booking_draft_created_message(self, session: SessionState, booking_id: str) -> str:
+        booking_result = session.booking_result if isinstance(session.booking_result, dict) else {}
+        status = str(booking_result.get("booking_status") or session.booking_status or "Draft").strip()
+        trip_name = session.selected_trip_name or session.selected_trip_id
+        if session.language.startswith("ar"):
+            return (
+                f"تم تسجيل طلب الحجز {booking_id} لرحلة {trip_name} وحالته {status}.\n"
+                "فريق Ravel هيتواصل معاك لإكمال خطوات الدفع والتأكيد."
+            )
+        return (
+            f"Booking request {booking_id} for {trip_name} is created and its status is {status}.\n"
+            "The Ravel team will follow up with you to complete payment and confirmation."
+        )
+
+    @staticmethod
+    def _booking_draft_failed_message(session: SessionState) -> str:
+        if session.language.startswith("ar"):
+            return (
+                "لم أتمكن من تسجيل طلب الحجز الآن، ولم يتم إنشاء أي حجز.\n"
+                "من فضلك حاول مرة أخرى، أو اطلب التواصل مع موظف من فريق Ravel."
+            )
+        return (
+            "I could not create the booking request right now, and no booking was created.\n"
+            "Please try again, or ask to speak with a member of the Ravel team."
+        )
+
+    def _resolve_next_step_decision(self, session: SessionState, user_text: str = ""):
+        """Evaluate the next workflow step, running the trip search when that is it."""
+
+        decision = self._workflow_policy.evaluate(self._build_context(session, user_text))
+        if decision.required_step == "search_matching_trips":
+            self._load_verified_trip_results(session)
+            decision = self._workflow_policy.evaluate(self._build_context(session, user_text))
+        return decision
+
+    def _next_step_prompt(self, session: SessionState, decision, clean_text: str = "") -> str:
+        """The single customer-facing question for a pending workflow step."""
+
+        step = str(decision.required_step or "")
+        if not step or step in {"save_new_traveler_lead", "run_traveler_lookup"}:
+            return ""
+        if step == "select_trip":
+            return self._canonical_trip_search_reply(session)
+        if step == "create_booking_draft":
+            return self._booking_confirmation_summary(session)
+        return self._backend_required_step_reply(session, decision, clean_text)
+
+    def _ensure_traveler_record(self, session: SessionState, session_context: dict[str, Any]) -> dict[str, Any]:
+        """Return this customer's Traveler record, creating it when CRM has none.
+
+        A lead with no traveler behind it cannot be booked, cannot be handed off
+        cleanly, and is re-classified as a brand new customer on every later
+        session, so the traveler id is resolved before the lead is written.
+        """
+        known = session_context.get("known_traveler") if isinstance(session_context.get("known_traveler"), dict) else {}
+        if str(known.get("traveler_id") or "").strip():
+            return dict(known)
+        raw_phone = str(session.raw_phone or session.pending_raw_phone or "").strip()
+        country_code = str(session.country_code or self.settings.default_country_code or "").strip()
+        if not raw_phone:
+            return {}
+        try:
+            lookup = self._read_only_tools.find_traveler_by_phone(raw_phone=raw_phone, country_code=country_code)
+        except Exception as exc:
+            agent_logger.warning("Traveler lookup before lead save failed session=%s error=%s", session.id, exc)
+            lookup = {}
+        existing = lookup.get("traveler") if isinstance(lookup, dict) and isinstance(lookup.get("traveler"), dict) else {}
+        if str(existing.get("traveler_id") or "").strip():
+            return dict(existing)
+        if str((lookup or {}).get("status") or "").strip() == "duplicate":
+            # Multiple profiles share this number: creating another one would make
+            # the conflict worse. The workflow policy escalates this case instead.
+            return {}
+        if not str(session.customer_name or "").strip():
+            return {}
+        try:
+            created = self._write_executor.execute(
+                action="create_traveler",
+                payload={
+                    "customer_name": session.customer_name,
+                    "full_name": session.customer_name,
+                    "raw_phone": raw_phone,
+                    "country_code": country_code,
+                    "nationality": session.nationality,
+                    "birthday": session.birthday,
+                    "currency": session.currency,
+                    "lead_source": "Gemini Agent",
+                    "notes": f"Created for a new traveler in chat session {session.id}.",
+                },
+                session_context=session_context,
+            )
+        except Exception as exc:
+            agent_logger.error("Traveler creation failed session=%s error=%s", session.id, exc)
+            return {}
+        traveler = self._traveler_from_write_result(created if isinstance(created, dict) else {})
+        if not traveler.get("traveler_id"):
+            agent_logger.error(
+                "Traveler creation did not return an id session=%s contract=%s",
+                session.id,
+                (created or {}).get("write_result_contract") if isinstance(created, dict) else None,
+            )
+            return {}
+        agent_logger.info("Traveler created for new customer session=%s traveler=%s", session.id, traveler["traveler_id"])
+        self._mark_traveler_verified(session, traveler)
+        return traveler
+
+    @staticmethod
+    def _traveler_from_write_result(result: dict[str, Any]) -> dict[str, Any]:
+        """Pull the traveler record a write returned, wherever the shape put it."""
+
+        result = result if isinstance(result, dict) else {}
+        candidates: list[Any] = [result.get("traveler")]
+        write_result = result.get("write_result") if isinstance(result.get("write_result"), dict) else {}
+        candidates.append(write_result.get("created_traveler"))
+        session_update = result.get("session_update") if isinstance(result.get("session_update"), dict) else {}
+        final_result = session_update.get("final_result") if isinstance(session_update.get("final_result"), dict) else {}
+        candidates.append(final_result.get("traveler"))
+        nested_write = final_result.get("write_result") if isinstance(final_result.get("write_result"), dict) else {}
+        candidates.append(nested_write.get("created_traveler"))
+        for candidate in candidates:
+            if isinstance(candidate, dict) and str(candidate.get("traveler_id") or "").strip():
+                traveler = dict(candidate)
+                if not str(traveler.get("status") or "").strip():
+                    traveler["status"] = "Active"
+                return traveler
+        return {}
+
+    @staticmethod
+    def _mark_traveler_verified(session: SessionState, traveler: dict[str, Any]) -> None:
+        traveler = dict(traveler or {})
+        if not str(traveler.get("traveler_id") or "").strip():
+            return
+        if not str(traveler.get("status") or "").strip():
+            traveler["status"] = "Active"
+        if not str(traveler.get("full_name") or "").strip() and session.customer_name:
+            traveler["full_name"] = session.customer_name
+        preview = dict(session.preview or {})
+        preview["traveler"] = traveler
+        preview["workflow"] = {
+            "lookup_status": "found",
+            "identity_verified": True,
+            "verified_status": str(traveler.get("status") or "Active"),
+            "verified_traveler": dict(traveler),
+        }
+        session.preview = preview
+        if not session.customer_name:
+            session.customer_name = str(traveler.get("full_name") or "")
+
+    def _new_traveler_lead_saved_message(self, session: SessionState, lead_id: str, decision=None) -> str:
         name = str(session.customer_name or "").strip()
+        next_question = self._next_step_prompt(session, decision).strip() if decision is not None else ""
         if session.language.startswith("ar"):
             greeting = f"شكرا {name}. " if name else "شكرا. "
-            return (
-                f"{greeting}تم حفظ بياناتك وطلبك برقم {lead_id}.\n\n"
-                "هل تفضل رحلة داخلية أم رحلة دولية؟"
-            )
+            next_question = next_question or "هل تفضل رحلة داخلية أم رحلة دولية؟"
+            return f"{greeting}تم حفظ بياناتك وطلبك برقم {lead_id}.\n\n{next_question}"
         greeting = f"Thanks {name}. " if name else "Thanks. "
-        return (
-            f"{greeting}Your details are saved and your request number is {lead_id}.\n\n"
-            "Are you looking for a local trip or an international trip?"
-        )
+        next_question = next_question or "Are you looking for a local trip or an international trip?"
+        return f"{greeting}Your details are saved and your request number is {lead_id}.\n\n{next_question}"
 
     def handle_passport_attachment(self, session: SessionState, attachment_ref: str) -> None:
         ref = str(attachment_ref or "").strip()
@@ -3734,12 +4279,17 @@ class ToolCallingSessionRuntime:
             "\u0644\u0627",
         }:
             return ""
-        parts = [part for part in name.split(" ") if part]
+        # People routinely end the name with sentence punctuation ("Mohamed Ashraf
+        # Safwat."). Rejecting the whole answer for that re-asks the same question
+        # and reads as if the agent ignored them, so strip trailing/leading
+        # punctuation per word before validating the word itself.
+        parts = [part.strip(_NAME_EDGE_PUNCTUATION) for part in name.split(" ")]
+        parts = [part for part in parts if part]
         if len(parts) < 3:
             return ""
         if not all(_NAME_TOKEN_RE.fullmatch(part) for part in parts):
             return ""
-        return name
+        return " ".join(parts)
 
     @staticmethod
     def _extract_nationality_hint(text: str) -> str:

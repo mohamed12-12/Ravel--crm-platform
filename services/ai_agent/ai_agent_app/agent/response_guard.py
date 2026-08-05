@@ -120,12 +120,31 @@ def _record_type_from_text(text: str, explicit_record_type: str = "") -> str:
     return ""
 
 
+def known_record_ids_from_context(session_context: dict[str, Any] | None) -> dict[str, str]:
+    """Records this session already persisted, keyed by write record type.
+
+    A truthful reference to a record saved on an *earlier* turn ("your request
+    LD00001 is saved") carries no write result on the current turn, so the
+    false-write-success check would otherwise reject the agent's own honest
+    answer and replace it with a generic apology.
+    """
+
+    context = session_context if isinstance(session_context, dict) else {}
+    known: dict[str, str] = {}
+    for record_type, key in (("lead", "lead_id"), ("booking", "booking_id"), ("handoff", "handoff_id")):
+        record_id = str(context.get(key) or "").strip()
+        if record_id:
+            known[record_type] = record_id
+    return known
+
+
 def response_guard_issue(
     text: str,
     *,
     write_result: dict[str, Any] | None = None,
     record_type: str = "",
     allow_inventory_counts: bool = False,
+    known_record_ids: dict[str, str] | None = None,
 ) -> tuple[str, list[str]]:
     cleaned = format_agent_reply(text)
     if not cleaned:
@@ -143,7 +162,9 @@ def response_guard_issue(
         return "obviously_incomplete_sentence", []
     success_record_type = _record_type_from_text(cleaned, record_type)
     if success_record_type and response_claims_write_success(cleaned) and not write_result_allows_success(write_result, success_record_type):
-        return "false_write_success_claim", []
+        already_saved = str((known_record_ids or {}).get(success_record_type) or "").strip()
+        if not already_saved:
+            return "false_write_success_claim", []
     completeness_issue = response_completeness_issue(cleaned)
     if completeness_issue:
         return completeness_issue, []
@@ -158,6 +179,7 @@ def guard_customer_response(
     record_type: str = "",
     fallback_message_key: str = "general",
     allow_inventory_counts: bool = False,
+    known_record_ids: dict[str, str] | None = None,
 ) -> ResponseGuardResult:
     cleaned = format_agent_reply(text)
     issue, terms = response_guard_issue(
@@ -165,6 +187,7 @@ def guard_customer_response(
         write_result=write_result,
         record_type=record_type,
         allow_inventory_counts=allow_inventory_counts,
+        known_record_ids=known_record_ids,
     )
     if not issue:
         return ResponseGuardResult(

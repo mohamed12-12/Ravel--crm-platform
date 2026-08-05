@@ -1582,7 +1582,7 @@ class SessionFlowManager:
 
     def _maybe_handle_visa_intent(self, session: SessionState, gateway, clean_text: str) -> str:
         lowered = clean_text.lower()
-        if "visa" not in lowered and "ØªØ£Ø´ÙŠØ±" not in lowered and "ÙÙŠØ²Ø§" not in lowered:
+        if "visa" not in lowered and "تأشير" not in lowered and "فيزا" not in lowered:
             return ""
         destination = self._extract_visa_destination(clean_text)
         nationality = (session.nationality or "").strip()
@@ -1909,11 +1909,11 @@ class SessionFlowManager:
                 return choices[index]
 
         compact = re.sub(r"[^a-z\u0600-\u06ff]+", " ", clean).strip()
-        has_single_hint = "single" in clean or "ÙØ±Ø¯ÙŠ" in clean
-        has_double_hint = any(token in clean for token in ("double", "duble", "bouble", "Ø«Ù†Ø§Ø¦ÙŠ"))
-        has_triple_hint = any(token in clean for token in ("triple", "tripl", "Ø«Ù„Ø§Ø«ÙŠ"))
-        has_boys_hint = any(token in compact for token in ("boys", "boy", "male", "Ø§ÙˆÙ„Ø§Ø¯", "ÙˆÙ„Ø§Ø¯", "Ø´Ø¨Ø§Ø¨", "Ø°ÙƒÙˆØ±"))
-        has_girls_hint = any(token in compact for token in ("girls", "girl", "female", "Ø¨Ù†Ø§Øª", "Ù†Ø³Ø§Ø¡", "Ø§Ù†Ø§Ø«"))
+        has_single_hint = "single" in clean or "فردي" in clean
+        has_double_hint = any(token in clean for token in ("double", "duble", "bouble", "ثنائي"))
+        has_triple_hint = any(token in clean for token in ("triple", "tripl", "ثلاثي"))
+        has_boys_hint = any(token in compact for token in ("boys", "boy", "male", "اولاد", "ولاد", "شباب", "ذكور"))
+        has_girls_hint = any(token in compact for token in ("girls", "girl", "female", "بنات", "نساء", "اناث"))
         if has_single_hint:
             return next((choice for choice in choices if choice["room_type"] == "Single"), None) or {
                 "room_type": "Single",

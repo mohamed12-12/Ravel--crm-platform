@@ -26,6 +26,7 @@ AGENT_READ_ACTIONS = {
     "crm_preview",
 }
 AGENT_WRITE_ACTIONS = {
+    "create_traveler",
     "create_lead",
     "update_lead_stage",
     "create_booking_draft",

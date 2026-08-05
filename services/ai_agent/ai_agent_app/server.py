@@ -12,7 +12,10 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, sen
 
 from services.ai_agent.ai_agent_app.agent import GeminiAgent, SessionFlowManager
 from services.ai_agent.ai_agent_app.agent.response_format import response_completeness_issue
-from services.ai_agent.ai_agent_app.agent.response_guard import guard_customer_response
+from services.ai_agent.ai_agent_app.agent.response_guard import (
+    guard_customer_response,
+    known_record_ids_from_context,
+)
 from services.ai_agent.ai_agent_app.agent.write_response_gating import detect_write_record_type
 from services.ai_agent.ai_agent_app.agent.tool_calling_runtime import ToolCallingSessionRuntime
 from services.ai_agent.ai_agent_app.agent.session_flow import detect_language
@@ -1433,6 +1436,9 @@ def _route_live_message_with_gemini(session, text: str, gemini_agent: GeminiAgen
         write_result=write_result,
         record_type=record_type,
         fallback_message_key=record_type or "general",
+        # Referring to a record saved on an earlier turn is honest, not a false
+        # write-success claim; without this the guard replaces it with an apology.
+        known_record_ids=known_record_ids_from_context(session_context),
     )
     if guarded.fallback_used:
         app_logger.warning(

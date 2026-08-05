@@ -151,6 +151,65 @@ class GeminiWriteToolExecutor:
                 audit=audit,
             )
 
+    def _execute_create_traveler(
+        self,
+        payload: dict[str, Any],
+        session_context: dict[str, Any],
+        validation,
+    ) -> dict[str, Any]:
+        """Create the Traveler record for a phone number with no CRM match.
+
+        `create_lead` already creates a traveler as a side effect in both service
+        implementations, but the conversation needs a guaranteed traveler_id even
+        when that side effect did not happen (for example when the lead write was
+        de-duplicated against an older lead that has no traveler linked). The
+        validator rejects this action whenever a traveler already matches the
+        number, so it can never fork an identity.
+        """
+        customer_name = self._value(payload, session_context, "customer_name", "full_name")
+        raw_phone = self._value(payload, session_context, "raw_phone", "pending_raw_phone")
+        country_code = self._value(payload, session_context, "country_code") or self.settings.default_country_code
+        if not customer_name or not raw_phone:
+            raise RuntimeError("Traveler creation requires both a full name and a WhatsApp number.")
+        traveler = self.service.create_traveler(
+            full_name=customer_name,
+            raw_phone=raw_phone,
+            birthday=self._value(payload, session_context, "birthday") or "",
+            gender=self._value(payload, session_context, "gender") or "",
+            nationality=self._value(payload, session_context, "nationality") or "",
+            preferred_currency=self._value(payload, session_context, "preferred_currency", "currency") or "",
+            lead_source=self._value(payload, session_context, "lead_source") or "Gemini Agent",
+            agent_notes=self._value(payload, session_context, "notes") or "Created through the controlled traveler write path.",
+            country_code=country_code,
+        )
+        traveler = dict(traveler or {})
+        traveler_id = str(traveler.get("traveler_id") or "").strip()
+        if not traveler_id:
+            raise RuntimeError("Traveler creation did not return a traveler id.")
+        traveler.setdefault("status", "Active")
+        contract = self._write_result_contract(
+            status="success",
+            executed=True,
+            reused=False,
+            record_type="traveler",
+            record_id=traveler_id,
+            customer_confirmation_allowed=False,
+            audit={"session_id": str(session_context.get("session_id") or ""), "action": "create_traveler"},
+        )
+        return {
+            "result_id": traveler_id,
+            "assistant_message": "",
+            "traveler": traveler,
+            "write_result": {"created_traveler": traveler, "write_result_contract": contract},
+            "write_result_contract": contract,
+            "session_update": {
+                "final_result": {
+                    "traveler": traveler,
+                    "write_result": {"created_traveler": traveler},
+                }
+            },
+        }
+
     def _execute_create_lead(
         self,
         payload: dict[str, Any],
@@ -351,7 +410,9 @@ class GeminiWriteToolExecutor:
             "assistant_message": self._stage_message(result),
             "lead_update": result,
             "write_result": {
-                "created_traveler": created_traveler,
+                # A stage update never creates a traveler; this key exists so the
+                # write_result shape stays identical across lead writes.
+                "created_traveler": None,
                 "lead_update": result,
             },
             "traveler": traveler,
@@ -613,6 +674,8 @@ class GeminiWriteToolExecutor:
             return "handoff"
         if "lead" in normalized:
             return "lead"
+        if "traveler" in normalized:
+            return "traveler"
         if "passport" in normalized or "document" in normalized:
             return "document"
         return "write"
