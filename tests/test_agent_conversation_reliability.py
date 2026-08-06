@@ -1170,6 +1170,28 @@ def test_second_booking_actually_completes_after_book_again(runtime: ToolCalling
     assert runtime._write_executor.execute.call_args.kwargs["action"] == "create_booking_draft"
 
 
+def test_human_agent_request_after_booking_still_reaches_manual_handoff(runtime: ToolCallingSessionRuntime) -> None:
+    """Regression: once stage == "post_booking_support" it re-sets itself
+    every turn, so _handle_post_booking_message's `session.stage in {...}`
+    branch matched unconditionally and swallowed every later message --
+    including a genuine "I want to talk to a human" request, which never
+    reached handle_message's real _execute_manual_handoff dispatch. A
+    customer who completed a booking could never escalate to a human again.
+    """
+    executor = FakeHandoffExecutor(succeeds=True)
+    runtime._write_executor = executor
+    session = _completed_booking_session(runtime, language="en")
+
+    session = _send(runtime, "I want to talk to a human", session)
+
+    assert len(executor.calls) == 1
+    assert executor.calls[0]["action"] == "create_handoff"
+    assert session.handoff_state == "handed_off"
+    reply = session.messages[-1]["text"]
+    assert "sent" in reply.lower()
+    assert "I need one more detail" not in reply
+
+
 def test_post_booking_arabic_negative_is_contextual_clarification(runtime: ToolCallingSessionRuntime) -> None:
     session = _completed_booking_session(runtime, language="ar")
 

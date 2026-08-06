@@ -2207,6 +2207,15 @@ class ToolCallingSessionRuntime:
     def _handle_post_booking_message(self, session: SessionState, clean_text: str) -> bool:
         if not self._has_completed_booking_context(session):
             return False
+        if self._is_human_agent_request(clean_text):
+            # Once stage == "post_booking_support" it re-sets itself every
+            # turn (see below), so the `session.stage in {...}` branch of
+            # the condition just below matches unconditionally and would
+            # swallow every future message -- including a genuine request
+            # for a human agent, which would otherwise never reach
+            # handle_message's real _execute_manual_handoff dispatch. Fall
+            # through here so that dispatch still runs.
+            return False
         if not (
             self._post_booking_booking_intent(clean_text)
             or self._post_booking_status_intent(clean_text)
