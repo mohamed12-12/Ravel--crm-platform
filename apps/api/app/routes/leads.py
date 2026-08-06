@@ -1,4 +1,5 @@
 # app/routes/leads.py
+import logging
 import re
 from pathlib import Path
 
@@ -32,6 +33,8 @@ from app.security import (
     current_user_id,
     has_permission,
 )
+
+logger = logging.getLogger(__name__)
 
 leads_bp = Blueprint('leads', __name__, url_prefix='/leads')
 
@@ -616,7 +619,7 @@ def delete(lead_id):
 
     BookingEventTrail.query.filter(BookingEventTrail.lead_id == lead_id).delete(synchronize_session=False)
     HandoffQueue.query.filter(HandoffQueue.lead_id == lead_id).delete(synchronize_session=False)
-    TripBooking.query.filter(TripBooking.lead_id == lead_id).update(
+    bookings_unlinked = TripBooking.query.filter(TripBooking.lead_id == lead_id).update(
         {
             TripBooking.lead_id: None,
             TripBooking.customer_response_status: db.func.coalesce(
@@ -626,12 +629,18 @@ def delete(lead_id):
         },
         synchronize_session=False,
     )
-    Traveler.query.filter(Traveler.last_lead_id == lead_id).update(
+    travelers_unlinked = Traveler.query.filter(Traveler.last_lead_id == lead_id).update(
         {Traveler.last_lead_id: None},
         synchronize_session=False,
     )
     db.session.delete(lead)
     db.session.commit()
+    logger.info(
+        "Lead %s deleted: unlinked %d booking(s), %d traveler last_lead_id reference(s)",
+        lead_id,
+        bookings_unlinked,
+        travelers_unlinked,
+    )
 
     _remove_sheet_record("Leads", lead_id)
     flash("Lead deleted permanently.", 'success')

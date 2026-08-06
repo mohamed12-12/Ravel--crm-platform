@@ -325,12 +325,19 @@ class Phase4LeadRedesignTests(unittest.TestCase):
             )
             self.db.session.commit()
 
-        response = self.client.post(
-            "/leads/LD00030",
-            data={"_method": "DELETE"},
-            follow_redirects=False,
-        )
+        with self.assertLogs("app.routes.leads", level="INFO") as logs:
+            response = self.client.post(
+                "/leads/LD00030",
+                data={"_method": "DELETE"},
+                follow_redirects=False,
+            )
         self.assertEqual(response.status_code, 302)
+        # Regression: the TripBooking.lead_id/Traveler.last_lead_id cleanup
+        # in delete() are bulk .update() calls whose rowcount was never
+        # captured or logged -- nothing recorded how many rows a cascade
+        # delete actually touched. Confirm the counts are now logged and
+        # match the 1 booking / 1 traveler set up above.
+        self.assertTrue(any("unlinked 1 booking(s), 1 traveler" in message for message in logs.output))
 
         with self.app.app_context():
             self.assertIsNone(self.db.session.get(self.Lead, "LD00030"))

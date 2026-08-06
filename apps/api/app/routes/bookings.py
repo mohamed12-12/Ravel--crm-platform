@@ -1,4 +1,6 @@
 # app/routes/bookings.py
+import logging
+
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, abort
 from app.models.booking import TripBooking
 from app.models.booking_event import BookingEventTrail
@@ -26,6 +28,8 @@ from app.security import (
     current_user_id,
     has_permission,
 )
+
+logger = logging.getLogger(__name__)
 
 bookings_bp = Blueprint('bookings', __name__, url_prefix='/bookings')
 
@@ -436,10 +440,22 @@ def delete(booking_id):
             .order_by(TripBooking.draft_created_at.desc(), TripBooking.booking_id.desc())
             .limit(1)
         ).scalar_one_or_none()
-        Lead.query.filter_by(lead_id=lead_id).update(
+        lead_rows_updated = Lead.query.filter_by(lead_id=lead_id).update(
             {Lead.booking_id: replacement_booking_id},
             synchronize_session=False,
         )
+        if lead_rows_updated == 0:
+            # lead_id came straight off the booking we're deleting, so this
+            # should always match exactly one row. A silent 0 here would
+            # leave Lead.booking_id dangling on a row that no longer exists
+            # once we commit the delete below -- the same "write happened,
+            # nobody checked, wrong state persists" shape as guardian
+            # consent's original bug.
+            logger.warning(
+                "Booking delete: Lead.booking_id cleanup matched no rows booking_id=%s lead_id=%s",
+                booking_id,
+                lead_id,
+            )
 
     if traveler_id:
         replacement_last_booking = db.session.execute(
@@ -448,10 +464,16 @@ def delete(booking_id):
             .order_by(TripBooking.draft_created_at.desc(), TripBooking.booking_id.desc())
             .limit(1)
         ).scalar_one_or_none()
-        Traveler.query.filter_by(traveler_id=traveler_id).update(
+        traveler_rows_updated = Traveler.query.filter_by(traveler_id=traveler_id).update(
             {Traveler.last_booking_id: replacement_last_booking},
             synchronize_session=False,
         )
+        if traveler_rows_updated == 0:
+            logger.warning(
+                "Booking delete: Traveler.last_booking_id cleanup matched no rows booking_id=%s traveler_id=%s",
+                booking_id,
+                traveler_id,
+            )
 
     db.session.delete(booking)
     db.session.commit()

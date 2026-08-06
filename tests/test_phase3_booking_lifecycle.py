@@ -399,6 +399,42 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
             traveler = self.db.session.get(self.Traveler, "TR100")
             self.assertIsNone(traveler.last_booking_id)
 
+    def test_delete_booking_logs_warning_when_lead_pointer_cleanup_matches_no_rows(self) -> None:
+        """Regression: the Lead.booking_id/Traveler.last_booking_id cleanup
+        updates in delete() are bulk .update() calls whose rowcount was
+        never checked -- a lead_id pointing at an already-deleted Lead row
+        would silently no-op instead of surfacing, leaving no trace that a
+        dangling reference could exist. Same "write happened, nobody
+        checked" shape as guardian consent's original bug, just lower risk.
+        Deleting the Lead row out from under a real lead_id reproduces the
+        0-rows-matched case without needing to fabricate a fake id.
+        """
+        with self.app.app_context():
+            booking = self.TripBooking(
+                booking_id="B-DELETE-2",
+                trip_id="TRIP-100",
+                trip_name="Lifecycle Trip",
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type="Double",
+                booking_status="Draft",
+                booking_source="Admin",
+                payment_status="Pending",
+                lead_id="L-BOOK-1",
+            )
+            self.db.session.add(booking)
+            self.db.session.commit()
+            self.Lead.query.filter_by(lead_id="L-BOOK-1").delete(synchronize_session=False)
+            self.db.session.commit()
+
+        with self.assertLogs("app.routes.bookings", level="WARNING") as logs:
+            response = self.client.post("/bookings/B-DELETE-2/delete", follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(any("Lead.booking_id cleanup matched no rows" in message for message in logs.output))
+
+        with self.app.app_context():
+            self.assertIsNone(self.db.session.get(self.TripBooking, "B-DELETE-2"))
+
     def test_booking_status_update_recalculates_traveler_summary(self) -> None:
         with self.app.app_context():
             booking = self.TripBooking(
