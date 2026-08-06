@@ -73,7 +73,7 @@ def _write_results_by_action(**results: dict) -> object:
 NEW_TRAVELER_WRITE = {
     "executed": True,
     "result_id": "TR00007",
-    "traveler": {"traveler_id": "TR00007", "full_name": "MAGED MAGED MAGED", "status": "Active"},
+    "traveler": {"traveler_id": "TR00007", "full_name": "Maged Samir Adly", "status": "Active"},
     "write_result": {"created_traveler": {"traveler_id": "TR00007", "status": "Active"}},
     "write_result_contract": {
         "status": "success",
@@ -101,7 +101,7 @@ def test_new_traveler_intake_saves_lead_instead_of_looping(runtime: ToolCallingS
         },
     )
     session = runtime.create_session()
-    for text in ("01270482380", "MAGED MAGED MAGED", "EGY", "28/4/2006"):
+    for text in ("01270482380", "Maged Samir Adly", "Egyptian", "28/4/2006"):
         session = _send(runtime, text, session)
     assert session.stage == "currency_required"
 
@@ -132,7 +132,7 @@ def test_new_traveler_intake_saves_lead_instead_of_looping(runtime: ToolCallingS
 def test_new_traveler_lead_save_failure_does_not_falsely_claim_success(runtime: ToolCallingSessionRuntime) -> None:
     runtime._write_executor.execute.return_value = {"executed": False, "assistant_message": "blocked"}
     session = runtime.create_session()
-    for text in ("01270482380", "MAGED MAGED MAGED", "EGY", "28/4/2006"):
+    for text in ("01270482380", "Maged Samir Adly", "Egyptian", "28/4/2006"):
         session = _send(runtime, text, session)
 
     session = _send(runtime, "1", session)
@@ -171,7 +171,7 @@ def test_new_traveler_intake_completes_when_lead_already_exists_for_this_travele
         },
     )
     session = runtime.create_session()
-    for text in ("01270482380", "MAGED MAGED MAGED", "EGY", "28/4/2006"):
+    for text in ("01270482380", "Maged Samir Adly", "Egyptian", "28/4/2006"):
         session = _send(runtime, text, session)
     assert session.stage == "currency_required"
 
@@ -859,6 +859,15 @@ def test_international_trip_requires_a_passport_attachment_before_the_draft(
 
     runtime.handle_passport_attachment(session, "passport-scan.pdf")
     session = _send(runtime, "done", session)
+
+    # The passport attachment alone is not the full record -- structured
+    # number/expiry/issuing-country fields are asked next, one at a time.
+    assert session.stage == "passport_number_required"
+    session = _send(runtime, "A1234567", session)
+    assert session.stage == "passport_expiry_required"
+    session = _send(runtime, "01/06/2032", session)
+    assert session.stage == "passport_country_required"
+    session = _send(runtime, "Egyptian", session)
 
     assert session.stage == "booking_confirmation_required"
     session = _send(runtime, "yes", session)

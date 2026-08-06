@@ -198,8 +198,9 @@ class ActionValidator:
                 session_id=session_id,
             )
 
+        duplicate_override = str(session_context.get("duplicate_lead_override") or "").strip()
         open_leads = self._find_open_leads(traveler_id=traveler_id, raw_phone=raw_phone, country_code=country_code)
-        if open_leads:
+        if open_leads and duplicate_override != "new":
             return ValidationResult(
                 action="create_lead",
                 decision=REJECTED,

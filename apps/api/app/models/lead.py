@@ -63,6 +63,7 @@ class Lead(db.Model):
     notes = db.Column(db.Text)
     passport_attachment_ref = db.Column(db.Text)
     passport_status = db.Column(db.String(50))
+    requires_guardian_approval = db.Column(db.Boolean)
     
     # Automation Flow Info
     flow_key = db.Column(db.String(100))
@@ -209,6 +210,7 @@ class Lead(db.Model):
             "notes": self.notes,
             "passport_attachment_ref": self.passport_attachment_ref,
             "passport_status": self.passport_status,
+            "requires_guardian_approval": bool(self.requires_guardian_approval) if self.requires_guardian_approval is not None else None,
             "flow_key": self.flow_key,
             "current_step": self.current_step,
             "language": self.language,

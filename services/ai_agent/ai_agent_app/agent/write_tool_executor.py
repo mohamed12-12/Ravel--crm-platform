@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from services.ai_agent.ai_agent_app.agent.read_only_tools import ReadOnlyCRMTools
 from services.ai_agent.ai_agent_app.config import Settings
@@ -157,6 +157,19 @@ class GeminiWriteToolExecutor:
         session_context: dict[str, Any],
         validation,
     ) -> dict[str, Any]:
+        return self._create_with_verified_retry(
+            perform=lambda: self._perform_create_traveler(payload, session_context, validation),
+            verify=lambda record_id, result: self._verify_traveler_record(record_id),
+            record_type="traveler",
+            session_context=session_context,
+        )
+
+    def _perform_create_traveler(
+        self,
+        payload: dict[str, Any],
+        session_context: dict[str, Any],
+        validation,
+    ) -> dict[str, Any]:
         """Create the Traveler record for a phone number with no CRM match.
 
         `create_lead` already creates a traveler as a side effect in both service
@@ -211,6 +224,19 @@ class GeminiWriteToolExecutor:
         }
 
     def _execute_create_lead(
+        self,
+        payload: dict[str, Any],
+        session_context: dict[str, Any],
+        validation,
+    ) -> dict[str, Any]:
+        return self._create_with_verified_retry(
+            perform=lambda: self._perform_create_lead(payload, session_context, validation),
+            verify=lambda record_id, result: self._verify_lead_record(record_id),
+            record_type="lead",
+            session_context=session_context,
+        )
+
+    def _perform_create_lead(
         self,
         payload: dict[str, Any],
         session_context: dict[str, Any],
@@ -459,6 +485,19 @@ class GeminiWriteToolExecutor:
         }
 
     def _execute_create_booking_draft(
+        self,
+        payload: dict[str, Any],
+        session_context: dict[str, Any],
+        validation,
+    ) -> dict[str, Any]:
+        return self._create_with_verified_retry(
+            perform=lambda: self._perform_create_booking_draft(payload, session_context, validation),
+            verify=lambda record_id, result: self._verify_booking_record(record_id),
+            record_type="booking",
+            session_context=session_context,
+        )
+
+    def _perform_create_booking_draft(
         self,
         payload: dict[str, Any],
         session_context: dict[str, Any],
@@ -944,6 +983,133 @@ class GeminiWriteToolExecutor:
                 if candidate:
                     return candidate
         return ""
+
+    def _create_with_verified_retry(
+        self,
+        *,
+        perform: Callable[[], dict[str, Any]],
+        verify: Callable[[str, dict[str, Any]], bool],
+        record_type: str,
+        session_context: dict[str, Any],
+        max_attempts: int = 2,
+    ) -> dict[str, Any]:
+        """Run a create call, confirm it with a DB read-back, retry once on failure.
+
+        A create call's own return value is not proof the row exists -- the
+        traveler-page dead-end this fixes was exactly a create call reporting an
+        id that never actually landed in CRM. Only a fresh read by that id counts
+        as verified, and only a verified result is allowed to reach the customer
+        as a success message.
+        """
+        session_id = str(session_context.get("session_id") or "")
+        last_error: Exception | None = None
+        last_record_id = ""
+        for attempt in range(1, max_attempts + 1):
+            try:
+                result = perform()
+            except Exception as exc:
+                last_error = exc
+                agent_logger.warning(
+                    "%s create attempt %s raised session=%s error=%s",
+                    record_type, attempt, session_id, exc,
+                )
+                continue
+            record_id = str((result or {}).get("result_id") or "").strip()
+            last_record_id = record_id
+            if record_id and verify(record_id, result):
+                return result
+            last_error = None
+            agent_logger.warning(
+                "%s create attempt %s did not verify session=%s record_id=%s",
+                record_type, attempt, session_id, record_id,
+            )
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(
+            f"{record_type} could not be verified after {max_attempts} attempts (last_result_id={last_record_id!r})"
+        )
+
+    def _verify_traveler_record(self, traveler_id: str) -> bool:
+        if not traveler_id:
+            return False
+        try:
+            profile = self.read_only_tools.get_traveler_profile(traveler_id=traveler_id)
+        except Exception:
+            return False
+        traveler = profile.get("traveler") if isinstance(profile, dict) else None
+        return isinstance(traveler, dict) and str(traveler.get("traveler_id") or "").strip() == traveler_id
+
+    def _verify_lead_record(self, lead_id: str) -> bool:
+        if not lead_id:
+            return False
+        try:
+            lookup = self.read_only_tools.lookup_lead(lead_id=lead_id)
+        except Exception:
+            return False
+        leads = lookup.get("leads") if isinstance(lookup, dict) else []
+        return any(
+            isinstance(lead, dict) and str(lead.get("lead_id") or "").strip() == lead_id
+            for lead in leads or []
+        )
+
+    def _verify_booking_record(self, booking_id: str) -> bool:
+        if not booking_id:
+            return False
+        try:
+            status = self.read_only_tools.get_booking_status(booking_id=booking_id)
+        except Exception:
+            return False
+        bookings = status.get("bookings") if isinstance(status, dict) else []
+        return any(
+            isinstance(booking, dict) and str(booking.get("booking_id") or "").strip() == booking_id
+            for booking in bookings or []
+        )
+
+    def record_guardian_consent(
+        self,
+        *,
+        traveler_id: str,
+        is_minor: bool,
+        guardian_name: str = "",
+        guardian_phone: str = "",
+    ) -> dict[str, Any]:
+        if not traveler_id:
+            return {}
+        try:
+            result = self.service.set_guardian_consent(
+                traveler_id,
+                is_minor=is_minor,
+                guardian_name=guardian_name,
+                guardian_phone=guardian_phone,
+            )
+        except Exception as exc:
+            agent_logger.warning("Guardian consent write failed traveler=%s error=%s", traveler_id, exc)
+            return {}
+        self._log_audit(
+            {
+                "timestamp": _utc_now_iso(),
+                "session_id": "",
+                "action": "set_guardian_consent",
+                "validator_decision": "",
+                "executed": bool(result),
+                "result_id": traveler_id,
+                "reason": "guardian_consent_persisted" if result else "guardian_consent_write_failed",
+                "warnings": [],
+            }
+        )
+        return result
+
+    def record_lead_guardian_flag(self, *, lead_id: str, requires_guardian_approval: bool) -> dict[str, Any]:
+        if not lead_id:
+            return {}
+        try:
+            return self.service.flag_lead_guardian_approval(
+                lead_id,
+                requires_guardian_approval=requires_guardian_approval,
+            )
+        except Exception as exc:
+            agent_logger.warning("Guardian lead flag write failed lead=%s error=%s", lead_id, exc)
+            return {}
 
     def _resolve_traveler(self, payload: dict[str, Any], session_context: dict[str, Any]) -> dict[str, Any] | None:
         traveler_id = self._value(payload, session_context, "traveler_id")

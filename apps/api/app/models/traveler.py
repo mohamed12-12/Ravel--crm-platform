@@ -60,6 +60,11 @@ class Traveler(db.Model):
     passport_nationality = db.Column(db.String(100))
     passport_attachment_ref = db.Column(db.String(300))
 
+    # Guardian consent fields (traveler is under 18 as of booking time)
+    is_minor = db.Column(db.Boolean)
+    guardian_name = db.Column(db.String(200))
+    guardian_phone = db.Column(db.String(50))
+
     # Relationships
     documents = db.relationship('TravelerDocument', backref='traveler_record', lazy=True, cascade='all, delete-orphan')
     trip_bookings = db.relationship('TripBooking', backref='traveler', lazy=True)
@@ -228,4 +233,7 @@ class Traveler(db.Model):
             "passport_expiry": self.passport_expiry.isoformat() if self.passport_expiry else None,
             "passport_nationality": self.passport_nationality,
             "passport_attachment_ref": self.passport_attachment_ref,
+            "is_minor": bool(self.is_minor) if self.is_minor is not None else None,
+            "guardian_name": self.guardian_name,
+            "guardian_phone": self.guardian_phone,
         }

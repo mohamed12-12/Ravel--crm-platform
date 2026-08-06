@@ -1436,6 +1436,9 @@ def test_booking_confirmation_and_cancellation_prevent_write(runtime: ToolCallin
     session.group_size = 1
     session.flight_option = "Without Flight"
     session.passport_attachment_ref = "passport/file.jpg"
+    session.passport_number = "A1234567"
+    session.passport_expiry = "2032-06-01"
+    session.passport_nationality = "Egyptian"
 
     session = _send(runtime, "continue", session)
     assert session.stage == "booking_confirmation_required"

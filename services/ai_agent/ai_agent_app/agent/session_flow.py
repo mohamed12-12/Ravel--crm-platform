@@ -94,6 +94,9 @@ class SessionState:
     preferred_date: str = ""
     flight_option: str = ""
     currency: str = ""
+    guardian_name: str = ""
+    guardian_phone: str = ""
+    guardian_consent_saved: bool = False
     lead_status: str = ""
     booking_status: str = ""
     handoff_state: str = ""
@@ -110,6 +113,18 @@ class SessionState:
     passport_attachment_ref: str = ""
     # Internal tracking: which passport field we are currently collecting
     _passport_step: str = field(default="", repr=False)
+    # Internal tracking: why the last name/nationality answer was rejected, so the
+    # re-ask can give a specific reason instead of repeating the generic prompt.
+    _name_rejection_reason: str = field(default="", repr=False)
+    _nationality_rejection_reason: str = field(default="", repr=False)
+    _passport_field_rejection_reason: str = field(default="", repr=False)
+    _passport_expiry_warning: str = field(default="", repr=False)
+    # Duplicate open-lead dialogue (Task 3.2): "" (not yet asked/resolved),
+    # "continue" (resume the found lead), or "new" (create a second lead deliberately).
+    duplicate_lead_choice: str = ""
+    resumed_lead_id: str = ""
+    _open_lead_id: str = field(default="", repr=False)
+    _open_lead_trip_type: str = field(default="", repr=False)
     _last_persona_intent: str = field(default="", repr=False)
     _persona_intent_repeat_count: int = field(default=0, repr=False)
 

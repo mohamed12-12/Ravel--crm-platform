@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+from services.ai_agent.ai_agent_app.agent.date_parsing import compute_age
+
 
 ARCHIVE_LIKE_STATUSES = {"inactive", "archived", "blacklisted", "blacklist", "blocked"}
 ACTIVE_LIKE_STATUSES = {"", "active", "live", "repeat", "vip"}
@@ -202,6 +204,27 @@ class ConversationWorkflowPolicy:
             "reason": "crm_identity_verified",
         }
 
+        open_lead_id = str(session_context.get("open_lead_id") or "").strip()
+        duplicate_lead_choice = str(session_context.get("duplicate_lead_choice") or "").strip()
+        if open_lead_id and duplicate_lead_choice not in {"continue", "new"}:
+            return WorkflowDecision(
+                state="duplicate_lead_choice_required",
+                customer_status="Waiting for customer response",
+                allowed_tools=PRE_TRIP_SEARCH_TOOLS,
+                required_step="collect_duplicate_lead_choice",
+                customer_message_key="duplicate_lead_choice_required",
+                assistant_message=self._duplicate_lead_prompt(open_lead_id, arabic=arabic),
+                **common,
+            )
+
+        guardian_decision = self._guardian_decision(
+            session_context,
+            common={**common, "allowed_tools": PRE_TRIP_SEARCH_TOOLS},
+            arabic=arabic,
+        )
+        if guardian_decision is not None:
+            return guardian_decision
+
         if trip_type not in {"local", "international"}:
             return WorkflowDecision(
                 state="trip_type_required",
@@ -229,6 +252,22 @@ class ConversationWorkflowPolicy:
                     required_step="select_trip",
                     customer_message_key="trip_selection_required",
                     assistant_message="I found matching trips for your choice. Please pick the trip you want to continue with.",
+                    **common,
+                )
+            # A trip_result dict with both list keys present (even if both are
+            # empty) means the search actually ran and came back empty -- that
+            # must never look the same as "haven't searched yet", or a genuine
+            # zero-result trip category reads to the customer as an ignored
+            # request instead of an honest "nothing open right now".
+            search_has_run = "open_trips" in trip_result or "date_tbd_trips" in trip_result
+            if search_has_run:
+                return WorkflowDecision(
+                    state="no_trips_available",
+                    customer_status="No matching trips",
+                    allowed_tools=PRE_BOOKING_TOOLS,
+                    required_step="handle_empty_trip_results",
+                    customer_message_key="no_trips_available",
+                    assistant_message=self._no_trips_available_message(trip_type, arabic=arabic),
                     **common,
                 )
             return WorkflowDecision(
@@ -366,6 +405,41 @@ class ConversationWorkflowPolicy:
                 **common,
             )
 
+        if passport_required:
+            passport_number = str(session_context.get("passport_number") or "").strip()
+            passport_expiry = str(session_context.get("passport_expiry") or "").strip()
+            passport_nationality = str(session_context.get("passport_nationality") or "").strip()
+            if not passport_number:
+                return WorkflowDecision(
+                    state="passport_number_required",
+                    customer_status="Waiting for customer response",
+                    allowed_tools=SELECTED_TRIP_TOOLS,
+                    required_step="collect_passport_number",
+                    customer_message_key="passport_number_required",
+                    assistant_message=self._passport_number_prompt(arabic=arabic),
+                    **common,
+                )
+            if not passport_expiry:
+                return WorkflowDecision(
+                    state="passport_expiry_required",
+                    customer_status="Waiting for customer response",
+                    allowed_tools=SELECTED_TRIP_TOOLS,
+                    required_step="collect_passport_expiry",
+                    customer_message_key="passport_expiry_required",
+                    assistant_message=self._passport_expiry_prompt(arabic=arabic),
+                    **common,
+                )
+            if not passport_nationality:
+                return WorkflowDecision(
+                    state="passport_country_required",
+                    customer_status="Waiting for customer response",
+                    allowed_tools=SELECTED_TRIP_TOOLS,
+                    required_step="collect_passport_country",
+                    customer_message_key="passport_country_required",
+                    assistant_message=self._passport_country_prompt(arabic=arabic),
+                    **common,
+                )
+
         return WorkflowDecision(
             state="booking_ready",
             customer_status="Ready",
@@ -374,6 +448,62 @@ class ConversationWorkflowPolicy:
             customer_message_key="booking_ready",
             assistant_message="I have the trip details needed to prepare your booking draft.",
             **common,
+        )
+
+    @staticmethod
+    def _no_trips_available_message(trip_type: str, *, arabic: bool = False) -> str:
+        normalized_type = str(trip_type or "").strip().lower()
+        if arabic:
+            label = "محلية" if normalized_type == "local" else "دولية"
+            return (
+                f"للأسف مفيش رحلات {label} متاحة (مفتوحة) دلوقتي.\n"
+                "هبلغك فور ما تتوفر رحلة جديدة تناسب طلبك."
+            )
+        label = normalized_type or "matching"
+        return (
+            f"There are no {label} trips open right now.\n"
+            "I'll let you know as soon as a new one becomes available."
+        )
+
+    @staticmethod
+    def _duplicate_lead_prompt(open_lead_id: str, *, arabic: bool = False) -> str:
+        if arabic:
+            return (
+                f"عندك طلب سابق لسه شغال برقم {open_lead_id}.\n"
+                "تحب نكمل على نفس الطلب، ولا نبدأ طلب جديد؟\n\n"
+                "1. أكمل الطلب الحالي\n"
+                "2. ابدأ طلب جديد"
+            )
+        return (
+            f"You already have an open request on file, {open_lead_id}.\n"
+            "Would you like to continue with that request, or start a new one?\n\n"
+            "1. Continue the existing request\n"
+            "2. Start a new request"
+        )
+
+    @staticmethod
+    def _passport_number_prompt(*, arabic: bool = False) -> str:
+        return (
+            "ما رقم جواز السفر؟"
+            if arabic
+            else "What is the passport number?"
+        )
+
+    @staticmethod
+    def _passport_expiry_prompt(*, arabic: bool = False) -> str:
+        return (
+            "متى تنتهي صلاحية جواز السفر؟\n"
+            "اكتبها بأي صيغة واضحة، مثل 21/08/2030."
+            if arabic
+            else "When does the passport expire? Type it in any clear format, for example 21/08/2030."
+        )
+
+    @staticmethod
+    def _passport_country_prompt(*, arabic: bool = False) -> str:
+        return (
+            "ما هي جنسية جواز السفر (الدولة المصدرة)؟"
+            if arabic
+            else "What is the issuing country/nationality on the passport?"
         )
 
     def _new_traveler_decision(self, session_context: dict[str, Any]) -> WorkflowDecision:
@@ -423,6 +553,10 @@ class ConversationWorkflowPolicy:
                 assistant_message=self._birthday_prompt(arabic=arabic),
                 **common,
             )
+
+        guardian_decision = self._guardian_decision(session_context, common=common, arabic=arabic)
+        if guardian_decision is not None:
+            return guardian_decision
 
         if not currency:
             return WorkflowDecision(
@@ -474,6 +608,60 @@ class ConversationWorkflowPolicy:
             "2. \u062f\u0648\u0644\u0627\u0631 \u0623\u0645\u0631\u064a\u0643\u064a (USD)"
             if arabic
             else "Which payment currency do you prefer?\n\n1. Egyptian Pound (EGP)\n2. US Dollar (USD)"
+        )
+
+    @staticmethod
+    def _is_minor_from_context(session_context: dict[str, Any]) -> bool:
+        explicit = session_context.get("is_minor")
+        if isinstance(explicit, bool):
+            return explicit
+        birthday = str(session_context.get("birthday") or "").strip()
+        if not birthday:
+            known_traveler = session_context.get("known_traveler") if isinstance(session_context.get("known_traveler"), dict) else {}
+            birthday = str(known_traveler.get("birthday") or "").strip()
+        age = compute_age(birthday)
+        return age is not None and age < 18
+
+    def _guardian_decision(self, session_context: dict[str, Any], *, common: dict[str, Any], arabic: bool) -> WorkflowDecision | None:
+        if not self._is_minor_from_context(session_context):
+            return None
+        guardian_name = str(session_context.get("guardian_name") or "").strip()
+        guardian_phone = str(session_context.get("guardian_phone") or "").strip()
+        if not guardian_name:
+            return WorkflowDecision(
+                state="guardian_name_required",
+                customer_status="Waiting for customer response",
+                required_step="collect_guardian_name",
+                customer_message_key="guardian_name_required",
+                assistant_message=self._guardian_name_prompt(arabic=arabic),
+                **common,
+            )
+        if not guardian_phone:
+            return WorkflowDecision(
+                state="guardian_phone_required",
+                customer_status="Waiting for customer response",
+                required_step="collect_guardian_phone",
+                customer_message_key="guardian_phone_required",
+                assistant_message=self._guardian_phone_prompt(arabic=arabic),
+                **common,
+            )
+        return None
+
+    @staticmethod
+    def _guardian_name_prompt(*, arabic: bool = False) -> str:
+        return (
+            "بما أن المسافر أقل من 18 سنة، محتاج موافقة ولي الأمر.\n"
+            "ما اسم ولي الأمر بالكامل؟"
+            if arabic
+            else "Since the traveler is under 18, I need a parent or guardian's consent.\nWhat is the guardian's full name?"
+        )
+
+    @staticmethod
+    def _guardian_phone_prompt(*, arabic: bool = False) -> str:
+        return (
+            "ما رقم هاتف ولي الأمر، للتواصل معه لتأكيد الموافقة؟"
+            if arabic
+            else "What is the guardian's phone number, so we can confirm consent with them?"
         )
 
     @staticmethod

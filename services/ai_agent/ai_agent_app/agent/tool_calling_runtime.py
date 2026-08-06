@@ -3,14 +3,21 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import replace
+from datetime import date
 from typing import Any
 
 from services.ai_agent.ai_agent_app.agent.gemini_agent import GeminiAgent
 from services.ai_agent.ai_agent_app.agent.agent_state import AgentState
 from services.ai_agent.ai_agent_app.agent.context_builder import ContextBuilder
-from services.ai_agent.ai_agent_app.agent.date_parsing import normalize_birthdate_input
+from services.ai_agent.ai_agent_app.agent.date_parsing import (
+    add_months,
+    compute_age,
+    normalize_birthdate_input,
+    normalize_expiry_date_input,
+)
 from services.ai_agent.ai_agent_app.agent.identity_policy import AgentIdentityPolicy
 from services.ai_agent.ai_agent_app.agent.memory import AgentMemory
+from services.ai_agent.ai_agent_app.agent.nationality_reference import looks_like_currency_code, resolve_nationality
 from services.ai_agent.ai_agent_app.agent.persona import AgentPersona
 from services.ai_agent.ai_agent_app.agent.planner import AgentPlanner
 from services.ai_agent.ai_agent_app.agent.privacy_policy import AgentPrivacyPolicy
@@ -30,7 +37,7 @@ from services.ai_agent.ai_agent_app.agent.write_tool_executor import GeminiWrite
 from services.ai_agent.ai_agent_app.agent.workflow_policy import ConversationWorkflowPolicy
 from services.ai_agent.ai_agent_app.config import Settings
 from services.ai_agent.ai_agent_app.logger import agent_logger
-from services.ai_agent.validation.validation_rules import normalize_flight_option, normalize_trip_type
+from services.ai_agent.validation.validation_rules import CLOSED_LEAD_STAGES, normalize_flight_option, normalize_trip_type
 from services.ai_agent.llm import build_llm_provider
 from services.crm.system_services.phone_normalization import normalize_phone_input
 
@@ -43,10 +50,12 @@ SAFE_STATUS_MAP = {
     "traveler_not_found": "New traveler details required",
     "traveler_verified": "Traveler verified",
     "trip_type_required": "Ready",
+    "duplicate_lead_choice_required": "Waiting for customer response",
     "duplicate_traveler_detected": "Human review required",
     "human_handoff_required": "Human review required",
     "trip_discovery": "Trip preferences being collected",
     "trip_search_ready": "Searching trips",
+    "no_trips_available": "No matching trips",
     "trip_selection_required": "Waiting for customer response",
     "trip_results_available": "Searching trips",
     "room_type_required": "Waiting for customer response",
@@ -56,8 +65,13 @@ SAFE_STATUS_MAP = {
     "flight_option_required": "Waiting for customer response",
     "nationality_required": "Waiting for customer response",
     "birthday_required": "Waiting for customer response",
+    "guardian_name_required": "Waiting for customer response",
+    "guardian_phone_required": "Waiting for customer response",
     "currency_required": "Waiting for customer response",
     "awaiting_passport_upload": "Waiting for customer response",
+    "passport_number_required": "Waiting for customer response",
+    "passport_expiry_required": "Waiting for customer response",
+    "passport_country_required": "Waiting for customer response",
     "booking_ready": "Ready",
     "booking_confirmation_required": "Waiting for customer response",
     "trip_media_shared": "Trip media shared",
@@ -118,9 +132,13 @@ _ARABIC_TRIP_REFERENCE_TRANSLATION = str.maketrans(
 
 _BACKEND_OWNED_COLLECTION_STEPS = {
     "collect_valid_whatsapp_number",
+    "collect_duplicate_lead_choice",
+    "handle_empty_trip_results",
     "collect_new_traveler_name",
     "collect_nationality",
     "collect_birthday",
+    "collect_guardian_name",
+    "collect_guardian_phone",
     "collect_payment_currency",
     # The local/international question is a fixed two-option choice. Leaving it to
     # the model meant an unclear answer produced a free-form reply (or a stray
@@ -132,6 +150,9 @@ _BACKEND_OWNED_COLLECTION_STEPS = {
     "collect_group_size",
     "collect_flight_preference",
     "collect_passport_attachment",
+    "collect_passport_number",
+    "collect_passport_expiry",
+    "collect_passport_country",
 }
 
 _ABUSIVE_OR_HOSTILE_RE = re.compile(
@@ -233,9 +254,37 @@ class ToolCallingSessionRuntime:
                 or preview_traveler.get("traveler_id")
                 or ""
             ).strip(),
-            "lead_id": str(lead_update.get("lead_id") or final_result.get("lead_id") or "").strip(),
+            "lead_id": str(
+                lead_update.get("lead_id") or final_result.get("lead_id") or session.resumed_lead_id or ""
+            ).strip(),
             "booking_id": str(booking_result.get("booking_id") or final_result.get("booking_id") or "").strip(),
         }
+
+    def _open_lead_for_traveler(self, *, traveler_id: str, raw_phone: str, country_code: str) -> dict[str, Any]:
+        """Return the first still-open lead on file for this identity, or {}.
+
+        Ported from the legacy ActionValidator's `_find_open_leads` -- that check
+        already existed, but only fired silently deep inside the create_lead write
+        path (auto-reusing the old lead with no explanation). This surfaces the
+        same open-lead fact early enough to ask the customer instead.
+        """
+        if not traveler_id and not raw_phone:
+            return {}
+        try:
+            lookup = self._read_only_tools.lookup_lead(
+                traveler_id=traveler_id,
+                raw_phone=raw_phone,
+                country_code=country_code,
+            )
+        except Exception:
+            return {}
+        for lead in (lookup or {}).get("leads") or []:
+            if not isinstance(lead, dict):
+                continue
+            stage = str(lead.get("lead_stage") or "").strip()
+            if stage not in CLOSED_LEAD_STAGES:
+                return lead
+        return {}
 
     def _passport_context(self, session: SessionState, known_traveler: dict[str, Any]) -> dict[str, Any]:
         traveler_id = str((known_traveler or {}).get("traveler_id") or "").strip()
@@ -320,6 +369,18 @@ class ToolCallingSessionRuntime:
             or passport_traveler.get("passport_attachment_ref")
             or list(passport_status.get("documents") or [])
         )
+        effective_birthday = session.birthday or str(known_traveler.get("birthday") or "")
+        age = compute_age(effective_birthday)
+        is_minor = age is not None and age < 18
+        if not linked_ids["lead_id"] and not session.duplicate_lead_choice and known_traveler.get("traveler_id"):
+            open_lead = self._open_lead_for_traveler(
+                traveler_id=str(known_traveler.get("traveler_id") or ""),
+                raw_phone=str(session.raw_phone or session.pending_raw_phone or ""),
+                country_code=session.country_code or self.settings.default_country_code,
+            )
+            if open_lead:
+                session._open_lead_id = str(open_lead.get("lead_id") or "")
+                session._open_lead_trip_type = str(open_lead.get("preferred_trip_type") or "")
         return {
             "session_id": session.id,
             "language": session.language,
@@ -344,7 +405,17 @@ class ToolCallingSessionRuntime:
             "room_group": session.room_group,
             "room_requirements": dict(session.room_requirements or {}),
             "currency": session.currency,
+            "is_minor": is_minor,
+            "open_lead_id": session._open_lead_id,
+            "open_lead_trip_type": session._open_lead_trip_type,
+            "duplicate_lead_choice": session.duplicate_lead_choice,
+            "duplicate_lead_override": "new" if session.duplicate_lead_choice == "new" else "",
+            "guardian_name": session.guardian_name,
+            "guardian_phone": session.guardian_phone,
             "passport_attachment_ref": session.passport_attachment_ref,
+            "passport_number": session.passport_number,
+            "passport_expiry": session.passport_expiry,
+            "passport_nationality": session.passport_nationality,
             "passport_status": passport_status,
             "passport_on_file": passport_on_file,
             "booking_confirmation_requested": bool(session.booking_confirmation_requested),
@@ -1424,7 +1495,11 @@ class ToolCallingSessionRuntime:
             if language.startswith("ar"):
                 return "تمام، عشان أكمل الحجز محتاج اختيار الغرفة فقط. اكتب اسم الغرفة أو رقمها من الاختيارات الظاهرة."
             return "I’m with you. To continue, I only need the room choice. Reply with the room name or its number."
-        if step == "collect_new_traveler_name":
+        if step in ("collect_new_traveler_name", "collect_guardian_name"):
+            if session._name_rejection_reason == "repeated_tokens":
+                if language.startswith("ar"):
+                    return "\u0627\u0644\u0627\u0633\u0645 \u062f\u0647 \u0645\u0634 \u0634\u0627\u064a\u0641\u0647 \u0627\u0633\u0645 \u062d\u0642\u064a\u0642\u064a. \u0645\u0645\u0643\u0646 \u062a\u0628\u0639\u062a \u0627\u0644\u0627\u0633\u0645 \u0627\u0644\u062d\u0642\u064a\u0642\u064a \u0627\u0644\u0623\u0648\u0644 \u0648\u0627\u0644\u0623\u0648\u0633\u0637 \u0648\u0627\u0644\u0623\u062e\u064a\u0631 \u0632\u064a \u0645\u0627 \u0647\u0648 \u0645\u0648\u062c\u0648\u062f \u0641\u064a \u0627\u0644\u0647\u0648\u064a\u0629\u061f"
+                return "That doesn't look like a full name -- could you share the real first, middle, and last name as it appears on ID?"
             if self._is_asking_for_known_name(clean_text):
                 if language.startswith("ar"):
                     return "\u0623\u0646\u062a \u0644\u0645 \u062a\u0631\u0633\u0644 \u0627\u0633\u0645\u0643 \u0628\u0639\u062f\u060c \u0644\u0630\u0644\u0643 \u0644\u0627 \u064a\u0645\u0643\u0646\u0646\u064a \u0645\u0639\u0631\u0641\u062a\u0647 \u0623\u0648 \u062a\u062e\u0645\u064a\u0646\u0647. \u0645\u0646 \u0641\u0636\u0644\u0643 \u0627\u0643\u062a\u0628 \u0627\u0633\u0645\u0643 \u0627\u0644\u062b\u0644\u0627\u062b\u064a\u060c \u0645\u062b\u0644: \u0645\u062d\u0645\u062f \u0623\u0634\u0631\u0641 \u0635\u0641\u0648\u062a."
@@ -1436,6 +1511,14 @@ class ToolCallingSessionRuntime:
             if language.startswith("ar"):
                 return "\u0645\u0646 \u0641\u0636\u0644\u0643 \u0627\u0643\u062a\u0628 \u0627\u0633\u0645\u0643 \u0627\u0644\u062b\u0644\u0627\u062b\u064a\u060c \u0645\u062b\u0644: \u0645\u062d\u0645\u062f \u0623\u0634\u0631\u0641 \u0635\u0641\u0648\u062a."
             return "Please enter your full three-part name, for example: Mohamed Ashraf Safwat."
+        if step == "collect_nationality":
+            if session._nationality_rejection_reason == "currency_code":
+                if language.startswith("ar"):
+                    return "\u0645\u062d\u062a\u0627\u062c \u062c\u0646\u0633\u064a\u062a\u0643\u060c \u0645\u062b\u0644 \u0645\u0635\u0631\u064a \u0623\u0648 \u0633\u0639\u0648\u062f\u064a\u060c \u0645\u0634 \u0639\u0645\u0644\u0629. \u0645\u0627 \u0647\u064a \u062c\u0646\u0633\u064a\u062a\u0643 \u0627\u0644\u062d\u0642\u064a\u0642\u064a\u0629\u061f"
+                return "I need your nationality (e.g. Egyptian, Saudi), not a currency -- what does your passport or ID say?"
+            if language.startswith("ar"):
+                return "\u0645\u0634 \u0642\u0627\u062f\u0631 \u0623\u062a\u0639\u0631\u0641 \u0639\u0644\u0649 \u0627\u0644\u062c\u0646\u0633\u064a\u0629 \u062f\u064a. \u0645\u0645\u0643\u0646 \u062a\u0643\u062a\u0628\u0647\u0627 \u0632\u064a \u0645\u0627 \u0647\u064a \u0645\u0648\u062c\u0648\u062f\u0629 \u0641\u064a \u062c\u0648\u0627\u0632 \u0627\u0644\u0633\u0641\u0631 \u0623\u0648 \u0627\u0644\u0647\u0648\u064a\u0629\u061f \u0645\u062b\u0627\u0644: \u0645\u0635\u0631\u064a\u060c \u0633\u0639\u0648\u062f\u064a."
+            return "I don't recognize that nationality. Could you type it as it appears on your passport or ID? For example: Egyptian, Saudi."
         if step == "collect_group_size":
             return "كم عدد المسافرين في الطلب؟" if language.startswith("ar") else "How many travelers should I include in the request?"
         if step == "collect_flight_preference":
@@ -1446,6 +1529,20 @@ class ToolCallingSessionRuntime:
             )
         if step == "collect_passport_attachment":
             return "لنكمل الرحلة الدولية، أرسل صورة أو ملف جواز السفر من فضلك." if language.startswith("ar") else "To continue with this international trip, please attach the passport image or PDF."
+        if step == "collect_passport_number":
+            if language.startswith("ar"):
+                return "رقم الجواز ده مش شكله صحيح. من فضلك اكتب رقم جواز السفر كما هو مكتوب (حروف وأرقام فقط)."
+            return "That doesn't look like a valid passport number. Please type the passport number exactly as printed (letters and digits only)."
+        if step == "collect_passport_expiry":
+            if session._passport_field_rejection_reason == "passport_expiry_past":
+                if language.startswith("ar"):
+                    return "تاريخ الانتهاء ده في الماضي، وده معناه إن الجواز منتهي الصلاحية. من فضلك تأكد من التاريخ أو أرسل جواز ساري."
+                return "That expiry date is in the past, which means this passport has already expired. Please double-check the date or provide a valid passport."
+            if language.startswith("ar"):
+                return "مش قادر أفهم تاريخ الانتهاء ده. من فضلك اكتبه بصيغة واضحة، مثل 21/08/2030."
+            return "I couldn't understand that expiry date. Please type it in a clear format, for example 21/08/2030."
+        if step == "collect_passport_country":
+            return "من فضلك اكتب جنسية جواز السفر." if language.startswith("ar") else "Please type the issuing nationality on the passport."
         return self._normalize_reply(decision.assistant_message, language)
 
     @staticmethod
@@ -1835,6 +1932,42 @@ class ToolCallingSessionRuntime:
             # changes instead of booking a stale room count.
             "source": "derived_from_group_size",
         }
+
+    def _refresh_selected_trip_capacity(self, session: SessionState) -> None:
+        """Overwrite the cached selected-trip entry with a fresh CRM read.
+
+        `_selected_trip()` otherwise reads whatever `search_trips` returned when
+        the trip was first found, which can go stale across turns (or across
+        concurrent sessions booking the same trip) -- Task 3.4: closes that
+        staleness window right before headcount is validated against capacity.
+        """
+        trip_id = str(session.selected_trip_id or "").strip()
+        if not trip_id:
+            return
+        try:
+            result = self._read_only_tools.get_trip_details(trip_id=trip_id)
+        except Exception as exc:
+            agent_logger.warning(
+                "Live capacity refresh failed session=%s trip=%s error=%s", session.id, trip_id, exc
+            )
+            return
+        fresh_trip = result.get("trip") if isinstance(result, dict) else None
+        if not isinstance(fresh_trip, dict) or not fresh_trip:
+            return
+        preview = dict(session.preview or {})
+        trip_result = dict(preview.get("trip_result") or {})
+        for bucket in ("open_trips", "date_tbd_trips"):
+            trips = list(trip_result.get(bucket) or [])
+            updated = False
+            for index, trip in enumerate(trips):
+                if isinstance(trip, dict) and str(trip.get("trip_id") or "").strip() == trip_id:
+                    trips[index] = {**trip, **fresh_trip}
+                    updated = True
+                    break
+            if updated:
+                trip_result[bucket] = trips
+        preview["trip_result"] = trip_result
+        session.preview = preview
 
     @staticmethod
     def _room_requirements_summary(session: SessionState) -> str:
@@ -2510,6 +2643,11 @@ class ToolCallingSessionRuntime:
 
     @classmethod
     def _flight_option_from_text(cls, text: str) -> str:
+        """Detect a flight-preference change stated anywhere in a free-form
+        sentence -- used for the "customer changes their mind mid-conversation"
+        interruption path, where a full natural sentence is expected. This is
+        deliberately more permissive than `_strict_flight_option_from_answer`,
+        which is used for capturing the direct answer to the flight question."""
         normalized = cls._normalize_trip_reference(text)
         compact = cls._compact_intent(text)
         if compact in {
@@ -2545,6 +2683,48 @@ class ToolCallingSessionRuntime:
             "عايزطيران",
             "عايزةطيران",
         } or "with flight" in normalized:
+            return "With Flight"
+        return ""
+
+    @classmethod
+    def _strict_flight_option_from_answer(cls, text: str) -> str:
+        """Whole-answer (typo-tolerant) match only, for the direct flight-option
+        question. Unlike `_flight_option_from_text`, this never matches a phrase
+        buried inside an unrelated longer sentence (Task 3.1: strict enum match)."""
+        compact = cls._compact_intent(text)
+        if compact in {
+            "withoutflight",
+            "withoutflights",
+            "without",
+            "witout",
+            "withot",
+            "whitout",
+            "wihout",
+            "wthout",
+            "noflight",
+            "noflights",
+            "idontwantaflight",
+            "idontwantflight",
+            "donotwantaflight",
+            "donotwantflight",
+            "بدونطيران",
+            "منغيرطيران",
+            "مشعايزطيران",
+            "مشعايزةطيران",
+        }:
+            return "Without Flight"
+        if compact in {
+            "withflight",
+            "withflights",
+            "with",
+            "iwantaflight",
+            "iwantflight",
+            "flightinstead",
+            "withflightinstead",
+            "معطيران",
+            "عايزطيران",
+            "عايزةطيران",
+        }:
             return "With Flight"
         return ""
 
@@ -3083,7 +3263,7 @@ class ToolCallingSessionRuntime:
                     if step_just_started
                     else (
                         self._canonical_trip_search_reply(session)
-                        if workflow_decision.required_step == "select_trip"
+                        if workflow_decision.required_step in ("select_trip", "handle_empty_trip_results")
                         else self._natural_interruption_fallback(session, workflow_decision, clean_text)
                     )
                 )
@@ -3121,9 +3301,19 @@ class ToolCallingSessionRuntime:
                 return session
             base_reply = (
                 self._canonical_trip_search_reply(session)
-                if workflow_decision.required_step == "select_trip"
+                if workflow_decision.required_step in ("select_trip", "handle_empty_trip_results")
                 else self._backend_required_step_reply(session, workflow_decision, clean_text)
             )
+            if step_value_captured and session._passport_expiry_warning:
+                # A short-validity passport is flagged, not blocked (per spec), so the
+                # warning rides along with the next question instead of a separate turn.
+                warning = (
+                    "تنبيه: صلاحية جواز السفر أقل من 6 أشهر من تاريخ الرحلة، وبعض الدول وشركات الطيران تطلب صلاحية 6 أشهر على الأقل. يفضل تجديده قبل السفر.\n\n"
+                    if session.language.startswith("ar")
+                    else "Note: the passport has less than 6 months of validity remaining from the trip date, and some airlines/countries require at least 6 months. We recommend renewing it before travel.\n\n"
+                )
+                base_reply = warning + base_reply
+                session._passport_expiry_warning = ""
             if step_value_captured:
                 self._append_authoritative_reply(
                     session,
@@ -3480,6 +3670,7 @@ class ToolCallingSessionRuntime:
         traveler = self._traveler_from_write_result(result) or traveler
         if traveler.get("traveler_id"):
             self._mark_traveler_verified(session, traveler)
+            self._persist_guardian_consent(session, str(traveler.get("traveler_id") or ""))
         else:
             agent_logger.error(
                 "New traveler lead %s saved without a linked traveler id session=%s",
@@ -3653,7 +3844,7 @@ class ToolCallingSessionRuntime:
         step = str(decision.required_step or "")
         if not step or step in {"save_new_traveler_lead", "run_traveler_lookup"}:
             return ""
-        if step == "select_trip":
+        if step in ("select_trip", "handle_empty_trip_results"):
             return self._canonical_trip_search_reply(session)
         if step == "create_booking_draft":
             return self._booking_confirmation_summary(session)
@@ -3738,6 +3929,27 @@ class ToolCallingSessionRuntime:
                     traveler["status"] = "Active"
                 return traveler
         return {}
+
+    def _persist_guardian_consent(self, session: SessionState, traveler_id: str) -> None:
+        """Write the collected guardian name/phone to CRM once, as soon as a traveler id exists.
+
+        A minor's booking must never be booked using only the traveler's own consent, so this
+        is written as soon as both guardian fields are known rather than deferred to the lead
+        save -- for an already-known returning traveler there is no later lead-save step to
+        piggyback on.
+        """
+        if session.guardian_consent_saved or not traveler_id or not session.guardian_name or not session.guardian_phone:
+            return
+        self._write_executor.record_guardian_consent(
+            traveler_id=traveler_id,
+            is_minor=True,
+            guardian_name=session.guardian_name,
+            guardian_phone=session.guardian_phone,
+        )
+        session.guardian_consent_saved = True
+        lead_id = self._linked_ids(session)["lead_id"]
+        if lead_id:
+            self._write_executor.record_lead_guardian_flag(lead_id=lead_id, requires_guardian_approval=True)
 
     @staticmethod
     def _mark_traveler_verified(session: SessionState, traveler: dict[str, Any]) -> None:
@@ -4244,21 +4456,28 @@ class ToolCallingSessionRuntime:
         return normalize_birthdate_input(text)
 
     @classmethod
-    def _extract_valid_full_name(cls, text: str) -> str:
+    def _validate_name_tokens(cls, text: str) -> tuple[str, str]:
+        """Return (normalized_name, "") on success, or ("", reason) on rejection.
+
+        `reason` is only populated for a genuine name-shaped answer that fails
+        structural validation (too few tokens, a token too short, or every token
+        identical) -- it stays "" for garbage/questions/fillers, which get the
+        existing generic re-ask instead of a specific-but-misleading reason.
+        """
         name = re.sub(r"\s+", " ", str(text or "").strip())
         if not name or len(name) > 80:
-            return ""
+            return "", ""
         if _PHONE_CANDIDATE_RE.search(name):
-            return ""
+            return "", ""
         if "?" in name or "\u061f" in name:
-            return ""
+            return "", ""
         normalized = cls._normalize_trip_reference(name)
         if not normalized:
-            return ""
+            return "", ""
         if cls._is_name_step_clarification(name) or cls._is_asking_for_known_name(name):
-            return ""
+            return "", ""
         if cls._is_explanation_request(name) or cls._is_identity_question(name) or cls._is_human_agent_request(name):
-            return ""
+            return "", ""
         if normalized in {
             "hi",
             "hello",
@@ -4278,7 +4497,7 @@ class ToolCallingSessionRuntime:
             "\u0645\u0634 \u0639\u0627\u0631\u0641",
             "\u0644\u0627",
         }:
-            return ""
+            return "", ""
         # People routinely end the name with sentence punctuation ("Mohamed Ashraf
         # Safwat."). Rejecting the whole answer for that re-asks the same question
         # and reads as if the agent ignored them, so strip trailing/leading
@@ -4286,28 +4505,31 @@ class ToolCallingSessionRuntime:
         parts = [part.strip(_NAME_EDGE_PUNCTUATION) for part in name.split(" ")]
         parts = [part for part in parts if part]
         if len(parts) < 3:
-            return ""
+            return "", "too_few_tokens"
         if not all(_NAME_TOKEN_RE.fullmatch(part) for part in parts):
-            return ""
-        return " ".join(parts)
+            return "", "invalid_characters"
+        if any(len(part) < 2 for part in parts):
+            return "", "token_too_short"
+        if len({part.casefold() for part in parts}) == 1:
+            # "seko seko seko" -- almost always test/placeholder input, not a real
+            # name. Two repeated tokens ("Al Al Mohamed") is a real name pattern
+            # in some cultures, so only an all-identical triple+ is rejected.
+            return "", "repeated_tokens"
+        return " ".join(parts), ""
+
+    @classmethod
+    def _extract_valid_full_name(cls, text: str) -> str:
+        return cls._validate_name_tokens(text)[0]
 
     @staticmethod
     def _extract_nationality_hint(text: str) -> str:
         lowered = " ".join(str(text or "").strip().lower().split())
-        aliases = {
-            "egyptian": "Egyptian",
-            "egypt": "Egyptian",
-            "saudi": "Saudi",
-            "saudi arabian": "Saudi",
-            "american": "American",
-            "usa": "American",
-            "british": "British",
-        }
-        if lowered in aliases:
-            return aliases[lowered]
+        resolved = resolve_nationality(lowered)
+        if resolved:
+            return resolved
         match = re.search(r"\b(?:my nationality is|nationality is|i am)\s+([a-z][a-z\s-]{2,40})\b", lowered)
         if match:
-            return " ".join(part.capitalize() for part in match.group(1).split())
+            return resolve_nationality(match.group(1)) or " ".join(part.capitalize() for part in match.group(1).split())
         return ""
 
     def _available_room_types(self, session: SessionState) -> list[str]:
@@ -4340,6 +4562,20 @@ class ToolCallingSessionRuntime:
         option_number = int(option_match.group(1)) if option_match else 0
         lowered = " ".join(normalized_text.casefold().split())
 
+        if session.stage == "duplicate_lead_choice_required" and not session.duplicate_lead_choice:
+            compact = self._compact_intent(text)
+            if option_number == 1 or compact in {"continue", "resume", "continuewiththesame", "same"}:
+                session.duplicate_lead_choice = "continue"
+                session.resumed_lead_id = session._open_lead_id
+                if session._open_lead_trip_type and not session.trip_type:
+                    session.trip_type = session._open_lead_trip_type
+                    self._update_collection_state(session, trip_type=True)
+                return True
+            if option_number == 2 or compact in {"new", "newrequest", "startnew", "startnewrequest"}:
+                session.duplicate_lead_choice = "new"
+                return True
+            return False
+
         if session.stage == "trip_type_required":
             trip_type = {1: "local", 2: "international"}.get(option_number) or normalize_trip_type(normalized_text)
             if trip_type:
@@ -4349,11 +4585,13 @@ class ToolCallingSessionRuntime:
             return False
 
         if session.stage == "traveler_not_found" and not session.customer_name:
-            name = self._extract_valid_full_name(text)
+            name, reason = self._validate_name_tokens(text)
             if name:
                 session.customer_name = name
+                session._name_rejection_reason = ""
                 self._update_collection_state(session, customer_name=True)
                 return True
+            session._name_rejection_reason = reason
             return False
         if session.stage == "traveler_gender_required" and not session.room_group:
             people_counts = self._extract_mixed_people_counts(normalized_text)
@@ -4365,6 +4603,9 @@ class ToolCallingSessionRuntime:
                     self._update_collection_state(session, group_size=True)
                 self._update_collection_state(session, room_group=True)
                 return True
+            # Whole-answer match against the two presented options only -- a
+            # keyword buried inside an unrelated longer sentence must not be
+            # guessed as an answer to this question (Task 3.1: strict enum match).
             boys_terms = {
                 "boys", "boy", "male", "men", "man",
                 "\u0634\u0628\u0627\u0628", "\u0630\u0643\u0648\u0631", "\u0631\u062c\u0627\u0644",
@@ -4374,19 +4615,11 @@ class ToolCallingSessionRuntime:
                 "girls", "girl", "female", "women", "woman",
                 "\u0628\u0646\u0627\u062a", "\u0625\u0646\u0627\u062b", "\u0627\u0646\u0627\u062b", "\u0646\u0633\u0627\u0621",
             }
-            if option_number == 1 or lowered in boys_terms or any(token in lowered for token in boys_terms):
+            if option_number == 1 or lowered in boys_terms:
                 session.room_group = "boys"
                 self._update_collection_state(session, room_group=True)
                 return True
-            if option_number == 2 or lowered in girls_terms or any(token in lowered for token in girls_terms):
-                session.room_group = "girls"
-                self._update_collection_state(session, room_group=True)
-                return True
-            if option_number == 1 or lowered in {"boys", "boy", "male", "men", "man", "شباب", "اولاد", "أولاد", "رجال"} or "boys" in lowered or "male" in lowered:
-                session.room_group = "boys"
-                self._update_collection_state(session, room_group=True)
-                return True
-            if option_number == 2 or lowered in {"girls", "girl", "female", "women", "woman", "بنات", "نساء"} or "girls" in lowered or "female" in lowered:
+            if option_number == 2 or lowered in girls_terms:
                 session.room_group = "girls"
                 self._update_collection_state(session, room_group=True)
                 return True
@@ -4406,8 +4639,10 @@ class ToolCallingSessionRuntime:
             if option_number and option_number <= len(available_types):
                 room_type = available_types[option_number - 1]
             else:
+                # Whole-answer match only -- "double" must be the entire reply, not
+                # a word found inside an unrelated longer sentence (Task 3.1).
                 aliases = {"single": "Single", "double": "Double", "triple": "Triple"}
-                room_type = next((value for token, value in aliases.items() if token in lowered), "")
+                room_type = aliases.get(lowered, "")
                 if room_type not in available_types:
                     room_type = ""
             if room_type:
@@ -4422,13 +4657,17 @@ class ToolCallingSessionRuntime:
             if group_size:
                 session.group_size = group_size
                 self._update_collection_state(session, group_size=True)
+                # Re-fetch this trip's live capacity right before it gets checked
+                # against the headcount just given, instead of trusting whatever
+                # the original trip search cached minutes (or sessions) ago.
+                self._refresh_selected_trip_capacity(session)
                 self._ensure_room_requirements_for_group(session)
                 return True
             return False
         if session.stage == "flight_option_required" and not session.flight_option:
             flight_option = {1: "With Flight", 2: "Without Flight"}.get(option_number) or normalize_flight_option(normalized_text)
             if not flight_option:
-                flight_option = self._flight_option_from_text(normalized_text)
+                flight_option = self._strict_flight_option_from_answer(normalized_text)
             if flight_option:
                 session.flight_option = flight_option
                 self._update_collection_state(session, flight_option=True)
@@ -4441,12 +4680,33 @@ class ToolCallingSessionRuntime:
                 self._update_collection_state(session, birthday=True)
                 return True
             return False
+        if session.stage == "guardian_name_required" and not session.guardian_name:
+            name, reason = self._validate_name_tokens(text)
+            if name:
+                session.guardian_name = name
+                session._name_rejection_reason = ""
+                return True
+            session._name_rejection_reason = reason
+            return False
+        if session.stage == "guardian_phone_required" and not session.guardian_phone:
+            phone_match = _PHONE_CANDIDATE_RE.search(text)
+            if not phone_match:
+                return False
+            session.guardian_phone = re.sub(r"[^\d+]", "", phone_match.group(0)).strip()
+            traveler_id = self._linked_ids(session)["traveler_id"]
+            if traveler_id:
+                self._persist_guardian_consent(session, traveler_id)
+            return True
         if session.stage == "nationality_required" and not session.nationality:
-            nationality = self._extract_nationality_hint(text) or str(text or "").strip()
-            if nationality and not _PHONE_CANDIDATE_RE.search(nationality):
-                session.nationality = nationality[:60]
+            resolved = self._extract_nationality_hint(text)
+            if resolved:
+                session.nationality = resolved
+                session._nationality_rejection_reason = ""
                 self._update_collection_state(session, nationality=True)
                 return True
+            session._nationality_rejection_reason = (
+                "currency_code" if looks_like_currency_code(text) else "not_recognized"
+            )
             return False
         if session.stage == "currency_required" and not session.currency:
             lowered = " ".join(str(text or "").strip().lower().split())
@@ -4459,4 +4719,51 @@ class ToolCallingSessionRuntime:
                 self._update_collection_state(session, currency=True)
                 return True
             return False
+        if session.stage == "passport_number_required" and not session.passport_number:
+            candidate = re.sub(r"\s+", "", str(text or "").strip())
+            if candidate.isalnum() and 6 <= len(candidate) <= 9:
+                session.passport_number = candidate.upper()
+                session._passport_field_rejection_reason = ""
+                return True
+            session._passport_field_rejection_reason = "passport_number_invalid"
+            return False
+        if session.stage == "passport_expiry_required" and not session.passport_expiry:
+            parsed = normalize_expiry_date_input(text)
+            if not parsed:
+                session._passport_field_rejection_reason = "passport_expiry_unparseable"
+                return False
+            expiry_date = date.fromisoformat(parsed)
+            if expiry_date < date.today():
+                session._passport_field_rejection_reason = "passport_expiry_past"
+                return False
+            # Flag (don't block) when the passport is valid but expires soon relative
+            # to the trip start -- many airlines/countries require 6 months' validity.
+            reference_date = date.today()
+            trip_start = str(self._selected_trip(session).get("start_date") or "").strip()
+            if trip_start:
+                try:
+                    reference_date = date.fromisoformat(trip_start[:10])
+                except ValueError:
+                    pass
+            session._passport_expiry_warning = parsed if expiry_date < add_months(reference_date, 6) else ""
+            session.passport_expiry = parsed
+            session._passport_field_rejection_reason = ""
+            return True
+        if session.stage == "passport_country_required" and not session.passport_nationality:
+            candidate = str(text or "").strip()
+            if not candidate or len(candidate) > 60 or _PHONE_CANDIDATE_RE.search(candidate):
+                session._passport_field_rejection_reason = "passport_country_invalid"
+                return False
+            session.passport_nationality = candidate[:60]
+            if session.nationality and session.nationality.strip().casefold() != candidate.strip().casefold():
+                # Cross-check only, per spec: a mismatch is fine and common (dual
+                # nationals, recently-changed nationality) -- log it, don't block.
+                agent_logger.info(
+                    "Passport nationality differs from stated nationality session=%s nationality=%s passport_nationality=%s",
+                    session.id,
+                    session.nationality,
+                    candidate,
+                )
+            session._passport_field_rejection_reason = ""
+            return True
         return False

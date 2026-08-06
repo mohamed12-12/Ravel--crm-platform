@@ -1552,6 +1552,46 @@ class UnifiedCRMService:
             connection.commit()
         return updates
 
+    def set_guardian_consent(
+        self,
+        traveler_id: str,
+        *,
+        is_minor: bool,
+        guardian_name: str = "",
+        guardian_phone: str = "",
+    ) -> dict[str, Any]:
+        if not traveler_id:
+            return {}
+        self.ensure_operational_schema()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE travelers
+                SET is_minor = ?, guardian_name = ?, guardian_phone = ?
+                WHERE traveler_id = ?
+                """,
+                (1 if is_minor else 0, guardian_name or None, guardian_phone or None, traveler_id),
+            )
+            connection.commit()
+        return {
+            "traveler_id": traveler_id,
+            "is_minor": bool(is_minor),
+            "guardian_name": guardian_name or None,
+            "guardian_phone": guardian_phone or None,
+        }
+
+    def flag_lead_guardian_approval(self, lead_id: str, *, requires_guardian_approval: bool) -> dict[str, Any]:
+        if not lead_id:
+            return {}
+        self.ensure_operational_schema()
+        with self.connect() as connection:
+            connection.execute(
+                "UPDATE leads SET requires_guardian_approval = ? WHERE lead_id = ?",
+                (1 if requires_guardian_approval else 0, lead_id),
+            )
+            connection.commit()
+        return {"lead_id": lead_id, "requires_guardian_approval": bool(requires_guardian_approval)}
+
     def create_interaction(
         self,
         *,
@@ -3190,6 +3230,9 @@ class UnifiedCRMService:
             ("passport_nationality", "TEXT"),
             ("passport_attachment_ref", "TEXT"),
             ("preferred_currency", "TEXT"),
+            ("is_minor", "INTEGER"),
+            ("guardian_name", "TEXT"),
+            ("guardian_phone", "TEXT"),
         ]
         for col_name, col_type in passport_columns:
             if col_name not in existing_cols:
@@ -3395,6 +3438,8 @@ class UnifiedCRMService:
             connection.execute("ALTER TABLE leads ADD COLUMN passport_attachment_ref TEXT")
         if 'passport_status' not in existing_cols:
             connection.execute("ALTER TABLE leads ADD COLUMN passport_status TEXT")
+        if 'requires_guardian_approval' not in existing_cols:
+            connection.execute("ALTER TABLE leads ADD COLUMN requires_guardian_approval INTEGER")
 
     @staticmethod
     def _migrate_idempotency_columns(connection: sqlite3.Connection) -> None:

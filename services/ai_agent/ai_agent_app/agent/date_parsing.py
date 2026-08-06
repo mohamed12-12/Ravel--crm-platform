@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import re
 from datetime import date
 
@@ -113,6 +114,61 @@ def _month_name_candidates(text: str, *, today: date) -> list[tuple[int, int, in
         year, month, day = match.groups()
         candidates.append((_normalize_year(year, today=today), _MONTHS[month.lower()], int(day)))
     return candidates
+
+
+def normalize_expiry_date_input(value: str) -> str:
+    """Flexible date parse for an expiry date, which -- unlike a birthday -- may
+    validly be in the past (that is exactly the case the caller needs to detect
+    and reject), so this does not filter out future OR past dates itself."""
+    text = str(value or "").strip().translate(_DIGIT_TRANSLATION)
+    if not text:
+        return ""
+    today = date.today()
+    text = re.sub(r"[,،]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    for year, month, day in _numeric_candidates(text, today=today):
+        normalized = _valid_calendar_date(year, month, day)
+        if normalized:
+            return normalized
+
+    for year, month, day in _month_name_candidates(text, today=today):
+        normalized = _valid_calendar_date(year, month, day)
+        if normalized:
+            return normalized
+
+    return ""
+
+
+def _valid_calendar_date(year: int, month: int, day: int) -> str:
+    if year < 1900 or year > 2200:
+        return ""
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        return ""
+
+
+def add_months(value: date, months: int) -> date:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(value.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def compute_age(birthday_iso: str, *, today: date | None = None) -> int | None:
+    """Return the age in whole years for an ISO (YYYY-MM-DD) birthday, or None if unparseable."""
+    text = str(birthday_iso or "").strip()
+    if not text:
+        return None
+    try:
+        year_str, month_str, day_str = text.split("-")
+        born = date(int(year_str), int(month_str), int(day_str))
+    except (ValueError, TypeError):
+        return None
+    today = today or date.today()
+    return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
 
 
 def _valid_date(year: int, month: int, day: int, *, today: date) -> str:

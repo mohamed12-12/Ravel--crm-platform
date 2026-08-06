@@ -344,8 +344,7 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
         self.assertNotIn("search_available_trips", passport_step.allowed_tools)
         self.assertIn("passport", policy.block_tool_result("create_booking_draft", passport_step)["assistant_message"].lower())
 
-        booking_step = policy.evaluate({
-            **base_context,
+        passport_fields_common = {
             "room_type": "Double",
             "group_size": 1,
             "flight_option": "Without Flight",
@@ -356,6 +355,32 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
                 "group_size": True,
                 "flight_option": True,
             },
+        }
+
+        passport_number_step = policy.evaluate({**base_context, **passport_fields_common})
+        self.assertEqual(passport_number_step.state, "passport_number_required")
+
+        passport_expiry_step = policy.evaluate({
+            **base_context,
+            **passport_fields_common,
+            "passport_number": "A1234567",
+        })
+        self.assertEqual(passport_expiry_step.state, "passport_expiry_required")
+
+        passport_country_step = policy.evaluate({
+            **base_context,
+            **passport_fields_common,
+            "passport_number": "A1234567",
+            "passport_expiry": "2030-05-01",
+        })
+        self.assertEqual(passport_country_step.state, "passport_country_required")
+
+        booking_step = policy.evaluate({
+            **base_context,
+            **passport_fields_common,
+            "passport_number": "A1234567",
+            "passport_expiry": "2030-05-01",
+            "passport_nationality": "Egyptian",
         })
         self.assertEqual(booking_step.state, "booking_ready")
         self.assertIn("create_booking_draft", booking_step.allowed_tools)
@@ -675,8 +700,13 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
         self.assertEqual(session["selectedTripName"], "")
         self.assertEqual(session["preferredDate"], "August")
         self.assertEqual(session["groupSize"], 4)
-        self.assertEqual(session["customer_status"], "Searching trips")
-        self.assertEqual(session["stage"], "trip_search_ready")
+        # The seeded demo trips don't literally contain "Turkey" in their fields,
+        # so the query-filtered search genuinely finds zero matches here. Task 3.3
+        # makes that an honest "No matching trips" status instead of the generic
+        # "Searching trips" a not-yet-run search would show -- this assertion is
+        # about the preserved preferences above, not about search-result content.
+        self.assertEqual(session["customer_status"], "No matching trips")
+        self.assertEqual(session["stage"], "no_trips_available")
 
     def test_required_step_answers_update_session_fields(self) -> None:
         client, app = self._tool_calling_app()
