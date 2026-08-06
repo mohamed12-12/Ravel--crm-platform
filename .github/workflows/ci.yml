@@ -38,3 +38,54 @@ jobs:
 
       - name: Run build
         run: npm run build
+
+  security-audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Node dependencies
+        run: npm install
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt pip-audit bandit
+
+      # Blocking: fails the build on a known-vulnerable Python dependency.
+      # requirements.txt is the source of truth for both services (see its
+      # own header comment) - apps/api/requirements.txt is a subset kept in
+      # sync, so auditing the root file covers both.
+      - name: pip-audit (Python dependencies)
+        run: python -m pip_audit -r requirements.txt
+
+      # Non-blocking: npm audit --audit-level=high currently reports known
+      # esbuild/vite findings that haven't been triaged yet (see
+      # RUN_GUIDE.md). Kept visible in CI output rather than silently
+      # skipped; tighten to blocking once those are resolved or accepted.
+      - name: npm audit (Node dependencies, report only)
+        run: npm audit --workspaces --audit-level=high
+        continue-on-error: true
+
+      # Blocking at HIGH severity only: currently zero high-severity
+      # findings. Medium/low findings exist (mostly f-string SQL building
+      # over hardcoded internal identifier maps, already reviewed - see
+      # services/crm/system_services/unified_service.py) and are reported
+      # for visibility without failing the build until specifically triaged.
+      - name: bandit (Python static analysis, high severity)
+        run: python -m bandit -r apps/api/app services/ai_agent/ai_agent_app services/crm services/instagram -lll
+
+      - name: bandit (full report, informational)
+        run: python -m bandit -r apps/api/app services/ai_agent/ai_agent_app services/crm services/instagram
+        continue-on-error: true

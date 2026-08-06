@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from flask import Blueprint, flash, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from app.extensions import db
+from app.extensions import db, limiter
 from app.models.user import User
 from app.models.user_audit import UserAuditLog
 from app.security import generate_csrf_token
@@ -106,6 +106,7 @@ def _record_login_event(user: User) -> None:
 
 
 @auth_bp.route("/login", methods=["GET", "POST"])
+@limiter.limit("10 per minute")
 def login():
     error = ""
     if request.method == "POST":

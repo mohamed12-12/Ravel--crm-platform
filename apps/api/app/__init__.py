@@ -5,8 +5,17 @@ from flask import Flask, session
 from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy import text
 from .config import config
-from .extensions import db, migrate, login_manager, socketio
+from .extensions import db, migrate, login_manager, limiter, socketio
 from .config import validate_config
+
+
+def _running_under_pytest() -> bool:
+    return bool(
+        os.getenv("PYTEST_CURRENT_TEST")
+        or os.getenv("PYTEST_ADDOPTS")
+        or os.getenv("FLASK_ENV", "").lower() == "testing"
+        or os.getenv("TESTING", "").lower() in {"1", "true", "yes"}
+    )
 
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "database" / "migrations"
@@ -30,13 +39,7 @@ def _fail_fast_on_operational_db_in_tests(app: Flask) -> None:
     resolved = _resolve_sqlite_path(uri)
     if resolved is None or resolved != OPERATIONAL_DB_PATH:
         return
-    if not (
-        app.testing
-        or os.getenv("PYTEST_CURRENT_TEST")
-        or os.getenv("PYTEST_ADDOPTS")
-        or os.getenv("FLASK_ENV", "").lower() == "testing"
-        or os.getenv("TESTING", "").lower() in {"1", "true", "yes"}
-    ):
+    if not (app.testing or _running_under_pytest()):
         return
     raise RuntimeError(
         "Refusing to initialize the operational CRM database during tests. "
@@ -547,7 +550,20 @@ def create_app(config_name=None):
     db.init_app(app)
     migrate.init_app(app, db, directory=str(MIGRATIONS_DIR))
     login_manager.init_app(app)
-    
+
+    # RATELIMIT_ENABLED is read once by Limiter.init_app(), so it must be
+    # resolved before that call. app.config["TESTING"] is typically set by
+    # test fixtures AFTER create_app() returns (too late), so default to
+    # off under pytest via the same env-var detection used above; an
+    # explicit RATELIMIT_ENABLED env var always wins so tests that want to
+    # exercise real rate limiting can opt back in.
+    ratelimit_override = os.environ.get("RATELIMIT_ENABLED")
+    if ratelimit_override is not None:
+        app.config["RATELIMIT_ENABLED"] = ratelimit_override.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        app.config.setdefault("RATELIMIT_ENABLED", not _running_under_pytest())
+    limiter.init_app(app)
+
     from .models.user import User
     from .models.assignment_history import AssignmentHistory
     from .models.user_audit import UserAuditLog

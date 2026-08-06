@@ -9,6 +9,8 @@ from typing import Any
 from werkzeug.utils import secure_filename
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, session
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from services.ai_agent.ai_agent_app.agent import GeminiAgent, SessionFlowManager
 from services.ai_agent.ai_agent_app.agent.response_format import response_completeness_issue
@@ -1648,6 +1650,16 @@ def create_app(
         template_folder=str((Path(__file__).resolve().parent / "web" / "templates")),
         static_folder=str((Path(__file__).resolve().parent / "web" / "static")),
     )
+    # Created fresh per create_app() call (this app has no separate blueprint
+    # modules that need to import a shared limiter), so each app instance
+    # gets its own in-memory counters -- no risk of one test's requests
+    # tripping a limit meant for a different app/test.
+    limiter = Limiter(
+        app=app,
+        key_func=get_remote_address,
+        default_limits=["120 per minute"],
+        storage_uri="memory://",
+    )
     app.config["SETTINGS"] = base_settings
     app.config["AI_AGENT_MODE"] = base_settings.ai_agent_mode
     app.config["SHEET_GATEWAY"] = build_sheet_gateway(base_settings)
@@ -1808,10 +1820,11 @@ def create_app(
         return verify_webhook(settings.meta_verify_token)
 
     @app.post("/webhook")
+    @limiter.limit("60 per minute")
     def webhook_received():
         # Wrap logic to use decorator with dynamic settings.
-        # TODO(production): add route-level rate limiting and durable retry queues
-        # for outbound Graph API sends before scaling past demo volume.
+        # TODO(production): durable retry queues for outbound Graph API sends
+        # before scaling past demo volume.
         settings = app.config["SETTINGS"]
         @validate_meta_signature(settings.meta_app_secret)
         def process_request():
@@ -1945,6 +1958,7 @@ def create_app(
         return jsonify({"ok": True, "stats": gateway.get_demo_stats()})
 
     @app.post("/api/session")
+    @limiter.limit("20 per minute")
     def create_session_route():
         sessions: SessionFlowManager = app.config["SESSIONS"]
         session = sessions.create_session(gateway)
@@ -1968,6 +1982,7 @@ def create_app(
         return jsonify({"session": _serialize_session(gateway, session)})
 
     @app.post("/api/session/<session_id>/message")
+    @limiter.limit("30 per minute")
     def send_message(session_id: str):
         sessions: SessionFlowManager = app.config["SESSIONS"]
         session = sessions.get(session_id)

@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import { IdentityController } from './controllers/identity.controller';
 
 dotenv.config();
@@ -10,9 +11,17 @@ const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+app.use(
+  rateLimit({
+    windowMs: 60 * 1000,
+    limit: 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+  })
+);
 
-// TODO(production): add auth, request rate limiting, request IDs, and structured audit logs
-// before exposing this middleware beyond local/admin networks.
+// TODO(production): add auth and structured audit logs before exposing this
+// middleware beyond local/admin networks.
 
 // API v2 Routes
 app.post('/api/crm/resolve-identity', IdentityController.resolveIdentity);

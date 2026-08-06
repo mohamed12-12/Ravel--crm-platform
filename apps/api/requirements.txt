@@ -5,6 +5,7 @@ Flask-SQLAlchemy>=3.1.0
 Flask-Migrate>=4.0.5
 Flask-Login>=0.6.3
 Flask-SocketIO>=5.3.6
+Flask-Limiter>=4.0.0
 # SQLAlchemy connects via "postgresql+psycopg2://" - this requires psycopg2,
 # not psycopg (v3). Do not swap this for psycopg[binary].
 psycopg2-binary>=2.9.9

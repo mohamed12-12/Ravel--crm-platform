@@ -176,6 +176,35 @@ Read `database/postgres/SQLITE_TO_POSTGRES_MIGRATION_PLAN.md`,
 `DEVOPS_POSTGRES_SETUP_INSTRUCTIONS.md`, and `POSTGRES_MIGRATION_ROLLBACK_PLAN.md`
 before running this against anything other than a disposable/staging target.
 
+## Rate Limiting
+
+All three HTTP services enforce basic per-IP rate limits:
+
+| Service | Library | Notable limits |
+| --- | --- | --- |
+| CRM/API (`apps/api`) | Flask-Limiter | 300/hour default; `/login` at 10/minute |
+| AI agent (`services/ai_agent`) | Flask-Limiter | 120/minute default; `/api/session` 20/min, `/api/session/<id>/message` 30/min, `/webhook` 60/min |
+| Middleware (`apps/middleware`) | express-rate-limit | 120/minute across all routes |
+
+- `apps/api`'s limiter is disabled by default whenever running under pytest
+  (detected the same way as the operational-DB guard in `app/__init__.py`),
+  since `app.config["TESTING"]` is normally set too late for Flask-Limiter
+  to see it. Set `RATELIMIT_ENABLED=true`/`false` explicitly to override
+  either way - `tests/test_rate_limiting.py` does this to exercise the real
+  limiter.
+- `services/ai_agent`'s limiter is always on; each `create_app()` call gets
+  its own fresh in-memory counters, so tests that spin up their own app
+  instance are unaffected by limits hit in a different test's app.
+- All three use in-memory storage (no Redis) - counters reset on process
+  restart and are per-process, not shared across workers. `apps/api` runs
+  with a single gunicorn worker (`deploy/systemd/rahma-crm-api.service`),
+  so its limits apply as configured. `services/ai_agent` runs with 3
+  workers (`deploy/systemd/rahma-ai-agent.service`), so its effective limit
+  per client is up to ~3x the numbers above, since a client's requests can
+  land on any of the 3 workers' independent counters. Move to a shared
+  backend (Redis) via Flask-Limiter's `storage_uri` if that gap needs
+  closing.
+
 ## Deploying / Hosting
 
 Not covered here - see [`deploy/README.md`](deploy/README.md) for a full
@@ -209,3 +238,10 @@ for the production environment template.
   tests exist yet for either).
 - `npm audit --audit-level=high` currently reports esbuild/vite
   high-severity findings - review before treating `npm audit` as a hard gate.
+- CI runs a separate `security-audit` job (`.github/workflows/ci.yml`) on
+  every push/PR: `pip-audit` against `requirements.txt` (blocking),
+  `npm audit --workspaces --audit-level=high` (report-only, see the esbuild/
+  vite note above), and `bandit` against `apps/api/app`,
+  `services/ai_agent/ai_agent_app`, `services/crm`, `services/instagram`
+  (blocking at high severity only - currently 0 findings; medium/low
+  findings are reported but don't fail the build until triaged).
