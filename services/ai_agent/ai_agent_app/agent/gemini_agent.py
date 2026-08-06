@@ -25,6 +25,7 @@ from services.ai_agent.ai_agent_app.agent.tool_routing_audit import evaluate_too
 from services.ai_agent.ai_agent_app.agent.workflow_policy import ConversationWorkflowPolicy
 from services.ai_agent.ai_agent_app.agent.write_tool_executor import GeminiWriteToolExecutor
 from services.ai_agent.ai_agent_app.agent.write_response_gating import detect_write_record_type, gate_customer_write_reply
+from services.ai_agent.ai_agent_app.agent.write_result import WriteOutcome, normalize_write_result
 from services.ai_agent.ai_agent_app.config import Settings
 from services.ai_agent.ai_agent_app.logger import agent_logger
 from services.ai_agent.validation import ActionValidator
@@ -294,9 +295,14 @@ class GeminiAgent:
                 return True
             if str(result.get("status") or "").strip().lower() in {"failed", "error", "router_blocked", "workflow_blocked"}:
                 return True
-            contract = result.get("write_result_contract") if isinstance(result.get("write_result_contract"), dict) else {}
-            if str(contract.get("status") or "").strip().lower() in {"failed", "blocked"}:
-                return True
+            if isinstance(result.get("write_result_contract"), dict) and result["write_result_contract"]:
+                normalized = normalize_write_result(result, backend="")
+                # A missing/empty status (a known legacy contract shape) is
+                # not itself a failure signal here -- only a status that IS
+                # present but resolves to non-success (an explicit failure,
+                # or a genuinely new, not-yet-recognized status) counts.
+                if normalized.raw_status and normalized.outcome is not WriteOutcome.SUCCESS:
+                    return True
         return False
 
     @staticmethod

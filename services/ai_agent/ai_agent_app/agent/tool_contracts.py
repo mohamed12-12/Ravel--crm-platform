@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from services.ai_agent.ai_agent_app.agent.tool_registry import ToolSpec
+from services.ai_agent.ai_agent_app.agent.write_result import WriteOutcome, normalize_write_result
 
 
 SAFE_TOOL_ERROR_MESSAGES = {
@@ -68,11 +69,11 @@ def normalize_tool_result_contract(
             contract = nested.get("write_result_contract") if isinstance(nested.get("write_result_contract"), dict) else None
         if not isinstance(contract, dict):
             return _safe_failed_result(spec=spec, record_type=record_type, reason_code="malformed_write_result", session_context=session_context)
-        status = str(contract.get("status") or "").strip().lower()
+        write_outcome = normalize_write_result({"write_result_contract": contract}, backend="").outcome
         record_id = str(contract.get("record_id") or normalized.get("result_id") or "").strip()
-        if status in {"success", "reused", "duplicate"} and not record_id:
+        if write_outcome is WriteOutcome.SUCCESS and not record_id:
             return _safe_failed_result(spec=spec, record_type=record_type, reason_code="missing_write_record_id", session_context=session_context)
-        normalized.setdefault("executed", bool(contract.get("executed", status == "success")))
+        normalized.setdefault("executed", bool(contract.get("executed", write_outcome is WriteOutcome.SUCCESS)))
         normalized.setdefault("result_id", record_id)
         normalized["write_result_contract"] = dict(contract)
         normalized.setdefault("write_result", {"write_result_contract": dict(contract)})

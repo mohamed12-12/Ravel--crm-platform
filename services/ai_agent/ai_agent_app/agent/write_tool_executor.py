@@ -486,8 +486,25 @@ class GeminiWriteToolExecutor:
             current_step=self._value(payload, session_context, "current_step") or "",
         )
         traveler = self._resolve_traveler(payload, session_context)
+        lead_id = str(result.get("lead_id") or "").strip()
+        # UnifiedCRMService.update_lead_stage never produced a
+        # write_result_contract at all (PostgresAgentBridgeService.
+        # update_lead_stage does), so this outcome was never comparable
+        # across backends -- build it explicitly here, backend-agnostic,
+        # using the same shared write_result_contract() both backends alias.
+        contract = result.get("write_result_contract") if isinstance(result.get("write_result_contract"), dict) else None
+        if not contract:
+            contract = self._write_result_contract(
+                status="success" if lead_id else "failed",
+                executed=bool(lead_id),
+                reused=False,
+                record_type="lead",
+                record_id=lead_id,
+                customer_confirmation_allowed=False,
+                audit={"session_id": str(session_context.get("session_id") or ""), "action": "update_lead_stage"},
+            )
         return {
-            "result_id": result.get("lead_id", ""),
+            "result_id": lead_id,
             "assistant_message": self._stage_message(result),
             "lead_update": result,
             "write_result": {
@@ -495,13 +512,15 @@ class GeminiWriteToolExecutor:
                 # write_result shape stays identical across lead writes.
                 "created_traveler": None,
                 "lead_update": result,
+                "write_result_contract": contract,
             },
+            "write_result_contract": contract,
             "traveler": traveler,
             "session_update": {
                 "lead_status": result.get("lead_stage", ""),
                 "final_result": {
                     "traveler": traveler,
-                    "lead_id": result.get("lead_id", ""),
+                    "lead_id": lead_id,
                     "handoff_id": "",
                     "write_result": {
                         "created_traveler": None,
@@ -1153,11 +1172,28 @@ class GeminiWriteToolExecutor:
             guardian_name=self._value(payload, session_context, "guardian_name") or "",
             guardian_phone=self._value(payload, session_context, "guardian_phone") or "",
         )
+        # UnifiedCRMService.set_guardian_consent never produced a
+        # write_result_contract at all (PostgresAgentBridgeService.
+        # set_guardian_consent does) -- build it explicitly here so the
+        # outcome is comparable across backends regardless.
+        result = result if isinstance(result, dict) else {}
+        contract = result.get("write_result_contract") if isinstance(result.get("write_result_contract"), dict) else None
+        if not contract:
+            contract = self._write_result_contract(
+                status="success" if result else "failed",
+                executed=bool(result),
+                reused=False,
+                record_type="traveler",
+                record_id=traveler_id,
+                customer_confirmation_allowed=False,
+                audit={"session_id": str(session_context.get("session_id") or ""), "action": "set_guardian_consent"},
+            )
         return {
             "result_id": traveler_id,
             "assistant_message": "",
-            "traveler": result if isinstance(result, dict) else {},
-            "write_result": {"traveler_update": result},
+            "traveler": result,
+            "write_result": {"traveler_update": result, "write_result_contract": contract},
+            "write_result_contract": contract,
         }
 
     def _execute_flag_lead_guardian_approval(
@@ -1175,11 +1211,28 @@ class GeminiWriteToolExecutor:
                 self._value(payload, session_context, "requires_guardian_approval"), default=True
             ),
         )
+        # UnifiedCRMService.flag_lead_guardian_approval never produced a
+        # write_result_contract at all (PostgresAgentBridgeService.
+        # flag_lead_guardian_approval does) -- build it explicitly here so
+        # the outcome is comparable across backends regardless.
+        result = result if isinstance(result, dict) else {}
+        contract = result.get("write_result_contract") if isinstance(result.get("write_result_contract"), dict) else None
+        if not contract:
+            contract = self._write_result_contract(
+                status="success" if result else "failed",
+                executed=bool(result),
+                reused=False,
+                record_type="lead",
+                record_id=lead_id,
+                customer_confirmation_allowed=False,
+                audit={"session_id": str(session_context.get("session_id") or ""), "action": "flag_lead_guardian_approval"},
+            )
         return {
             "result_id": lead_id,
             "assistant_message": "",
-            "lead_update": result if isinstance(result, dict) else {},
-            "write_result": {"lead_update": result},
+            "lead_update": result,
+            "write_result": {"lead_update": result, "write_result_contract": contract},
+            "write_result_contract": contract,
         }
 
     def record_guardian_consent(

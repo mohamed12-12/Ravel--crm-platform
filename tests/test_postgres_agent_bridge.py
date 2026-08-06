@@ -67,6 +67,13 @@ def _create_app(tmpdir: Path):
 
 @pytest.fixture()
 def bridge_app():
+    # _create_app pops "app"/"app.*" from sys.modules to force a fresh
+    # Flask-SQLAlchemy registration -- that must not leak into later tests
+    # that do a plain `from app import ...` expecting their own fresh
+    # import, so snapshot and restore the exact module objects afterward.
+    original_app_modules = {
+        name: module for name, module in sys.modules.items() if name == "app" or name.startswith("app.")
+    }
     tmpdir = Path(".tmp-test-workdirs") / f"postgres-bridge-{uuid.uuid4().hex}"
     tmpdir.mkdir(parents=True, exist_ok=True)
     app, db = _create_app(tmpdir)
@@ -74,6 +81,10 @@ def bridge_app():
         yield app, db
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+        for name in list(sys.modules):
+            if name == "app" or name.startswith("app."):
+                del sys.modules[name]
+        sys.modules.update(original_app_modules)
         for key in ("DATABASE_URL", "RAHMA_SYSTEM_DB_PATH", "DATA_AUTHORITY", "CRM_ACCESS_MODE", "CRM_AUTH_ENABLED"):
             os.environ.pop(key, None)
 

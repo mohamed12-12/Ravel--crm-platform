@@ -134,6 +134,34 @@ python -m pytest tests/test_deployment_production_validation.py tests/test_port1
     tests/test_postgres_agent_bridge.py tests/test_instagram_webhook.py tests/test_data_authority.py -q
 ```
 
+`api`-access-mode coverage (Phase 4 / test-production parity): running the
+*entire* suite with `CRM_ACCESS_MODE=api` forced was tried and is **not**
+currently a clean, ready-to-wire-into-CI command — several existing tests
+construct a `ToolCallingSessionRuntime`/`ReadOnlyCRMTools` directly without
+a `crm_api_base_url`, which is a hard requirement in `api` mode
+(`CRMApiClient.__init__` raises `ValueError` without one), so they fail for
+a fixture-configuration reason unrelated to any real backend divergence.
+Making that command safe means auditing every such fixture across the
+suite to either set `crm_api_base_url`/a working local server or an
+explicit mode override — a real, separately-scoped follow-up, not done
+here. Until then, use the targeted tests below instead, which exercise the
+actual mechanism that broke for guardian consent without needing that
+fixture-wide rework:
+
+```bash
+python -m pytest tests/test_dual_access_mode_dispatch.py \
+    tests/test_write_tool_executor_verification.py::TestGuardianConsentDispatchByMode \
+    tests/test_postgres_agent_bridge.py tests/test_dual_backend_write_parity.py -q
+```
+
+Production-path smoke test (Task B.3 — scripted conversation walk against
+the real `PostgresAgentBridgeService` code path, on a disposable database,
+never real production data):
+
+```bash
+python tools/production_parity_smoke_test.py
+```
+
 PostgreSQL migration (already run once against staging - see
 `POSTGRES_STAGING_AGENT_PATH_SMOKE_REPORT.md` - safe to re-run, inserts use
 `ON CONFLICT DO NOTHING`):

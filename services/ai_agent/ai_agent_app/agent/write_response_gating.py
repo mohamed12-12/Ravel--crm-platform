@@ -3,8 +3,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-_SUCCESS_STATUSES = {"success", "created", "reused", "duplicate"}
-_BLOCKED_STATUSES = {"blocked", "failed"}
+from services.ai_agent.ai_agent_app.agent.write_result import (
+    WriteOutcome,
+    normalize_write_result,
+)
+
+_IDEMPOTENT_REPLAY_STATUSES = {"reused", "duplicate"}
 _SUCCESS_WORDS = (
     "created",
     "saved",
@@ -88,11 +92,19 @@ def _record_id_from(write_result: dict[str, Any] | None, record_type: str) -> st
 
 def write_result_allows_success(write_result: dict[str, Any] | None, record_type: str) -> bool:
     contract = _contract_from(write_result)
-    status = str(contract.get("status") or "").strip().lower()
     record_id = str(contract.get("record_id") or _record_id_from(write_result, record_type)).strip()
-    if not status and record_id and bool(contract.get("executed", True)):
-        return True
-    return status in _SUCCESS_STATUSES and bool(record_id)
+    if not record_id:
+        return False
+    normalized = normalize_write_result(write_result, backend="")
+    if not normalized.raw_status:
+        # No formal write_result_contract at all -- a known legacy shape.
+        # Its only success signal is "has a record id and wasn't marked
+        # executed=False".
+        return bool(contract.get("executed", True))
+    # An UNKNOWN (unrecognized, never-before-seen) status is treated as
+    # failure for safety -- normalize_write_result already logged it loudly
+    # so this is never a silent misclassification.
+    return normalized.outcome is WriteOutcome.SUCCESS
 
 
 def customer_message_from_write_result(
@@ -103,11 +115,12 @@ def customer_message_from_write_result(
     display_name: str = "",
 ) -> str:
     contract = _contract_from(write_result)
-    status = str(contract.get("status") or "").strip().lower()
+    normalized = normalize_write_result(write_result, backend="")
+    status = normalized.raw_status
     record_id = str(contract.get("record_id") or _record_id_from(write_result, record_type)).strip()
     arabic = str(language or "").strip().lower().startswith("ar")
 
-    if status in {"reused", "duplicate"} and record_id:
+    if status in _IDEMPOTENT_REPLAY_STATUSES and record_id:
         if record_type == "booking":
             return f"طلب الحجز {record_id} مسجل بالفعل، وسيتابعه فريق Ravel." if arabic else f"Booking request {record_id} is already recorded. The Ravel team will follow up."
         if record_type == "handoff":
@@ -115,7 +128,7 @@ def customer_message_from_write_result(
         if record_type == "lead":
             return f"طلبك {record_id} مسجل بالفعل، وسنتابعه معك." if arabic else f"Your request {record_id} is already recorded. We will follow up with you."
 
-    if status in {"success", "created"} and record_id:
+    if normalized.outcome is WriteOutcome.SUCCESS and record_id:
         if record_type == "booking":
             return f"تم تسجيل طلب الحجز {record_id}. فريق Ravel سيتابع معك الخطوة التالية." if arabic else f"Booking request {record_id} has been created. The Ravel team will follow up with the next step."
         if record_type == "handoff":
@@ -124,7 +137,7 @@ def customer_message_from_write_result(
             name_part = f" لـ {display_name}" if display_name and arabic else (f" for {display_name}" if display_name else "")
             return f"تم تسجيل طلبك {record_id}{name_part}. سنتابعه معك." if arabic else f"Your request {record_id}{name_part} has been saved. We will follow up with you."
 
-    if status in _BLOCKED_STATUSES or not record_id:
+    if normalized.outcome is not WriteOutcome.SUCCESS or not record_id:
         error_code = str(contract.get("error_code") or "").strip().lower()
         if record_type == "booking" and error_code == "capacity_unavailable":
             return "لم أستطع إنشاء طلب الحجز لهذا الخيار لأن التوافر تغير. من فضلك اختر خيار غرفة آخر، أو يمكنني توصيلك بموظف بشري." if arabic else "I could not create the booking request for that option because availability changed. Please choose another room option, or I can connect you with a human agent."
@@ -170,8 +183,7 @@ def gate_customer_write_reply(
     display_name: str = "",
 ) -> str:
     if write_result_allows_success(write_result, record_type):
-        contract = _contract_from(write_result)
-        if str(contract.get("status") or "").strip().lower() in {"reused", "duplicate"}:
+        if normalize_write_result(write_result, backend="").raw_status in _IDEMPOTENT_REPLAY_STATUSES:
             return customer_message_from_write_result(write_result, record_type, language, display_name=display_name)
         return proposed_reply or customer_message_from_write_result(write_result, record_type, language, display_name=display_name)
     if response_claims_write_success(proposed_reply) or not str(proposed_reply or "").strip():
