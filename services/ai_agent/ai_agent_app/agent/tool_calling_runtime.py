@@ -2146,8 +2146,26 @@ class ToolCallingSessionRuntime:
         }
 
     def _start_new_booking_after_completion(self, session: SessionState) -> None:
+        """Reset session state so a genuinely new booking can be created.
+
+        Archiving the old booking into previous_booking_result is not enough
+        by itself: _linked_ids() and _execute_booking_draft()'s completed
+        guard both read session.booking_result/final_result/booking_completed
+        as "this session already has a booking on file" -- if those are left
+        pointing at the FIRST booking, a second one can never be created
+        (the guard silently refuses every subsequent confirmed "yes" forever).
+        booking_completed/booking_result must actually clear here, not just
+        get archived, or "book again" only ever looks like it works.
+        """
         if isinstance(session.booking_result, dict) and session.booking_result:
             session.previous_booking_result = dict(session.booking_result)
+        session.booking_result = None
+        session.booking_completed = False
+        session.booking_status = ""
+        if isinstance(session.final_result, dict):
+            session.final_result = {
+                key: value for key, value in session.final_result.items() if key not in ("booking_id", "booking_result")
+            }
         session.trip_type = ""
         session.trip_query = ""
         session.selected_trip_id = ""
@@ -2201,7 +2219,12 @@ class ToolCallingSessionRuntime:
         reply = self._post_booking_reply(session, clean_text)
         if session.stage not in {"new_booking_intent"}:
             session.stage = "post_booking_support"
-        session.booking_completed = True
+            # _start_new_booking_after_completion (inside _post_booking_reply,
+            # for the explicit-new-booking path) already cleared
+            # booking_completed/booking_result deliberately -- a second
+            # booking can never be created if this unconditionally set it
+            # back to True right after.
+            session.booking_completed = True
         session.messages.append({"role": "assistant", "text": reply, "state": "completed"})
         session.tools_used = []
         session.fallback_used = False
@@ -3643,7 +3666,14 @@ class ToolCallingSessionRuntime:
             )
         except Exception as exc:
             agent_logger.warning("New traveler lead could not be saved session=%s error=%s", session.id, exc)
-            return False
+            self._append_authoritative_reply(
+                session,
+                message_key="lead.new_traveler_save_failed",
+                base_text=self._new_traveler_lead_failed_message(session),
+            )
+            session.tools_used = []
+            session.fallback_used = True
+            return True
         # A rejected write with an existing open lead (write_result_contract
         # status "duplicate"/"reused") is an idempotent success, not a
         # failure: the executor already found and returned that lead's id.
@@ -3656,7 +3686,21 @@ class ToolCallingSessionRuntime:
                 session.id,
                 (result or {}).get("write_result_contract") if isinstance(result, dict) else None,
             )
-            return False
+            # Own this turn honestly instead of falling through to the
+            # unvetted model path -- same contract as _execute_booking_draft/
+            # _execute_manual_handoff's failure branches. session.stage is
+            # unaffected (still the freshly-computed decision.state from
+            # this same turn), so the next turn retries deterministically;
+            # new_traveler_lead_saved was never set, so nothing here blocks
+            # that retry.
+            self._append_authoritative_reply(
+                session,
+                message_key="lead.new_traveler_save_failed",
+                base_text=self._new_traveler_lead_failed_message(session),
+            )
+            session.tools_used = []
+            session.fallback_used = True
+            return True
 
         lead_id = str(result.get("result_id") or "").strip()
         session.new_traveler_lead_saved = True
@@ -3716,6 +3760,32 @@ class ToolCallingSessionRuntime:
             return False
         if not session.booking_confirmed or not session.selected_trip_id:
             return False
+        if session.guardian_name and session.guardian_phone and not session.guardian_consent_saved:
+            # _persist_guardian_consent is only ever called from two one-shot
+            # call sites (right after the guardian phone is first captured,
+            # or right after a brand-new traveler's lead is saved) -- if the
+            # write failed both times, nothing else in this file ever retries
+            # it, so a minor could otherwise reach a booking with no
+            # verified guardian consent on file at all. Retry once here,
+            # at the last possible point before the write, and block the
+            # booking rather than silently proceeding if it still fails.
+            linked_for_retry = self._linked_ids(session)
+            if linked_for_retry["traveler_id"]:
+                self._persist_guardian_consent(session, linked_for_retry["traveler_id"])
+            if not session.guardian_consent_saved:
+                agent_logger.error(
+                    "Booking blocked: guardian consent still unverified session=%s traveler=%s",
+                    session.id,
+                    linked_for_retry["traveler_id"],
+                )
+                self._append_authoritative_reply(
+                    session,
+                    message_key="booking.guardian_consent_unverified",
+                    base_text=self._guardian_consent_unverified_message(session),
+                )
+                session.tools_used = []
+                session.fallback_used = True
+                return True
         linked = self._linked_ids(session)
         requirements = session.room_requirements if isinstance(session.room_requirements, dict) else {}
         payload = {
@@ -3827,6 +3897,30 @@ class ToolCallingSessionRuntime:
         return (
             f"Booking request {booking_id} for {trip_name} is created and its status is {status}.\n"
             "The Ravel team will follow up with you to complete payment and confirmation."
+        )
+
+    @staticmethod
+    def _new_traveler_lead_failed_message(session: SessionState) -> str:
+        if session.language.startswith("ar"):
+            return (
+                "لم أتمكن من حفظ بياناتك الآن، ولم يتم تسجيل أي طلب.\n"
+                "من فضلك حاول مرة أخرى، أو اطلب التواصل مع موظف من فريق Ravel."
+            )
+        return (
+            "I could not save your details right now, and no request was recorded.\n"
+            "Please try again, or ask to speak with a member of the Ravel team."
+        )
+
+    @staticmethod
+    def _guardian_consent_unverified_message(session: SessionState) -> str:
+        if session.language.startswith("ar"):
+            return (
+                "لم أتمكن من تأكيد موافقة ولي الأمر بعد، فلن أكمل إنشاء طلب الحجز الآن.\n"
+                "من فضلك تواصل معنا أو اطلب التحدث مع موظف من فريق Ravel لإكمال هذه الخطوة."
+            )
+        return (
+            "I could not confirm the guardian's consent yet, so I will not create the booking request now.\n"
+            "Please contact us or ask to speak with a member of the Ravel team to complete this step."
         )
 
     @staticmethod
@@ -3961,9 +4055,12 @@ class ToolCallingSessionRuntime:
         if not isinstance(consent_result, dict) or not consent_result.get("verified"):
             # Do not mark this done -- a false "saved" belief here means a
             # minor could reach booking without a verified guardian consent
-            # record on file. Leaving the flag unset means this same method
-            # retries automatically the next time it is called for this
-            # session, instead of silently giving up after one failed write.
+            # record on file. Leaving the flag unset means _execute_booking_draft
+            # retries this once more, right before actually writing the
+            # booking, and blocks the booking outright if it still fails --
+            # this method's own two call sites are each one-shot per session,
+            # so without that final retry point a failure here was silently
+            # unrecoverable for the rest of the conversation.
             agent_logger.warning(
                 "Guardian consent could not be verified session=%s traveler=%s -- will retry",
                 session.id,

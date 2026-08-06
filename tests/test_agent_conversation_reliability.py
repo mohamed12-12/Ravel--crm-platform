@@ -1102,7 +1102,15 @@ def test_arabic_booking_intent_after_completed_booking_asks_choice_without_dupli
     assert not runtime._write_executor.execute.called
 
 
-def test_explicit_new_booking_after_completion_resets_intake_but_preserves_previous_booking(runtime: ToolCallingSessionRuntime) -> None:
+def test_explicit_new_booking_after_completion_resets_intake_and_archives_previous_booking(runtime: ToolCallingSessionRuntime) -> None:
+    """Regression: booking_result/booking_completed used to be left pointing
+    at the FIRST booking after "book again" -- _linked_ids() and
+    _execute_booking_draft()'s completed guard both read those fields as
+    "this session already has a booking on file", so a second booking could
+    never actually be created (every later "yes" would silently no-op
+    forever). previous_booking_result is the archive; booking_result/
+    booking_completed must actually clear so a new booking can complete.
+    """
     session = _completed_booking_session(runtime, language="ar")
     original_booking = dict(session.booking_result or {})
 
@@ -1113,11 +1121,53 @@ def test_explicit_new_booking_after_completion_resets_intake_but_preserves_previ
     assert "\u0631\u062d\u0644\u0629 \u0623\u062e\u0631\u0649" in reply
     assert session.stage == "new_booking_intent"
     assert session.previous_booking_result == original_booking
-    assert session.booking_result == original_booking
+    assert session.booking_result is None
+    assert session.booking_completed is False
     assert session.selected_trip_id == ""
     assert session.room_type == ""
     assert session.trip_type == ""
     assert not runtime._write_executor.execute.called
+
+
+def test_second_booking_actually_completes_after_book_again(runtime: ToolCallingSessionRuntime) -> None:
+    """End-to-end regression for the same bug: not just that state resets,
+    but that a full second booking cycle -- driven through real conversation
+    turns, reaching confirmation and saying "yes" again -- actually creates
+    a new booking rather than the completed guard silently refusing forever.
+    """
+    session = _completed_booking_session(runtime, language="en")
+    session.language = "en"
+
+    session = _send(runtime, "I want to book again", session)
+    assert session.stage == "new_booking_intent"
+    assert not session.booking_completed
+
+    runtime._write_executor.execute.side_effect = None
+    runtime._write_executor.execute.return_value = {
+        "executed": True,
+        "result_id": "B-TEST-0002",
+        "booking_result": {"booking_id": "B-TEST-0002", "booking_status": "Draft"},
+        "write_result_contract": {
+            "status": "success",
+            "record_id": "B-TEST-0002",
+            "record_type": "booking",
+            "executed": True,
+        },
+        "session_update": {
+            "booking_result": {"booking_id": "B-TEST-0002", "booking_status": "Draft"},
+            "booking_status": "Draft",
+        },
+    }
+
+    for text in ("local", "Siwa Discovery Demo", "boys", "single", "1", "yes"):
+        session = _send(runtime, text, session)
+
+    assert session.booking_completed is True
+    assert (session.booking_result or {}).get("booking_id") == "B-TEST-0002"
+    reply = session.messages[-1]["text"]
+    assert "B-TEST-0002" in reply
+    runtime._write_executor.execute.assert_called_once()
+    assert runtime._write_executor.execute.call_args.kwargs["action"] == "create_booking_draft"
 
 
 def test_post_booking_arabic_negative_is_contextual_clarification(runtime: ToolCallingSessionRuntime) -> None:

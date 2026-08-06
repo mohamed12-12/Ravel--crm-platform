@@ -144,6 +144,50 @@ def test_new_minor_traveler_guardian_consent_persists_after_lead_save(runtime: T
     )
 
 
+def test_booking_is_blocked_when_guardian_consent_write_never_verifies(runtime: ToolCallingSessionRuntime) -> None:
+    """Regression: record_guardian_consent is only ever called from two
+    one-shot call sites in tool_calling_runtime.py (right after the
+    guardian phone is captured, or right after a new traveler's lead is
+    saved). If the write fails both times, nothing previously retried it --
+    guardian_consent_saved stayed False silently, and a minor could still
+    reach a confirmed booking with no verified consent on file at all.
+    _execute_booking_draft must now retry once more and BLOCK the booking
+    outright if it still isn't verified, rather than silently proceeding.
+    """
+    runtime._write_executor.execute.side_effect = _write_results_by_action(
+        create_traveler=NEW_MINOR_TRAVELER_WRITE,
+        create_lead=NEW_MINOR_LEAD_WRITE,
+    )
+    runtime._write_executor.record_guardian_consent.return_value = {"verified": False}
+    session = runtime.create_session()
+    for text in ("01270482380", "Ahmed Sami Youssef", "Egyptian", _birthday_for_age(16)):
+        session = _send(runtime, text, session)
+    session = _send(runtime, "Sami Youssef Ahmed", session)
+    session = _send(runtime, "01009998877", session)
+    session = _send(runtime, "1", session)
+
+    assert session.new_traveler_lead_saved is True
+    assert session.guardian_consent_saved is False
+    runtime._write_executor.record_guardian_consent.assert_called_once()
+
+    for text in ("local", "1", "boys", "single", "2"):
+        session = _send(runtime, text, session)
+    assert session.stage == "booking_confirmation_required"
+
+    session = _send(runtime, "yes", session)
+
+    assert session.guardian_consent_saved is False
+    assert not session.booking_completed
+    reply = session.messages[-1]["text"]
+    assert "could not confirm the guardian" in reply.lower()
+    assert not any(
+        call.kwargs.get("action") == "create_booking_draft" for call in runtime._write_executor.execute.call_args_list
+    )
+    # The retry immediately before the write means it was attempted twice
+    # total (lead-save time, then again here), not left to fail silently once.
+    assert runtime._write_executor.record_guardian_consent.call_count == 2
+
+
 def test_existing_minor_traveler_from_crm_lookup_triggers_guardian_branch(runtime: ToolCallingSessionRuntime) -> None:
     """A returning traveler with a minor's DOB already on file is not exempt --
     the branch must fire even though the intake questions (name/nationality/DOB)

@@ -130,6 +130,13 @@ def test_new_traveler_intake_saves_lead_instead_of_looping(runtime: ToolCallingS
 
 
 def test_new_traveler_lead_save_failure_does_not_falsely_claim_success(runtime: ToolCallingSessionRuntime) -> None:
+    """Regression: a failed create_lead write used to `return False` with no
+    customer-facing message at all, falling through to the unvetted model
+    path for that turn -- which, with no live model configured, meant the
+    customer saw the test double's unrelated canned reply ("please share
+    your WhatsApp number", even though they'd already given it minutes
+    earlier) instead of an honest, specific failure message.
+    """
     runtime._write_executor.execute.return_value = {"executed": False, "assistant_message": "blocked"}
     session = runtime.create_session()
     for text in ("01270482380", "Maged Samir Adly", "Egyptian", "28/4/2006"):
@@ -140,6 +147,8 @@ def test_new_traveler_lead_save_failure_does_not_falsely_claim_success(runtime: 
     assert session.new_traveler_lead_saved is False
     reply = session.messages[-1]["text"]
     assert "LD" not in reply  # no fabricated lead id
+    assert "could not save your details" in reply.lower()
+    assert "whatsapp number" not in reply.lower()
 
 
 # ---------------------------------------------------------------------------
