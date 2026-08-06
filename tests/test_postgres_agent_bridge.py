@@ -113,6 +113,24 @@ def test_returning_traveler_lookup_and_trip_search_work_in_postgres_mode(bridge_
     assert any(trip["trip_id"] == "RTPG001" for trip in trips)
 
 
+def test_lowercase_trip_type_matches_title_cased_trip_records_in_postgres_mode(bridge_app):
+    """The AI agent always sends trip_type as lowercase ('local'/'international'),
+    while Trip.type is stored title-cased ('Local'). This must still match.
+    """
+    app, _db = bridge_app
+    client = app.test_client()
+    app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://staging/redacted"
+
+    response = client.post(
+        "/api/crm/agent/read",
+        json={"action": "search_trips", "payload": {"trip_type": "local", "query": ""}},
+    )
+
+    assert response.status_code == 200
+    trips = response.get_json()["result"]["trips"]
+    assert any(trip["trip_id"] == "RTPG001" for trip in trips)
+
+
 def test_handoff_and_booking_confirmation_write_to_postgres_bridge_safely(bridge_app):
     app, db = bridge_app
     client = app.test_client()

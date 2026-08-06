@@ -43,6 +43,7 @@ class PostgresAgentBridgeService:
     """Backend-selected CRM bridge using the same SQLAlchemy source of truth as the dashboard."""
 
     normalize_phone = staticmethod(UnifiedCRMService.normalize_phone)
+    normalize_trip_type = staticmethod(UnifiedCRMService.normalize_trip_type)
     lookup_key_variants = staticmethod(UnifiedCRMService.lookup_key_variants)
     write_result_contract = staticmethod(UnifiedCRMService.write_result_contract)
     booking_idempotency_key = UnifiedCRMService.booking_idempotency_key
@@ -98,7 +99,7 @@ class PostgresAgentBridgeService:
     def build_trip_result(self, trip_type: str | None, *, today: date | None = None) -> dict[str, list[dict[str, Any]]]:
         today = today or date.today()
         query = Trip.query
-        normalized_trip_type = _trim(trip_type)
+        normalized_trip_type = self.normalize_trip_type(trip_type) or _trim(trip_type)
         if normalized_trip_type:
             query = query.filter(Trip.type == normalized_trip_type)
         trips = []
