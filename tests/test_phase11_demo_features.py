@@ -277,12 +277,12 @@ class TestInstagramWebhookPersistence(unittest.TestCase):
             "X-Hub-Signature-256": self._signature("test-meta-secret", body),
         }
 
-        first = client.post("/webhook", data=body, headers=headers)
+        first = client.post("/rahma-agent/webhook", data=body, headers=headers)
         self.assertEqual(first.status_code, 200)
         self.assertEqual(first.get_json()["persisted"], 1)
         self.assertEqual(first.get_json()["duplicates"], 0)
 
-        second = client.post("/webhook", data=body, headers=headers)
+        second = client.post("/rahma-agent/webhook", data=body, headers=headers)
         self.assertEqual(second.status_code, 200)
         self.assertEqual(second.get_json()["persisted"], 0)
         self.assertEqual(second.get_json()["duplicates"], 1)
@@ -334,7 +334,7 @@ class TestInstagramWebhookPersistence(unittest.TestCase):
             "Content-Type": "application/json",
             "X-Hub-Signature-256": self._signature("test-meta-secret", body),
         }
-        resp = client.post("/webhook", data=body, headers=headers)
+        resp = client.post("/rahma-agent/webhook", data=body, headers=headers)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json()["persisted"], 1)
         self.assertEqual(resp.get_json()["repliesSent"], 1)

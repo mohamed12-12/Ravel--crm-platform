@@ -54,7 +54,7 @@ def _signed_body(body: bytes, secret: str = APP_SECRET) -> str:
 def signature_app():
     app = Flask(__name__)
 
-    @app.post("/webhook")
+    @app.post("/rahma-agent/webhook")
     @validate_meta_signature(APP_SECRET)
     def _receive():
         return jsonify({"ok": True})
@@ -67,7 +67,7 @@ def test_valid_signature_is_accepted(signature_app):
     body = json.dumps(SAMPLE_PAYLOAD).encode("utf-8")
 
     response = client.post(
-        "/webhook",
+        "/rahma-agent/webhook",
         data=body,
         content_type="application/json",
         headers={"X-Hub-Signature-256": _signed_body(body)},
@@ -79,7 +79,7 @@ def test_valid_signature_is_accepted(signature_app):
 
 def test_missing_signature_is_rejected(signature_app):
     client = signature_app.test_client()
-    response = client.post("/webhook", json=SAMPLE_PAYLOAD)
+    response = client.post("/rahma-agent/webhook", json=SAMPLE_PAYLOAD)
 
     assert response.status_code == 401
     assert response.get_json()["error"] == "missing_signature"
@@ -88,7 +88,7 @@ def test_missing_signature_is_rejected(signature_app):
 def test_malformed_signature_format_is_rejected(signature_app):
     client = signature_app.test_client()
     response = client.post(
-        "/webhook",
+        "/rahma-agent/webhook",
         json=SAMPLE_PAYLOAD,
         headers={"X-Hub-Signature-256": "not-sha256-prefixed"},
     )
@@ -102,7 +102,7 @@ def test_wrong_signature_is_rejected(signature_app):
     body = json.dumps(SAMPLE_PAYLOAD).encode("utf-8")
 
     response = client.post(
-        "/webhook",
+        "/rahma-agent/webhook",
         data=body,
         content_type="application/json",
         headers={"X-Hub-Signature-256": _signed_body(body, secret="wrong-secret")},
@@ -119,7 +119,7 @@ def test_tampered_body_after_signing_is_rejected(signature_app):
     tampered_body = json.dumps({**SAMPLE_PAYLOAD, "object": "tampered"}).encode("utf-8")
 
     response = client.post(
-        "/webhook",
+        "/rahma-agent/webhook",
         data=tampered_body,
         content_type="application/json",
         headers={"X-Hub-Signature-256": signature},
@@ -132,13 +132,13 @@ def test_tampered_body_after_signing_is_rejected(signature_app):
 def test_unconfigured_secret_returns_config_error():
     app = Flask(__name__)
 
-    @app.post("/webhook")
+    @app.post("/rahma-agent/webhook")
     @validate_meta_signature("")
     def _receive():
         return jsonify({"ok": True})
 
     client = app.test_client()
-    response = client.post("/webhook", json=SAMPLE_PAYLOAD, headers={"X-Hub-Signature-256": "sha256=whatever"})
+    response = client.post("/rahma-agent/webhook", json=SAMPLE_PAYLOAD, headers={"X-Hub-Signature-256": "sha256=whatever"})
 
     assert response.status_code == 500
     assert response.get_json()["error"] == "config_error"
@@ -147,7 +147,7 @@ def test_unconfigured_secret_returns_config_error():
 def test_rejected_signature_attempts_are_logged(signature_app, caplog):
     client = signature_app.test_client()
     with caplog.at_level("WARNING", logger="rahma_webhook"):
-        client.post("/webhook", json=SAMPLE_PAYLOAD)
+        client.post("/rahma-agent/webhook", json=SAMPLE_PAYLOAD)
 
     assert any("webhook_rejected" in record.message for record in caplog.records)
     assert any("missing_signature" in record.message for record in caplog.records)
@@ -156,13 +156,13 @@ def test_rejected_signature_attempts_are_logged(signature_app, caplog):
 def test_verify_webhook_handshake_succeeds():
     app = Flask(__name__)
 
-    @app.get("/webhook")
+    @app.get("/rahma-agent/webhook")
     def _verify():
         return verify_webhook(VERIFY_TOKEN)
 
     client = app.test_client()
     response = client.get(
-        "/webhook",
+        "/rahma-agent/webhook",
         query_string={"hub.mode": "subscribe", "hub.verify_token": VERIFY_TOKEN, "hub.challenge": "challenge-123"},
     )
 
@@ -173,13 +173,13 @@ def test_verify_webhook_handshake_succeeds():
 def test_verify_webhook_handshake_rejects_wrong_token():
     app = Flask(__name__)
 
-    @app.get("/webhook")
+    @app.get("/rahma-agent/webhook")
     def _verify():
         return verify_webhook(VERIFY_TOKEN)
 
     client = app.test_client()
     response = client.get(
-        "/webhook",
+        "/rahma-agent/webhook",
         query_string={"hub.mode": "subscribe", "hub.verify_token": "wrong-token", "hub.challenge": "challenge-123"},
     )
 
@@ -189,12 +189,12 @@ def test_verify_webhook_handshake_rejects_wrong_token():
 def test_verify_webhook_handshake_missing_params_returns_404():
     app = Flask(__name__)
 
-    @app.get("/webhook")
+    @app.get("/rahma-agent/webhook")
     def _verify():
         return verify_webhook(VERIFY_TOKEN)
 
     client = app.test_client()
-    response = client.get("/webhook")
+    response = client.get("/rahma-agent/webhook")
 
     assert response.status_code == 404
 

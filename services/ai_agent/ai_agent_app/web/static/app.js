@@ -27,7 +27,7 @@ const els = {
 };
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await fetch((window.API_PREFIX || "") + path, {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
@@ -493,7 +493,7 @@ els.passportFileInput?.addEventListener("change", async (event) => {
   try {
     els.passportUploadBtn.disabled = true;
     els.passportUploadBtn.textContent = "Uploading...";
-    const response = await fetch(`/api/session/${state.sessionId}/passport_attachment`, {
+    const response = await fetch(`${window.API_PREFIX || ""}/api/session/${state.sessionId}/passport_attachment`, {
       method: "POST",
       body: formData,
     });

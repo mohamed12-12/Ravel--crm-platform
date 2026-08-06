@@ -68,8 +68,9 @@ class LoginRateLimitTests(unittest.TestCase):
 
 class AgentApiRateLimitTests(unittest.TestCase):
     """Regression: the ai_agent Flask app's public, unauthenticated
-    endpoints (/api/session, /api/session/<id>/message, /webhook) had a
-    TODO acknowledging the missing rate limiting but no enforcement --
+    endpoints (/api/session, /api/session/<id>/message,
+    /rahma-agent/webhook) had a TODO acknowledging the missing rate
+    limiting but no enforcement --
     unlimited requests could trigger unlimited LLM/DB work per caller.
     Each test builds its own app via create_app(), so the limiter's
     in-memory counters never leak between tests.
@@ -89,7 +90,7 @@ class AgentApiRateLimitTests(unittest.TestCase):
 
         app = create_app()
         client = app.test_client()
-        statuses = [client.post("/webhook", json={}).status_code for _ in range(61)]
+        statuses = [client.post("/rahma-agent/webhook", json={}).status_code for _ in range(61)]
         self.assertTrue(all(code != 429 for code in statuses[:60]))
         self.assertEqual(statuses[60], 429)
 

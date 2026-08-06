@@ -1814,12 +1814,12 @@ def create_app(
             abort(404)
         return send_file(path, mimetype=row["mime_type"] or "image/jpeg", as_attachment=False, conditional=True, max_age=3600)
 
-    @app.get("/webhook")
+    @app.get("/rahma-agent/webhook")
     def webhook_verify():
         settings: Settings = app.config["SETTINGS"]
         return verify_webhook(settings.meta_verify_token)
 
-    @app.post("/webhook")
+    @app.post("/rahma-agent/webhook")
     @limiter.limit("60 per minute")
     def webhook_received():
         # Wrap logic to use decorator with dynamic settings.

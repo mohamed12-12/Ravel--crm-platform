@@ -183,7 +183,7 @@ All three HTTP services enforce basic per-IP rate limits:
 | Service | Library | Notable limits |
 | --- | --- | --- |
 | CRM/API (`apps/api`) | Flask-Limiter | 300/hour default; `/login` at 10/minute |
-| AI agent (`services/ai_agent`) | Flask-Limiter | 120/minute default; `/api/session` 20/min, `/api/session/<id>/message` 30/min, `/webhook` 60/min |
+| AI agent (`services/ai_agent`) | Flask-Limiter | 120/minute default; `/api/session` 20/min, `/api/session/<id>/message` 30/min, `/rahma-agent/webhook` 60/min |
 | Middleware (`apps/middleware`) | express-rate-limit | 120/minute across all routes |
 
 - `apps/api`'s limiter is disabled by default whenever running under pytest

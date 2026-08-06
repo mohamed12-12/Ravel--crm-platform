@@ -26,6 +26,11 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 if __name__ == "__main__":
     app = create_app()
+
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1
+    )
     settings = app.config["SETTINGS"]
     debug_enabled = _env_flag("APP_DEBUG", default=False)
     use_reloader = _env_flag("APP_USE_RELOADER", default=False)

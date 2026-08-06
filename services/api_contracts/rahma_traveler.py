@@ -394,7 +394,7 @@ def build_agent_openapi_contract(*, base_url: str | None = None) -> JsonDict:
                 "responses": {"200": _json_response({"type": "object", "additionalProperties": True})},
             }
         },
-        "/webhook": {
+        "/rahma-agent/webhook": {
             "get": {
                 "tags": ["Webhook"],
                 "summary": "Verify Meta webhook subscription.",
