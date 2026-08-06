@@ -2154,28 +2154,45 @@ def create_app(
         traveler = (sess.final_result or {}).get("traveler") or {}
         traveler_id = str(traveler.get("traveler_id") or "").strip()
         passport_save = {}
+        passport_crm_synced = False
         if traveler_id and hasattr(gateway, "save_traveler_passport"):
-            passport_save = gateway.save_traveler_passport(
-                traveler_id,
-                passport_name=sess.passport_name,
-                passport_number=sess.passport_number,
-                passport_expiry=sess.passport_expiry,
-                passport_nationality=sess.passport_nationality,
-                passport_attachment_ref=ref,
-                uploaded_by="ai-agent-web",
-                attachment_file_name=safe_name,
-                attachment_original_name=f.filename,
-                attachment_mime_type=f.mimetype or "",
-                attachment_size=size,
-                notes=f"Uploaded from AI agent session {session_id}",
-            )
+            try:
+                passport_save = gateway.save_traveler_passport(
+                    traveler_id,
+                    passport_name=sess.passport_name,
+                    passport_number=sess.passport_number,
+                    passport_expiry=sess.passport_expiry,
+                    passport_nationality=sess.passport_nationality,
+                    passport_attachment_ref=ref,
+                    uploaded_by="ai-agent-web",
+                    attachment_file_name=safe_name,
+                    attachment_original_name=f.filename,
+                    attachment_mime_type=f.mimetype or "",
+                    attachment_size=size,
+                    notes=f"Uploaded from AI agent session {session_id}",
+                )
+            except Exception as exc:
+                app_logger.warning(
+                    f"Passport CRM write failed: session={session_id} traveler={traveler_id} error={exc}"
+                )
+                passport_save = {}
+            # A truthy return is not itself proof the CRM record was updated --
+            # the sheets/excel-backed gateway catches its own write errors and
+            # returns {} on failure, so an empty dict here also means the
+            # write did not persist. Only a non-empty return counts as synced;
+            # the file on disk is safe either way, but the customer's typed
+            # passport fields may not have reached the CRM yet.
+            passport_crm_synced = bool(passport_save)
         lead_sync = _sync_session_lead_snapshot(gateway, sess)
-        app_logger.info(f"Passport attachment saved: session={session_id} ref={ref}")
+        app_logger.info(
+            f"Passport attachment saved: session={session_id} ref={ref} crm_synced={passport_crm_synced}"
+        )
         return jsonify(
             {
                 "ok": True,
                 "ref": ref,
                 "passportSave": passport_save,
+                "passportCrmSynced": passport_crm_synced,
                 "leadSync": lead_sync,
                 "session": _serialize_session(gateway, sess),
             }

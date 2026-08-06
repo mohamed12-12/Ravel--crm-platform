@@ -3940,16 +3940,40 @@ class ToolCallingSessionRuntime:
         """
         if session.guardian_consent_saved or not traveler_id or not session.guardian_name or not session.guardian_phone:
             return
-        self._write_executor.record_guardian_consent(
+        consent_result = self._write_executor.record_guardian_consent(
             traveler_id=traveler_id,
             is_minor=True,
             guardian_name=session.guardian_name,
             guardian_phone=session.guardian_phone,
         )
+        if not isinstance(consent_result, dict) or not consent_result.get("verified"):
+            # Do not mark this done -- a false "saved" belief here means a
+            # minor could reach booking without a verified guardian consent
+            # record on file. Leaving the flag unset means this same method
+            # retries automatically the next time it is called for this
+            # session, instead of silently giving up after one failed write.
+            agent_logger.warning(
+                "Guardian consent could not be verified session=%s traveler=%s -- will retry",
+                session.id,
+                traveler_id,
+            )
+            return
         session.guardian_consent_saved = True
         lead_id = self._linked_ids(session)["lead_id"]
         if lead_id:
-            self._write_executor.record_lead_guardian_flag(lead_id=lead_id, requires_guardian_approval=True)
+            flag_result = self._write_executor.record_lead_guardian_flag(
+                lead_id=lead_id, requires_guardian_approval=True
+            )
+            if not isinstance(flag_result, dict) or not flag_result.get("verified"):
+                # The traveler-side consent is verified and saved at this point,
+                # so this does not retry the whole method -- only the lead's
+                # guardian-approval flag (a staff-visible signal, not the
+                # consent record itself) is unconfirmed here.
+                agent_logger.warning(
+                    "Guardian lead flag could not be verified session=%s lead=%s",
+                    session.id,
+                    lead_id,
+                )
 
     @staticmethod
     def _mark_traveler_verified(session: SessionState, traveler: dict[str, Any]) -> None:

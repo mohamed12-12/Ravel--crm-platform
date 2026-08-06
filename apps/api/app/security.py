@@ -63,12 +63,20 @@ def _browser_auth_required() -> bool:
     return False
 
 
+def _api_token_role() -> str:
+    """Role for API-token callers, resolved server-side from the credential
+    itself rather than trusted from the client-supplied X-CRM-Role header.
+    """
+    configured = str(current_app.config.get("CRM_API_TOKEN_ROLE") or os.getenv("CRM_API_TOKEN_ROLE", "") or "agent")
+    return configured.strip().lower() or "agent"
+
+
 def _role() -> str:
     user = current_user()
     if user:
         return str(user.role or "").strip().lower()
     if _api_token_authenticated():
-        return str(request.headers.get("X-CRM-Role") or "agent").strip().lower()
+        return _api_token_role()
     return ""
 
 
@@ -119,6 +127,26 @@ def current_role() -> str:
 
 def has_permission(permission: str) -> bool:
     return permission in ROLE_PERMISSIONS.get(current_role(), set())
+
+
+def can_view_all_records() -> bool:
+    """Full-access roles (admin, manager) may view any record regardless of assignment."""
+    return has_permission("view_all")
+
+
+def can_view_assigned_record(assigned_to_user_id: int | None) -> bool:
+    """Non-full-access callers may view a record if it is unassigned or assigned to them.
+
+    Unassigned records stay visible to every agent because the bookings queue
+    already treats "unassigned" as a claimable, browsable state (see
+    bookings.py's assigned_to_user_id.is_(None) filter) rather than a
+    restricted one.
+    """
+    if can_view_all_records():
+        return True
+    if assigned_to_user_id is None:
+        return True
+    return assigned_to_user_id == current_user_id()
 
 
 def permission_required(permission: str):

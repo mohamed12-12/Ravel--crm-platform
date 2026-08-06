@@ -1,5 +1,5 @@
 # app/routes/bookings.py
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, abort
 from app.models.booking import TripBooking
 from app.models.booking_event import BookingEventTrail
 from app.models.booking_status_history import BookingStatusHistory
@@ -18,7 +18,14 @@ from app.services.assignments import (
     exact_legacy_user,
     resolve_user_id,
 )
-from app.security import current_actor, current_role, current_user, current_user_id, has_permission
+from app.security import (
+    can_view_assigned_record,
+    current_actor,
+    current_role,
+    current_user,
+    current_user_id,
+    has_permission,
+)
 
 bookings_bp = Blueprint('bookings', __name__, url_prefix='/bookings')
 
@@ -179,6 +186,8 @@ def index():
 @bookings_bp.route('/<string:booking_id>')
 def detail(booking_id):
     booking = db.get_or_404(TripBooking, booking_id)
+    if not can_view_assigned_record(booking.assigned_to_user_id):
+        abort(403)
     traveler = db.session.get(Traveler, booking.traveler_id) if booking.traveler_id else None
     trip = db.session.get(Trip, booking.trip_id) if booking.trip_id else None
     commercial_context = UnifiedCRMService.resolve_commercial_context(

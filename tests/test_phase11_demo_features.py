@@ -736,6 +736,54 @@ class TestPassportCollection(unittest.TestCase):
             self.assertIn(document_row[2], {"", None})
             self.assertIn(document_row[3], {"", None})
 
+    def test_passport_upload_reports_honest_failure_when_crm_write_fails(self):
+        """The route used to unconditionally return ok:true regardless of what
+        `gateway.save_traveler_passport` actually did. Here the CRM write fails
+        for real (unified_service.py raises when the traveler_id does not
+        exist) -- the file must still save, but the response must say the CRM
+        side did not sync instead of silently claiming success."""
+        client, app = _make_app_with_db(self.tmp)
+        sess = client.post("/api/session", json={}).get_json()["session"]
+        sess = client.post(
+            f"/api/session/{sess['id']}/message", json={"text": "01088881234"}
+        ).get_json()["session"]
+        if sess["stage"] == "awaiting_intake":
+            sess = client.post(
+                f"/api/session/{sess['id']}/intake",
+                json={
+                    "fullName": "Passport Failure Tester",
+                    "birthday": "1990-01-01",
+                    "gender": "Male",
+                    "nationality": "Egypt",
+                    "countryCode": "20",
+                    "rawPhone": "01088881234",
+                },
+            ).get_json()["session"]
+        sess = client.post(f"/api/session/{sess['id']}/message", json={"text": "international"}).get_json()["session"]
+        sess = client.post(f"/api/session/{sess['id']}/message", json={"text": "1"}).get_json()["session"]
+        self.assertEqual(sess["stage"], "awaiting_room_type")
+        sess = client.post(f"/api/session/{sess['id']}/message", json={"text": "single room"}).get_json()["session"]
+        sess = client.post(f"/api/session/{sess['id']}/message", json={"text": "with flight"}).get_json()["session"]
+        self.assertEqual(sess["stage"], "awaiting_passport_upload")
+
+        # Corrupt the session's linked traveler id so the CRM write fails with
+        # a real "traveler not found" error instead of a mocked one.
+        sessions = app.config["SESSIONS"]
+        session_obj = sessions.get(sess["id"])
+        session_obj.final_result["traveler"]["traveler_id"] = "TR-DOES-NOT-EXIST"
+
+        fake_image = (io.BytesIO(b"REALJPEGDATA"), "passport.jpg")
+        resp = client.post(
+            f"/api/session/{sess['id']}/passport_attachment",
+            data={"file": fake_image},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertTrue(data["ok"])  # the file itself still saved to disk
+        self.assertEqual(data["passportSave"], {})
+        self.assertFalse(data["passportCrmSynced"])
+
 
 class TestVisaRequirement(unittest.TestCase):
     """Visa endpoint should return table-based info with disclaimer."""

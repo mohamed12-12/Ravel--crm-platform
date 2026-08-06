@@ -28,6 +28,19 @@ class GeminiWriteToolExecutor:
         self.read_only_tools = read_only_tools or ReadOnlyCRMTools(settings)
         self.action_validator = action_validator or ActionValidator(settings, read_only_tools=self.read_only_tools)
         self.service = self.read_only_tools.service
+        access_mode = str(getattr(settings, "crm_access_mode", "shared_service") or "shared_service").strip().lower()
+        if access_mode == "api" and self.service is None and getattr(self.read_only_tools, "api_client", None) is None:
+            # In api mode self.service is deliberately None (reads/writes go
+            # over HTTP), so a missing api_client here means every handler
+            # that touches self.service directly -- or any future one added
+            # the same way -- fails with an AttributeError on every single
+            # call instead of a loud, obvious startup error. Only gated on
+            # api mode: plenty of read-only test doubles legitimately have no
+            # write path at all and are not exercising this configuration.
+            raise RuntimeError(
+                "Write executor is configured for CRM_ACCESS_MODE=api but has neither "
+                "self.service nor an api_client -- every write action would silently fail."
+            )
 
     def execute(
         self,
@@ -440,6 +453,20 @@ class GeminiWriteToolExecutor:
         }
 
     def _execute_update_lead_stage(
+        self,
+        payload: dict[str, Any],
+        session_context: dict[str, Any],
+        validation,
+    ) -> dict[str, Any]:
+        requested_stage = self._value(payload, session_context, "requested_stage", "lead_stage")
+        return self._create_with_verified_retry(
+            perform=lambda: self._perform_update_lead_stage(payload, session_context, validation),
+            verify=lambda record_id, result: self._verify_lead_stage_record(record_id, requested_stage),
+            record_type="lead",
+            session_context=session_context,
+        )
+
+    def _perform_update_lead_stage(
         self,
         payload: dict[str, Any],
         session_context: dict[str, Any],
@@ -1065,6 +1092,96 @@ class GeminiWriteToolExecutor:
             for booking in bookings or []
         )
 
+    def _verify_lead_stage_record(self, lead_id: str, expected_stage: str) -> bool:
+        if not lead_id:
+            return False
+        try:
+            lookup = self.read_only_tools.lookup_lead(lead_id=lead_id)
+        except Exception:
+            return False
+        leads = lookup.get("leads") if isinstance(lookup, dict) else []
+        expected = str(expected_stage or "").strip().casefold()
+        for lead in leads or []:
+            if not isinstance(lead, dict) or str(lead.get("lead_id") or "").strip() != lead_id:
+                continue
+            if not expected:
+                return True
+            return str(lead.get("lead_stage") or "").strip().casefold() == expected
+        return False
+
+    def _verify_guardian_consent_record(self, traveler_id: str, *, guardian_name: str, guardian_phone: str) -> bool:
+        if not traveler_id:
+            return False
+        try:
+            profile = self.read_only_tools.get_traveler_profile(traveler_id=traveler_id)
+        except Exception:
+            return False
+        traveler = profile.get("traveler") if isinstance(profile, dict) else None
+        if not isinstance(traveler, dict):
+            return False
+        return (
+            str(traveler.get("guardian_name") or "").strip() == str(guardian_name or "").strip()
+            and str(traveler.get("guardian_phone") or "").strip() == str(guardian_phone or "").strip()
+        )
+
+    def _verify_lead_guardian_flag_record(self, lead_id: str, *, requires_guardian_approval: bool) -> bool:
+        if not lead_id:
+            return False
+        try:
+            lookup = self.read_only_tools.lookup_lead(lead_id=lead_id)
+        except Exception:
+            return False
+        leads = lookup.get("leads") if isinstance(lookup, dict) else []
+        for lead in leads or []:
+            if not isinstance(lead, dict) or str(lead.get("lead_id") or "").strip() != lead_id:
+                continue
+            return bool(lead.get("requires_guardian_approval")) == bool(requires_guardian_approval)
+        return False
+
+    def _execute_set_guardian_consent(
+        self,
+        payload: dict[str, Any],
+        session_context: dict[str, Any],
+        validation,
+    ) -> dict[str, Any]:
+        traveler_id = self._value(payload, session_context, "traveler_id")
+        if not traveler_id:
+            raise RuntimeError("Guardian consent requires a traveler_id.")
+        result = self.service.set_guardian_consent(
+            traveler_id,
+            is_minor=self._as_bool(self._value(payload, session_context, "is_minor"), default=True),
+            guardian_name=self._value(payload, session_context, "guardian_name") or "",
+            guardian_phone=self._value(payload, session_context, "guardian_phone") or "",
+        )
+        return {
+            "result_id": traveler_id,
+            "assistant_message": "",
+            "traveler": result if isinstance(result, dict) else {},
+            "write_result": {"traveler_update": result},
+        }
+
+    def _execute_flag_lead_guardian_approval(
+        self,
+        payload: dict[str, Any],
+        session_context: dict[str, Any],
+        validation,
+    ) -> dict[str, Any]:
+        lead_id = self._value(payload, session_context, "lead_id")
+        if not lead_id:
+            raise RuntimeError("The guardian-approval flag requires a lead_id.")
+        result = self.service.flag_lead_guardian_approval(
+            lead_id,
+            requires_guardian_approval=self._as_bool(
+                self._value(payload, session_context, "requires_guardian_approval"), default=True
+            ),
+        )
+        return {
+            "result_id": lead_id,
+            "assistant_message": "",
+            "lead_update": result if isinstance(result, dict) else {},
+            "write_result": {"lead_update": result},
+        }
+
     def record_guardian_consent(
         self,
         *,
@@ -1073,14 +1190,40 @@ class GeminiWriteToolExecutor:
         guardian_name: str = "",
         guardian_phone: str = "",
     ) -> dict[str, Any]:
+        """Write guardian consent through the controlled dispatch, then confirm
+        with an independent read-back.
+
+        This used to call `self.service.set_guardian_consent(...)` directly.
+        `self.service` is deliberately `None` when `CRM_ACCESS_MODE=api` (reads
+        and writes go over HTTP in that mode), so every call raised
+        AttributeError, was swallowed by the bare except below, and the caller
+        went on to mark consent "saved" anyway. Routing through `self.execute()`
+        makes this respect the same api_client/service branch every other write
+        action already uses correctly. `set_guardian_consent` itself also runs
+        an UPDATE ... WHERE traveler_id = ? that silently succeeds (0 rows
+        affected) for a traveler_id that does not exist, so even a write that
+        reaches the real service is not proof the fields persisted -- only a
+        fresh read counts. Callers must check the "verified" key before
+        treating a minor's booking as guardian-approved.
+        """
         if not traveler_id:
             return {}
+        payload = {
+            "traveler_id": traveler_id,
+            "is_minor": is_minor,
+            "guardian_name": guardian_name,
+            "guardian_phone": guardian_phone,
+        }
         try:
-            result = self.service.set_guardian_consent(
-                traveler_id,
-                is_minor=is_minor,
-                guardian_name=guardian_name,
-                guardian_phone=guardian_phone,
+            result = self._create_with_verified_retry(
+                perform=lambda: self.execute(
+                    action="set_guardian_consent", payload=payload, session_context={}
+                ),
+                verify=lambda record_id, res: self._verify_guardian_consent_record(
+                    record_id, guardian_name=guardian_name, guardian_phone=guardian_phone
+                ),
+                record_type="traveler",
+                session_context={},
             )
         except Exception as exc:
             agent_logger.warning("Guardian consent write failed traveler=%s error=%s", traveler_id, exc)
@@ -1091,25 +1234,33 @@ class GeminiWriteToolExecutor:
                 "session_id": "",
                 "action": "set_guardian_consent",
                 "validator_decision": "",
-                "executed": bool(result),
+                "executed": True,
                 "result_id": traveler_id,
-                "reason": "guardian_consent_persisted" if result else "guardian_consent_write_failed",
+                "reason": "guardian_consent_persisted",
                 "warnings": [],
             }
         )
-        return result
+        return {**result, "verified": True}
 
     def record_lead_guardian_flag(self, *, lead_id: str, requires_guardian_approval: bool) -> dict[str, Any]:
         if not lead_id:
             return {}
+        payload = {"lead_id": lead_id, "requires_guardian_approval": requires_guardian_approval}
         try:
-            return self.service.flag_lead_guardian_approval(
-                lead_id,
-                requires_guardian_approval=requires_guardian_approval,
+            result = self._create_with_verified_retry(
+                perform=lambda: self.execute(
+                    action="flag_lead_guardian_approval", payload=payload, session_context={}
+                ),
+                verify=lambda record_id, res: self._verify_lead_guardian_flag_record(
+                    record_id, requires_guardian_approval=requires_guardian_approval
+                ),
+                record_type="lead",
+                session_context={},
             )
         except Exception as exc:
             agent_logger.warning("Guardian lead flag write failed lead=%s error=%s", lead_id, exc)
             return {}
+        return {**result, "verified": True}
 
     def _resolve_traveler(self, payload: dict[str, Any], session_context: dict[str, Any]) -> dict[str, Any] | None:
         traveler_id = self._value(payload, session_context, "traveler_id")
@@ -1217,7 +1368,12 @@ class GeminiWriteToolExecutor:
     def _stage_message(result: dict[str, Any]) -> str:
         lead_id = str(result.get("lead_id") or "").strip()
         stage = str(result.get("lead_stage") or "").strip()
-        return f"Lead {lead_id} moved to {stage}."
+        proposed = f"Lead {lead_id} moved to {stage}."
+        return gate_customer_write_reply(
+            proposed_reply=proposed,
+            write_result=result,
+            record_type="lead",
+        )
 
     @staticmethod
     def _booking_message(result: dict[str, Any], language: str = "en") -> str:

@@ -41,6 +41,8 @@ class _FakeService:
         self.upsert_lead_calls = 0
         self.create_booking_draft_outcomes: list = []
         self.create_booking_draft_calls = 0
+        self.update_lead_stage_outcomes: list = []
+        self.update_lead_stage_calls = 0
 
     @contextmanager
     def connect(self):
@@ -87,6 +89,19 @@ class _FakeService:
             )
             self.connection.commit()
         return {"booking_id": booking_id, "booking_status": "Draft", "write_result_contract": {"executed": True}}
+
+    def update_lead_stage(self, lead_id, *, requested_stage, **kwargs):
+        outcome = self.update_lead_stage_outcomes[self.update_lead_stage_calls]
+        self.update_lead_stage_calls += 1
+        if outcome == "raise":
+            raise RuntimeError("transient lead stage update error")
+        stage, apply_update = outcome
+        if apply_update:
+            self.connection.execute("UPDATE leads SET lead_stage = ? WHERE lead_id = ?", (stage, lead_id))
+            self.connection.commit()
+        # The service reports the requested stage regardless of whether the row
+        # actually changed -- this is what makes an unverified update dangerous.
+        return {"lead_id": lead_id, "lead_stage": requested_stage}
 
 
 def _settings() -> SimpleNamespace:
@@ -258,6 +273,153 @@ class TestCreateBookingDraftVerification(_VerificationTestCase):
         self.assertEqual(self.service.create_booking_draft_calls, 2)
         self.assertFalse(result.get("executed", True))
         self.assertNotIn("BK00002", str(result.get("assistant_message") or ""))
+
+
+class TestUpdateLeadStageVerification(_VerificationTestCase):
+    """`update_lead_stage` narrated success straight from the service's own
+    return value with no independent read-back at all -- unlike the create
+    actions above, it wasn't even wrapped in the verify/retry mechanism.
+    """
+
+    def _seed_lead(self, lead_id: str = "LD00950", initial_stage: str = "New Lead") -> None:
+        self.conn.execute(
+            "INSERT INTO leads (lead_id, customer_name, traveler_id, raw_phone, lead_stage) VALUES (?, ?, ?, ?, ?)",
+            (lead_id, "Mona Ali", "TR00900", "01112223333", initial_stage),
+        )
+        self.conn.commit()
+
+    def test_stage_update_verifies_successfully(self) -> None:
+        self._seed_lead()
+        self.service.update_lead_stage_outcomes = [("Qualified", True)]
+        result = self.executor.execute(
+            action="update_lead_stage",
+            payload={"lead_id": "LD00950", "requested_stage": "Qualified"},
+            session_context={"session_id": "s1"},
+        )
+        self.assertEqual(result["result_id"], "LD00950")
+        self.assertEqual(self.service.update_lead_stage_calls, 1)
+        self.assertIn("Qualified", str(result.get("assistant_message") or ""))
+
+    def test_unverified_update_retries_and_then_succeeds(self) -> None:
+        self._seed_lead()
+        self.service.update_lead_stage_outcomes = [("Qualified", False), ("Qualified", True)]
+        result = self.executor.execute(
+            action="update_lead_stage",
+            payload={"lead_id": "LD00950", "requested_stage": "Qualified"},
+            session_context={"session_id": "s2"},
+        )
+        self.assertEqual(result["result_id"], "LD00950")
+        self.assertEqual(self.service.update_lead_stage_calls, 2)
+        self.assertTrue(result.get("executed", True))
+
+    def test_unverified_update_twice_is_reported_as_failure_not_success(self) -> None:
+        self._seed_lead()
+        self.service.update_lead_stage_outcomes = [("Qualified", False), ("Qualified", False)]
+        result = self.executor.execute(
+            action="update_lead_stage",
+            payload={"lead_id": "LD00950", "requested_stage": "Qualified"},
+            session_context={"session_id": "s3"},
+        )
+        self.assertEqual(self.service.update_lead_stage_calls, 2)
+        self.assertFalse(result.get("executed", True))
+        # The stage claim must never reach the customer if it was never verified.
+        self.assertNotIn("moved to Qualified", str(result.get("assistant_message") or ""))
+
+
+class _ApprovingValidator:
+    @staticmethod
+    def validate_action(*, action: str, payload: dict, session_context: dict) -> ValidationResult:
+        return ValidationResult(action=action, decision=APPROVED, session_id=str(session_context.get("session_id") or ""))
+
+
+class TestGuardianConsentDispatchByMode(unittest.TestCase):
+    """`record_guardian_consent`/`record_lead_guardian_flag` used to call
+    `self.service.set_guardian_consent(...)` directly. `self.service` is
+    deliberately None under CRM_ACCESS_MODE=api (reads/writes go over HTTP in
+    that mode), so every call raised AttributeError in production, was
+    swallowed, and the caller marked consent "saved" anyway. These pin that
+    the fix actually dispatches through the same api_client/service branch
+    every other write action uses, in both modes, with a real read-back.
+    """
+
+    def test_api_mode_dispatches_through_api_client_and_verifies(self) -> None:
+        class FakeApiClient:
+            def __init__(self) -> None:
+                self.write_calls: list[str] = []
+
+            def read(self, action, payload):
+                if action == "get_traveler_profile":
+                    return {"traveler": {"traveler_id": "TR777", "guardian_name": "Parent X", "guardian_phone": "0100"}}
+                if action == "lookup_lead":
+                    return {"leads": [{"lead_id": "LD777", "requires_guardian_approval": True}]}
+                return {}
+
+            def write(self, action, payload, session_context):
+                self.write_calls.append(action)
+                return {"result_id": payload.get("traveler_id") or payload.get("lead_id")}
+
+        settings = SimpleNamespace(default_country_code="20", crm_access_mode="api", crm_api_base_url="http://crm.test", crm_api_token="token")
+        api_client = FakeApiClient()
+        tools = ReadOnlyCRMTools(settings, api_client=api_client)
+        executor = GeminiWriteToolExecutor(settings=settings, read_only_tools=tools, action_validator=_ApprovingValidator())
+        self.assertIsNone(executor.service)  # confirms this test exercises the exact broken state
+
+        result = executor.record_guardian_consent(
+            traveler_id="TR777", is_minor=True, guardian_name="Parent X", guardian_phone="0100"
+        )
+        self.assertTrue(result.get("verified"))
+
+        flag_result = executor.record_lead_guardian_flag(lead_id="LD777", requires_guardian_approval=True)
+        self.assertTrue(flag_result.get("verified"))
+        self.assertEqual(api_client.write_calls, ["set_guardian_consent", "flag_lead_guardian_approval"])
+
+    def test_api_mode_verification_failure_retries_once_then_reports_unverified(self) -> None:
+        class FakeApiClient:
+            def __init__(self) -> None:
+                self.write_calls = 0
+
+            def read(self, action, payload):
+                # The fields never actually land, no matter what the write claims.
+                return {"traveler": {"traveler_id": "TR778", "guardian_name": "", "guardian_phone": ""}}
+
+            def write(self, action, payload, session_context):
+                self.write_calls += 1
+                return {"result_id": payload.get("traveler_id")}
+
+        settings = SimpleNamespace(default_country_code="20", crm_access_mode="api", crm_api_base_url="http://crm.test", crm_api_token="token")
+        api_client = FakeApiClient()
+        tools = ReadOnlyCRMTools(settings, api_client=api_client)
+        executor = GeminiWriteToolExecutor(settings=settings, read_only_tools=tools, action_validator=_ApprovingValidator())
+
+        result = executor.record_guardian_consent(
+            traveler_id="TR778", is_minor=True, guardian_name="Parent Y", guardian_phone="0200"
+        )
+        self.assertFalse(result.get("verified"))
+        self.assertEqual(api_client.write_calls, 2)  # performed, then retried exactly once
+
+    def test_construction_raises_when_neither_service_nor_api_client_available(self) -> None:
+        """Regression test for the exact original bug state: a write executor
+        configured for CRM_ACCESS_MODE=api with no way to actually reach the
+        CRM must refuse to start rather than let every handler that touches
+        self.service fail one call at a time."""
+        broken_tools = SimpleNamespace(service=None, api_client=None)
+        with self.assertRaises(RuntimeError):
+            GeminiWriteToolExecutor(
+                settings=SimpleNamespace(default_country_code="20", crm_access_mode="api"),
+                read_only_tools=broken_tools,
+            )
+
+    def test_construction_does_not_raise_for_a_read_only_double_outside_api_mode(self) -> None:
+        """A test double with no write path at all is a normal, legitimate
+        pattern for read-only/enforcement tests -- only CRM_ACCESS_MODE=api
+        with no working write path is the broken state worth crashing on."""
+        read_only_double = SimpleNamespace(service=None, api_client=None)
+        executor = GeminiWriteToolExecutor(
+            settings=SimpleNamespace(default_country_code="20"),
+            read_only_tools=read_only_double,
+            action_validator=_ApprovingValidator(),
+        )
+        self.assertIsNone(executor.service)
 
 
 if __name__ == "__main__":

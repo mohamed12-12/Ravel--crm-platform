@@ -31,6 +31,8 @@ AGENT_WRITE_ACTIONS = {
     "update_lead_stage",
     "create_booking_draft",
     "create_handoff",
+    "set_guardian_consent",
+    "flag_lead_guardian_approval",
 }
 
 crm_bp = Blueprint('crm', __name__, url_prefix='/api/crm')

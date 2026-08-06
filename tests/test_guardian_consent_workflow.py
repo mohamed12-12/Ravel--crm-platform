@@ -22,8 +22,10 @@ from unittest.mock import Mock
 
 import pytest
 
+from services.ai_agent.ai_agent_app.agent.read_only_tools import ReadOnlyCRMTools
 from services.ai_agent.ai_agent_app.agent.session_flow import SessionState
 from services.ai_agent.ai_agent_app.agent.tool_calling_runtime import ToolCallingSessionRuntime
+from services.ai_agent.ai_agent_app.agent.write_tool_executor import GeminiWriteToolExecutor
 from services.crm.system_services.unified_service import UnifiedCRMService
 from tests.test_agent_conversation_reliability import PassiveAgent, RecordingReadTools
 from tests.test_golden_transcript_regressions import _write_results_by_action
@@ -57,6 +59,11 @@ def runtime(tmp_path: Path):
     rt = ToolCallingSessionRuntime(settings=settings, conversation_ai=PassiveAgent())
     rt._read_only_tools = RecordingReadTools()
     rt._write_executor = Mock()
+    # record_guardian_consent's contract is now "verified" by an independent
+    # read-back (see write_tool_executor.py) -- tests that only care about the
+    # guardian branch firing, not about verification failure, opt into the
+    # happy path by default here.
+    rt._write_executor.record_guardian_consent.return_value = {"verified": True}
     try:
         yield rt
     finally:
@@ -168,6 +175,29 @@ def test_existing_minor_traveler_from_crm_lookup_triggers_guardian_branch(runtim
     runtime._write_executor.record_lead_guardian_flag.assert_not_called()
 
 
+def test_unverified_guardian_consent_write_does_not_mark_saved_or_flag_lead(runtime: ToolCallingSessionRuntime) -> None:
+    """If the write's own read-back never confirms the fields landed on the
+    traveler row (e.g. a stale/nonexistent traveler_id), the session must not
+    believe consent is on file, and the lead's guardian-approval flag -- which
+    exists precisely so staff know a minor needs guardian sign-off -- must not
+    be silently skipped by treating an unverified write as done."""
+    runtime._write_executor.execute.side_effect = _write_results_by_action(
+        create_traveler=NEW_MINOR_TRAVELER_WRITE,
+        create_lead=NEW_MINOR_LEAD_WRITE,
+    )
+    runtime._write_executor.record_guardian_consent.return_value = {"verified": False}
+    session = runtime.create_session()
+    for text in ("01270482380", "Ahmed Sami Youssef", "Egyptian", _birthday_for_age(16)):
+        session = _send(runtime, text, session)
+    session = _send(runtime, "Sami Youssef Ahmed", session)
+    session = _send(runtime, "01009998877", session)
+    session = _send(runtime, "1", session)
+
+    runtime._write_executor.record_guardian_consent.assert_called_once()
+    assert session.guardian_consent_saved is False
+    runtime._write_executor.record_lead_guardian_flag.assert_not_called()
+
+
 def test_set_guardian_consent_and_lead_flag_persist_to_real_db(tmp_path: Path) -> None:
     """Verify against a fresh DB read, not the write call's own return value.
 
@@ -220,6 +250,59 @@ def test_set_guardian_consent_and_lead_flag_persist_to_real_db(tmp_path: Path) -
         assert traveler_row["guardian_name"] == "Parent Name"
         assert traveler_row["guardian_phone"] == "01009998877"
         assert bool(lead_row["requires_guardian_approval"]) is True
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        shutil.rmtree(db_dir, ignore_errors=True)
+
+
+def test_record_guardian_consent_verifies_against_a_real_db_read(tmp_path: Path) -> None:
+    """`record_guardian_consent`/`record_lead_guardian_flag` must not trust
+    `set_guardian_consent`'s own return value -- an UPDATE ... WHERE traveler_id = ?
+    silently succeeds (0 rows changed) for a traveler_id that does not exist,
+    same for the lead flag. Only an independent read-back tells the two cases
+    apart, which is exactly what "verified" reflects.
+    """
+    original_env = dict(os.environ)
+    os.environ["AI_AGENT_MODE"] = "tool_calling"
+    db_dir = tmp_path / uuid.uuid4().hex
+    try:
+        client, app = _make_app_with_db(db_dir)
+        settings = replace(app.config["SETTINGS"], ai_provider="none", gemini_api_key="")
+        db_path = os.environ["RAHMA_SYSTEM_DB_PATH"]
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO travelers (traveler_id, full_name, status) VALUES (?, ?, ?)",
+                ("TR01000", "Test Minor", "Active"),
+            )
+            conn.execute(
+                "INSERT INTO leads (lead_id, customer_name, traveler_id, raw_phone, created_at, lead_stage) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                ("LD01000", "Test Minor", "TR01000", "01112223344", "2026-08-06T10:00:00", "New Lead"),
+            )
+            conn.commit()
+
+        executor = GeminiWriteToolExecutor(settings=settings, read_only_tools=ReadOnlyCRMTools(settings))
+
+        real = executor.record_guardian_consent(
+            traveler_id="TR01000", is_minor=True, guardian_name="Parent Name", guardian_phone="01009998877"
+        )
+        assert real.get("verified") is True
+
+        # An unresolvable traveler_id never verifies, so the retry-once wrapper
+        # exhausts its attempts and raises -- record_guardian_consent catches
+        # that and returns {} rather than a raw write result. Either shape
+        # ({} or {"verified": False}) reads as falsy to the caller.
+        fake = executor.record_guardian_consent(
+            traveler_id="TR-DOES-NOT-EXIST", is_minor=True, guardian_name="Parent Name", guardian_phone="01009998877"
+        )
+        assert not fake.get("verified")
+
+        flag_real = executor.record_lead_guardian_flag(lead_id="LD01000", requires_guardian_approval=True)
+        assert flag_real.get("verified") is True
+
+        flag_fake = executor.record_lead_guardian_flag(lead_id="LD-DOES-NOT-EXIST", requires_guardian_approval=True)
+        assert not flag_fake.get("verified")
     finally:
         os.environ.clear()
         os.environ.update(original_env)

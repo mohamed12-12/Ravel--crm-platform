@@ -941,6 +941,11 @@ def test_update_lead_stage_builds_a_result_without_a_name_error() -> None:
     executor.service = SimpleNamespace(
         update_lead_stage=lambda lead_id, **kwargs: {"lead_id": lead_id, "lead_stage": kwargs.get("requested_stage") or ""}
     )
+    # The update is now confirmed with an independent read-back before the
+    # result reaches the customer -- give it a matching lead to verify against.
+    executor.read_only_tools = SimpleNamespace(
+        lookup_lead=lambda **kwargs: {"leads": [{"lead_id": "LD00001", "lead_stage": "Qualified"}]}
+    )
 
     result = executor._execute_update_lead_stage(
         {"lead_id": "LD00001", "requested_stage": "Qualified"},

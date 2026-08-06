@@ -33,7 +33,7 @@ def upgrade():
         sa.Column("uploaded_by_user_id", sa.Integer(), nullable=True),
         sa.Column("uploaded_by_name", sa.String(length=100), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column("verification_status", sa.String(length=50), nullable=False, server_default="verified"),
         sa.ForeignKeyConstraint(["trip_id"], ["trips.trip_id"]),
         sa.ForeignKeyConstraint(["uploaded_by_user_id"], ["users.id"]),

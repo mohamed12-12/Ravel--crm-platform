@@ -263,6 +263,55 @@ class ActionValidator:
             metadata={"lead_id": lead_id, "current_stage": current_stage, "requested_stage": target_stage},
         )
 
+    def _validate_set_guardian_consent(self, payload: dict[str, Any], session_context: dict[str, Any]) -> ValidationResult:
+        traveler_id = self._value(payload, session_context, "traveler_id")
+        session_id = str(session_context.get("session_id") or "")
+        if not traveler_id:
+            return ValidationResult(
+                action="set_guardian_consent",
+                decision=NEED_MORE_INFORMATION,
+                reasons=["A traveler_id is required before I can validate guardian consent."],
+                missing_information=["traveler_id"],
+                session_id=session_id,
+            )
+        guardian_name = self._value(payload, session_context, "guardian_name")
+        guardian_phone = self._value(payload, session_context, "guardian_phone")
+        missing = [name for name, value in (("guardian_name", guardian_name), ("guardian_phone", guardian_phone)) if not value]
+        if missing:
+            return ValidationResult(
+                action="set_guardian_consent",
+                decision=NEED_MORE_INFORMATION,
+                reasons=["Guardian name and phone are both required before I can validate consent."],
+                missing_information=missing,
+                traveler_id=str(traveler_id),
+                session_id=session_id,
+            )
+        return ValidationResult(
+            action="set_guardian_consent",
+            decision=APPROVED,
+            warnings=["Validation approved; execution must still pass through the controlled write tool."],
+            traveler_id=str(traveler_id),
+            session_id=session_id,
+        )
+
+    def _validate_flag_lead_guardian_approval(self, payload: dict[str, Any], session_context: dict[str, Any]) -> ValidationResult:
+        lead_id = self._value(payload, session_context, "lead_id")
+        session_id = str(session_context.get("session_id") or "")
+        if not lead_id:
+            return ValidationResult(
+                action="flag_lead_guardian_approval",
+                decision=NEED_MORE_INFORMATION,
+                reasons=["A lead_id is required before I can validate the guardian-approval flag."],
+                missing_information=["lead_id"],
+                session_id=session_id,
+            )
+        return ValidationResult(
+            action="flag_lead_guardian_approval",
+            decision=APPROVED,
+            warnings=["Validation approved; execution must still pass through the controlled write tool."],
+            session_id=session_id,
+        )
+
     def _validate_create_booking_draft(self, payload: dict[str, Any], session_context: dict[str, Any]) -> ValidationResult:
         traveler, _resolution = self._resolve_traveler(payload, session_context)
         session_id = str(session_context.get("session_id") or "")

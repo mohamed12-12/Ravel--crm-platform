@@ -2,7 +2,7 @@
 import re
 from pathlib import Path
 
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, abort
 from app.models.booking import TripBooking
 from app.models.lead import Lead
 from app.models.trip import Trip
@@ -24,7 +24,14 @@ from datetime import datetime, date, timezone
 import uuid
 from services.crm.system_services import UnifiedCRMService
 from services.crm.system_services.phone_normalization import normalize_phone_input
-from app.security import current_actor, current_role, current_user, current_user_id, has_permission
+from app.security import (
+    can_view_assigned_record,
+    current_actor,
+    current_role,
+    current_user,
+    current_user_id,
+    has_permission,
+)
 
 leads_bp = Blueprint('leads', __name__, url_prefix='/leads')
 
@@ -302,6 +309,8 @@ def index():
 @leads_bp.route('/<string:lead_id>')
 def detail(lead_id):
     lead = db.get_or_404(Lead, lead_id)
+    if not can_view_assigned_record(lead.assigned_to_user_id):
+        abort(403)
     traveler = db.session.get(Traveler, lead.traveler_id) if lead.traveler_id else None
     passport_file_name = Path(lead.passport_attachment_ref).name if lead.passport_attachment_ref else ""
     commercial_context = UnifiedCRMService.resolve_commercial_context(

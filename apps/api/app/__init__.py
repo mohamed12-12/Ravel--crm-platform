@@ -515,6 +515,7 @@ def create_app(config_name=None):
         "CRM_AUTH_ENABLED", "true"
     ).strip().lower() in {"1", "true", "yes", "on"}
     app.config["CRM_API_TOKEN"] = os.environ.get("CRM_API_TOKEN", "").strip()
+    app.config["CRM_API_TOKEN_ROLE"] = (os.environ.get("CRM_API_TOKEN_ROLE", "").strip().lower() or "agent")
     app.config["DATA_AUTHORITY"] = os.environ.get("DATA_AUTHORITY", "crm").strip().lower()
     app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
     app.config.from_object(config[config_name])

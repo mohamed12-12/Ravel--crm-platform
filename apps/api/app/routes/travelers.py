@@ -21,6 +21,7 @@ from app.models.traveler_document import TravelerDocument
 from services.crm.system_services import UnifiedCRMService
 from services.crm.system_services.phone_normalization import normalize_phone_input
 from services.data_authority import load_data_authority
+from app.security import can_view_all_records, current_user_id
 
 travelers_bp = Blueprint('travelers', __name__, url_prefix='/travelers')
 ARCHIVE_LIKE_STATUSES = {"inactive", "archived", "blacklisted", "blocked"}
@@ -294,6 +295,11 @@ def detail(traveler_id):
     except Exception:
         pass
     leads = Lead.query.filter_by(traveler_id=traveler_id).order_by(Lead.created_at.desc()).all()
+    if not can_view_all_records():
+        lead_owners = {lead.assigned_to_user_id for lead in leads}
+        owns_or_unclaimed = not lead_owners or None in lead_owners or current_user_id() in lead_owners
+        if not owns_or_unclaimed:
+            abort(403)
     bookings = TripBooking.query.filter_by(traveler_id=traveler_id).order_by(TripBooking.draft_created_at.desc()).all()
     ce_bookings = CEBooking.query.filter_by(traveler_id=traveler_id).order_by(CEBooking.created_at.desc()).all()
     documents = TravelerDocument.query.filter_by(traveler_id=traveler_id).order_by(TravelerDocument.uploaded_at.desc()).all()

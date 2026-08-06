@@ -476,6 +476,54 @@ class PostgresAgentBridgeService:
         )
         return payload
 
+    def set_guardian_consent(
+        self,
+        traveler_id: str,
+        *,
+        is_minor: bool,
+        guardian_name: str = "",
+        guardian_phone: str = "",
+    ) -> dict[str, Any]:
+        traveler = db.session.get(Traveler, traveler_id)
+        if traveler is None:
+            raise ValueError(f"Traveler not found: {traveler_id}")
+        traveler.is_minor = bool(is_minor)
+        traveler.guardian_name = guardian_name or None
+        traveler.guardian_phone = guardian_phone or None
+        db.session.commit()
+        payload = traveler.to_dict()
+        payload["write_result_contract"] = self.write_result_contract(
+            status="updated",
+            executed=True,
+            reused=False,
+            record_type="traveler",
+            record_id=traveler.traveler_id,
+            customer_confirmation_allowed=False,
+            safe_customer_message_key="traveler.guardian_consent_updated",
+            audit={"traveler_id": traveler_id},
+        )
+        return payload
+
+    def flag_lead_guardian_approval(self, lead_id: str, *, requires_guardian_approval: bool) -> dict[str, Any]:
+        lead = db.session.get(Lead, lead_id)
+        if lead is None:
+            raise ValueError(f"Lead not found: {lead_id}")
+        lead.requires_guardian_approval = bool(requires_guardian_approval)
+        lead.updated_at = _utc_now()
+        db.session.commit()
+        payload = lead.to_dict()
+        payload["write_result_contract"] = self.write_result_contract(
+            status="updated",
+            executed=True,
+            reused=False,
+            record_type="lead",
+            record_id=lead.lead_id,
+            customer_confirmation_allowed=False,
+            safe_customer_message_key="lead.guardian_flag_updated",
+            audit={"lead_id": lead_id},
+        )
+        return payload
+
     def create_handoff_case(
         self,
         *,

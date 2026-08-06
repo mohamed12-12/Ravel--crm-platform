@@ -19,6 +19,8 @@ SUPPORTED_VALIDATION_ACTIONS = {
     "update_booking",
     "upload_passport",
     "create_handoff",
+    "set_guardian_consent",
+    "flag_lead_guardian_approval",
 }
 
 CLOSED_LEAD_STAGES = {"Won", "Lost", "Blocked", "Cancelled", "Closed"}
