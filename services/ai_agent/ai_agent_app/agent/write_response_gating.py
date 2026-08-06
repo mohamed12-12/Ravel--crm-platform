@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-_SUCCESS_STATUSES = {"success", "reused", "duplicate"}
+_SUCCESS_STATUSES = {"success", "created", "reused", "duplicate"}
 _BLOCKED_STATUSES = {"blocked", "failed"}
 _SUCCESS_WORDS = (
     "created",
@@ -29,6 +29,26 @@ _SUCCESS_WORDS = (
     "جاري تحويلك",
     "تم تحويلك",
     "قمت بتحويلك",
+)
+_NEGATION_WORDS = (
+    "not",
+    "no ",
+    "cannot",
+    "can't",
+    "couldn't",
+    "could not",
+    "didn't",
+    "did not",
+    "wasn't",
+    "was not",
+    "isn't",
+    "is not",
+    "won't",
+    "will not",
+    "لا",
+    "لم",
+    "ما",
+    "مش",
 )
 
 
@@ -95,7 +115,7 @@ def customer_message_from_write_result(
         if record_type == "lead":
             return f"طلبك {record_id} مسجل بالفعل، وسنتابعه معك." if arabic else f"Your request {record_id} is already recorded. We will follow up with you."
 
-    if status == "success" and record_id:
+    if status in {"success", "created"} and record_id:
         if record_type == "booking":
             return f"تم تسجيل طلب الحجز {record_id}. فريق Ravel سيتابع معك الخطوة التالية." if arabic else f"Booking request {record_id} has been created. The Ravel team will follow up with the next step."
         if record_type == "handoff":
@@ -119,8 +139,26 @@ def customer_message_from_write_result(
 
 
 def response_claims_write_success(text: str) -> bool:
+    """True if the text asserts a write succeeded.
+
+    A success word (e.g. "created") only counts as a claim if it is not
+    immediately negated ("no booking was created", "لم يتم إنشاء") -- an
+    honest failure message describing what did NOT happen must not be
+    mistaken for a false success claim.
+    """
     normalized = str(text or "").casefold()
-    return any(word.casefold() in normalized for word in _SUCCESS_WORDS)
+    for word in _SUCCESS_WORDS:
+        word_cf = word.casefold()
+        start = 0
+        while True:
+            idx = normalized.find(word_cf, start)
+            if idx == -1:
+                break
+            window = normalized[max(0, idx - 25) : idx]
+            if not any(negation in window for negation in _NEGATION_WORDS):
+                return True
+            start = idx + len(word_cf)
+    return False
 
 
 def gate_customer_write_reply(

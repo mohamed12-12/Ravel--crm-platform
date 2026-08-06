@@ -3088,22 +3088,11 @@ class ToolCallingSessionRuntime:
         elif session.language != "ar":
             session.language = "en"
 
-        if self._handle_post_booking_message(session, clean_text):
-            return session
-
-        if self._handle_booking_confirmation_reply(session, clean_text):
-            return session
-
-        if self._handle_navigation_intent(session, clean_text):
-            return session
-
-        if self._handle_existing_handoff_message(session, clean_text):
-            return session
-
-        if self._is_human_agent_request(clean_text):
-            self._execute_manual_handoff(session, clean_text)
-            return session
-
+        # Identity/meta questions ("who made you") must always get the exact
+        # same canned, non-LLM answer regardless of conversation stage --
+        # checked before any stage-specific handler so it can never be
+        # intercepted by e.g. post-booking state and fall through to the
+        # model, and never advances or resets session.stage.
         identity_response = self._identity_policy.evaluate(clean_text)
         if identity_response is not None:
             session.language = identity_response.language
@@ -3122,6 +3111,22 @@ class ToolCallingSessionRuntime:
                 session.id,
                 identity_response.intent,
             )
+            return session
+
+        if self._handle_post_booking_message(session, clean_text):
+            return session
+
+        if self._handle_booking_confirmation_reply(session, clean_text):
+            return session
+
+        if self._handle_navigation_intent(session, clean_text):
+            return session
+
+        if self._handle_existing_handoff_message(session, clean_text):
+            return session
+
+        if self._is_human_agent_request(clean_text):
+            self._execute_manual_handoff(session, clean_text)
             return session
 
         if self._handle_identity_required_greeting(session, clean_text):
@@ -3784,9 +3789,16 @@ class ToolCallingSessionRuntime:
             session.selected_trip_id,
             contract,
         )
+        # Route straight back into the confirmation-reply handler rather than
+        # decision.state (whatever pre-write state that was, e.g. "booking_ready" --
+        # a state _handle_booking_confirmation_reply does not recognize as "awaiting
+        # a confirmation reply"). Without this, the customer's very next "yes"/
+        # "confirm" retry falls through past that handler entirely and the workflow
+        # policy re-asks the full confirmation question from scratch instead of
+        # retrying the write.
         session.booking_confirmed = False
-        session.booking_confirmation_requested = False
-        session.stage = decision.state
+        session.booking_confirmation_requested = True
+        session.stage = "booking_confirmation_required"
         honest_message = str((result or {}).get("assistant_message") or "").strip() if isinstance(result, dict) else ""
         self._append_authoritative_reply(
             session,

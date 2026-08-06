@@ -9,6 +9,7 @@ from services.ai_agent.ai_agent_app.agent.gemini_agent import GeminiAgent
 from services.ai_agent.ai_agent_app.agent.write_response_gating import (
     customer_message_from_write_result,
     gate_customer_write_reply,
+    response_claims_write_success,
     write_result_allows_success,
 )
 
@@ -21,6 +22,18 @@ class Port2WriteResultResponseGatingTests(unittest.TestCase):
         self.assertFalse(write_result_allows_success(missing_id, "booking"))
         self.assertTrue(write_result_allows_success(with_id, "booking"))
         self.assertIn("B-PORT2", customer_message_from_write_result(with_id, "booking"))
+
+    def test_created_status_from_the_postgres_bridge_counts_as_success(self) -> None:
+        """Regression for a live bug found while re-verifying the booking-
+        confirmation fix: PostgresAgentBridgeService.create_booking_draft (and
+        create_lead, create_handoff_case) report a fresh write as
+        status="created", not "success" (the SQLite path's convention). A
+        genuinely successful production write was being told to the customer
+        as a failure because "created" was missing from _SUCCESS_STATUSES.
+        """
+        created = {"status": "created", "executed": True, "record_type": "booking", "record_id": "BK000002"}
+        self.assertTrue(write_result_allows_success(created, "booking"))
+        self.assertIn("BK000002", customer_message_from_write_result(created, "booking"))
 
     def test_booking_blocked_response_does_not_claim_success(self) -> None:
         blocked = {"status": "blocked", "executed": False, "record_type": "booking", "record_id": ""}
@@ -44,6 +57,25 @@ class Port2WriteResultResponseGatingTests(unittest.TestCase):
 
         self.assertNotIn("has been created", reply.lower())
         self.assertIn("could not create", reply.lower())
+
+    def test_negated_success_word_is_not_a_false_success_claim(self) -> None:
+        """Regression for a live bug: the honest booking-draft-failed message
+        ("...no booking was created") was itself misclassified as a false
+        success claim (bare substring match on "created", ignoring the
+        negation), so it got silently swapped for a fully generic apology
+        instead of ever reaching the customer.
+        """
+        honest_failure = (
+            "I could not create the booking request right now, and no booking was created.\n"
+            "Please try again, or ask to speak with a member of the Ravel team."
+        )
+        self.assertFalse(response_claims_write_success(honest_failure))
+
+        honest_failure_ar = "لم أتمكن من تسجيل طلب الحجز الآن، ولم يتم إنشاء أي حجز."
+        self.assertFalse(response_claims_write_success(honest_failure_ar))
+
+        # An actual positive claim must still be caught.
+        self.assertTrue(response_claims_write_success("Your booking has been created."))
 
     def test_reused_duplicate_booking_uses_already_recorded_language(self) -> None:
         duplicate = {"status": "duplicate", "executed": False, "reused": True, "record_type": "booking", "record_id": "B-OLD"}

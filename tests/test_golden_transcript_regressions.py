@@ -834,6 +834,98 @@ def test_confirmed_booking_writes_the_draft_without_relying_on_the_model(
     ) == 1
 
 
+# ===========================================================================
+# Bug: a live transcript hit "yes" -> "I could not complete the request right
+# now" -> "yes" again -> the SAME confirmation question repeated -> "confirm"
+# -> success. "yes" and "confirm" are matched identically (both in
+# _AFFIRMATIVE_REPLIES), so this was never a synonym-coverage gap. Reproduced
+# directly: when create_booking_draft's write genuinely fails, the failure
+# handler reset session.stage to whatever pre-write state the workflow
+# decision had captured (e.g. "booking_ready"), which
+# _handle_booking_confirmation_reply does not recognize as "awaiting a
+# confirmation reply" -- so the very next "yes" fell through that handler
+# entirely and the workflow policy re-asked the full question from scratch
+# instead of retrying the write. A second, independent bug compounded it: the
+# honest failure message itself ("...no booking was created") tripped the
+# false-write-success guard on the bare word "created" with no negation
+# awareness, so the customer never even saw that specific message -- only the
+# fully generic "Sorry, I couldn't prepare that response properly" apology.
+# ===========================================================================
+def test_failed_booking_draft_write_lets_the_very_next_confirmation_reply_retry(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    session = _answer_booking_questions(runtime)
+    assert session.stage == "booking_confirmation_required"
+
+    call_count = {"n": 0}
+
+    def flaky_once(*, action: str, payload: dict, session_context: dict) -> dict:
+        assert action == "create_booking_draft"
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("simulated transient write failure")
+        return BOOKING_DRAFT_WRITE
+
+    runtime._write_executor.execute.side_effect = flaky_once
+
+    session = _send(runtime, "yes", session)
+    failure_reply = session.messages[-1]["text"]
+    assert "no booking was created" in failure_reply.lower()
+    assert "couldn't prepare" not in failure_reply.lower()
+    assert not session.booking_completed
+    # The retry must be routed back through the confirmation handler, not
+    # dropped into a state that produces a full re-ask of the original question.
+    assert session.stage == "booking_confirmation_required"
+    assert session.booking_confirmation_requested is True
+
+    session = _send(runtime, "yes", session)
+    reply = session.messages[-1]["text"]
+    assert "BK00001" in reply
+    assert session.booking_completed is True
+    assert call_count["n"] == 2
+
+
+# ===========================================================================
+# Bug: found live while re-verifying the fix above. A real booking (BK000002)
+# was genuinely created against real production Postgres, but the customer
+# was told "I could not complete the request right now" anyway.
+# PostgresAgentBridgeService.create_booking_draft reports a fresh write as
+# write_result_contract status="created" -- the SQLite path always used
+# "success" instead, and _SUCCESS_STATUSES only recognized "success" (plus
+# "reused"/"duplicate"), so write_result_allows_success treated a genuinely
+# successful Postgres write as a failure.
+# ===========================================================================
+def test_booking_draft_created_status_from_the_postgres_bridge_is_reported_as_success(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    session = _answer_booking_questions(runtime)
+    assert session.stage == "booking_confirmation_required"
+
+    runtime._write_executor.execute.side_effect = _write_results_by_action(
+        create_booking_draft={
+            "executed": True,
+            "result_id": "BK000002",
+            "booking_result": {"booking_id": "BK000002", "booking_status": "Draft"},
+            "write_result_contract": {
+                "status": "created",
+                "record_id": "BK000002",
+                "record_type": "booking",
+                "executed": True,
+            },
+            "session_update": {
+                "booking_result": {"booking_id": "BK000002", "booking_status": "Draft"},
+                "booking_status": "Draft",
+            },
+        }
+    )
+
+    session = _send(runtime, "yes", session)
+    reply = session.messages[-1]["text"]
+    assert "BK000002" in reply
+    assert "could not" not in reply.lower()
+    assert session.booking_completed is True
+
+
 def test_international_trip_requires_a_passport_attachment_before_the_draft(
     runtime: ToolCallingSessionRuntime,
 ) -> None:
