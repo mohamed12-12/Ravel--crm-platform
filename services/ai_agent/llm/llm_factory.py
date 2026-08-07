@@ -10,7 +10,7 @@ def build_llm_provider(settings: Settings | dict[str, Any]) -> GeminiProvider | 
     if isinstance(settings, dict):
         mode = str(settings.get("ai_agent_mode") or "deterministic").strip().lower()
         api_key = str(settings.get("gemini_api_key") or "").strip()
-        model = str(settings.get("gemini_model") or "gemini-2.0-flash").strip()
+        model = str(settings.get("gemini_model") or "gemini-3.5-flash").strip()
     else:
         mode = settings.ai_agent_mode
         api_key = settings.gemini_api_key
