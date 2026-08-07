@@ -11,6 +11,18 @@ from services.ai_agent.ai_agent_app.system_bridge import get_system_service
 
 
 class ReadOnlyCRMTools:
+    # crm_access_mode picks how every read/write in this class actually
+    # reaches the CRM: "shared_service" calls get_system_service()'s
+    # UnifiedCRMService in-process against SQLite; "api" instead calls the
+    # CRM Flask app's /api/crm/agent/read and /agent/write over HTTP
+    # (crm_api_client.py), which on that side dispatches to either
+    # UnifiedCRMService or apps/api's PostgresAgentBridgeService depending
+    # on ITS configured database -- see services/ai_agent/README.md and
+    # services/crm/README.md for the full picture. self.service and
+    # self.api_client are mutually exclusive in practice: an explicit
+    # `service` (tests, or a caller that already resolved one) always wins,
+    # and only when none is given does crm_access_mode decide which path to
+    # build.
     def __init__(self, settings: Settings, *, service=None, api_client: CRMApiClient | None = None) -> None:
         self.settings = settings
         self.api_client = api_client

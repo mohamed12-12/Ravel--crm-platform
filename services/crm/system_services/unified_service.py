@@ -92,6 +92,17 @@ class IdentityResolution:
 
 
 class UnifiedCRMService:
+    """The SQLite-backed half of this project's dual CRM backend.
+
+    Owns raw sqlite3/SQL access plus this class's own idempotent lazy schema
+    migrations (ensure_operational_schema() and the _migrate_* methods) for
+    columns added to models after their Alembic migration -- see
+    database/README.md's "Schema drift" section. When the same operations
+    run against Postgres instead, apps/api/app/services/agent_crm_bridge.py's
+    PostgresAgentBridgeService is the other half; see services/crm/README.md
+    for how the two relate and how a caller ends up on one or the other.
+    """
+
     _schema_ready_paths: set[str] = set()
 
     def __init__(self, settings: SystemServiceSettings | None = None) -> None:
