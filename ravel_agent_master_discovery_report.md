@@ -6,6 +6,83 @@ newer entries go at the top. Cross-reference commit hashes where available.
 
 ---
 
+## 2026-08-08c -- Issue 1, closed: `_next_prefixed_id()`'s lexicographic-sort ID collision
+
+**This closes the Issue-1 investigation arc.** Two prior hypotheses in this
+log (`idempotency_key` schema drift; a generic "local handler exception"
+diagnosis) were real, defensible fixes given what was known at each point,
+but neither was the confirmed root cause of the specific "esclate me"
+collision. This one is confirmed directly by code logic, independent of
+any live-database claim:
+
+**Root cause:** `apps/api/app/services/agent_crm_bridge.py`'s
+`_next_prefixed_id()` computed the "last" row via
+`ORDER BY <column> DESC LIMIT 1` -- a **lexicographic (text) sort**, not a
+numeric one. A non-sequential ID in that column (a UUID/hex-style row from
+an old script, manual insert, or different code path -- e.g.
+`H-B3AE7949`) sorts *above* every real sequential ID (`'B' > '0'`
+character-by-character), so it gets picked as "last" every time such a row
+exists. The function then blindly concatenates whatever digits happen to
+appear in that string (`"B3AE7949"` -> digits `"37949"`) and computes
+`next_number = 37949 + 1 = 37950` -- which can collide with a real,
+already-existing sequential row (`H-00037950`), causing a
+`UniqueViolation` on every subsequent handoff-creation attempt, not a rare
+one. Verified independently via plain Python arithmetic (no database
+needed): `"".join(ch for ch in "H-B3AE7949" if ch.isdigit())` does produce
+`"37949"`, confirming the mechanism exactly.
+
+The same shared function is used for `travelers`, `leads`, and
+`trip_bookings` IDs too -- identically exposed the moment any
+non-conforming row exists in those tables, even though none had visibly
+triggered it yet.
+
+**Notably, `services/crm/system_services/unified_service.py`'s own
+`_next_prefixed_id` (the SQLite backend) never had this bug** -- it already
+fetched every matching row and computed the numeric max in Python via
+`re.fullmatch(prefix + r"(\d+)", value)`, ignoring anything that didn't
+match. This is the textbook shape of this project's recurring dual-backend
+drift: one backend's implementation was corrected or written more
+carefully at some point, and the other silently kept the flawed version.
+
+**Fixed:** rewrote the Postgres-side `_next_prefixed_id` to match its
+already-correct SQLite sibling's approach -- fetch every row matching the
+prefix, keep only ones that are strictly `prefix + digits`, take the
+numeric max among those. Applies to all four call sites automatically
+since it's the one shared function.
+
+**Verified:**
+- `test_next_prefixed_id_ignores_non_conforming_rows_and_sorts_numerically`
+  -- seeds the exact three IDs from the live report, confirms the next ID
+  is `H-00037951`.
+- `test_create_handoff_case_does_not_collide_with_the_exact_live_non_conforming_rows`
+  -- same seed, but through the real `create_handoff_case()` write path
+  over the real `/api/crm/agent/write` route.
+- `test_next_prefixed_id_starts_from_one_when_every_row_is_non_conforming`
+  -- edge case, confirms it still starts from 1 with zero conforming rows.
+- Confirmed each test actually fails against the pre-fix code (temporarily
+  reverted, re-ran, restored) before trusting them as real regression
+  guards -- not just written and assumed correct.
+
+**What is explicitly NOT confirmed or done, honestly (no EC2/production/RDS
+access available in this environment):**
+- The exact production rows (`H-B3AE7949`, `H-914C4F11`) were never
+  queried or inspected by me -- I cannot run
+  `SELECT * FROM handoff_queue WHERE handoff_id IN (...)` against real
+  production, so their actual origin (old script, manual test insert, a
+  different code path) remains unknown and still needs investigation by
+  someone with real DB access.
+- The four-table non-conforming-ID sweep
+  (`SELECT ... WHERE ... !~ '^PREFIX[0-9]{N}$'`) was never run against
+  real production for the same reason.
+- Nothing was deployed to EC2, no PM2 process was restarted, and no live
+  browser reproduction was performed. The fix is committed and tested
+  locally only; live verification (two consecutive "esclate me" requests
+  producing distinct, correctly-incrementing handoff IDs, confirmed by
+  querying the real database afterward) still needs to happen on the real
+  deployed system before this can be called fully closed end-to-end.
+
+---
+
 ## 2026-08-08b -- The real Path A vs Path B distinction in `_execute_manual_handoff`
 
 Direct follow-up to Issue 1 below, after a live production check disproved

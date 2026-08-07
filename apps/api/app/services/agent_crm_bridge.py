@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
@@ -795,11 +796,27 @@ class PostgresAgentBridgeService:
         return TripBooking.query.filter(text("idempotency_key = :key")).params(key=key).first()
 
     def _next_prefixed_id(self, table_name: str, column_name: str, prefix: str, width: int) -> str:
-        query = text(f"SELECT {column_name} FROM {table_name} WHERE {column_name} LIKE :prefix ORDER BY {column_name} DESC LIMIT 1")
-        last_value = db.session.execute(query, {"prefix": f"{prefix}%"}).scalar()
-        digits = "".join(ch for ch in _trim(last_value) if ch.isdigit())
-        next_number = int(digits or "0") + 1
-        return f"{prefix}{next_number:0{width}d}"
+        # `ORDER BY <col> DESC LIMIT 1` sorts lexicographically (text), not
+        # numerically -- a non-sequential ID in this column (e.g. a
+        # UUID/hex-style row from an old script or manual insert) can sort
+        # above every real sequential ID and get picked as "last", and
+        # blindly extracting whatever digits happen to appear in it then
+        # computes garbage that collides with a real existing row instead
+        # of advancing past it. Fetch every matching row instead and only
+        # consider ones that are ACTUALLY prefix+digits, taking the
+        # numeric max among those -- matches the already-correct sibling
+        # implementation in
+        # services/crm/system_services/unified_service.py's own
+        # _next_prefixed_id (the SQLite backend never had this bug).
+        query = text(f"SELECT {column_name} FROM {table_name} WHERE {column_name} LIKE :prefix")
+        rows = db.session.execute(query, {"prefix": f"{prefix}%"}).scalars().all()
+        pattern = re.compile(rf"{re.escape(prefix)}(\d+)")
+        max_number = 0
+        for value in rows:
+            match = pattern.fullmatch(_trim(value))
+            if match:
+                max_number = max(max_number, int(match.group(1)))
+        return f"{prefix}{max_number + 1:0{width}d}"
 
     @staticmethod
     def _as_bool(value: Any) -> bool:

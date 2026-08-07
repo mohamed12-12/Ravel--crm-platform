@@ -489,6 +489,93 @@ def test_handoff_write_succeeds_once_the_idempotency_key_column_is_reconciled(br
         assert db.session.query(HandoffQueue).count() == 1
 
 
+# ---------------------------------------------------------------------------
+# Confirmed live bug: _next_prefixed_id's `ORDER BY <col> DESC LIMIT 1`
+# sorts lexicographically (text), not numerically. A non-sequential row
+# (e.g. "H-B3AE7949", from an old script or manual insert) sorts above
+# every real sequential ID and gets picked as "last"; blindly extracting
+# whatever digits happen to appear in it ("B3AE7949" -> "37949") computes a
+# next-number that collides with an existing row instead of advancing past
+# it -- reproducible with pure string/int arithmetic, independent of any
+# specific live database's actual contents.
+# ---------------------------------------------------------------------------
+def test_next_prefixed_id_ignores_non_conforming_rows_and_sorts_numerically(bridge_app):
+    from app.services.agent_crm_bridge import PostgresAgentBridgeService
+    from app.models import HandoffQueue
+
+    app, db = bridge_app
+    with app.app_context():
+        db.session.add_all([
+            HandoffQueue(handoff_id="H-B3AE7949", reason="legacy/manual test data"),
+            HandoffQueue(handoff_id="H-914C4F11", reason="legacy/manual test data"),
+            HandoffQueue(handoff_id="H-00037950", reason="the only real sequential row"),
+        ])
+        db.session.commit()
+
+        next_id = PostgresAgentBridgeService()._next_prefixed_id("handoff_queue", "handoff_id", "H-", 8)
+
+        assert next_id == "H-00037951"
+
+
+def test_create_handoff_case_does_not_collide_with_the_exact_live_non_conforming_rows(bridge_app):
+    """The literal reproduction: seed the exact three IDs confirmed live,
+    then create a real handoff through create_handoff_case() (not just the
+    private ID helper) and confirm it gets a genuinely new ID.
+    """
+    from app.models import HandoffQueue
+
+    app, db = bridge_app
+    client = app.test_client()
+    app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://staging/redacted"
+
+    with app.app_context():
+        db.session.add_all([
+            HandoffQueue(handoff_id="H-B3AE7949", reason="legacy/manual test data"),
+            HandoffQueue(handoff_id="H-914C4F11", reason="legacy/manual test data"),
+            HandoffQueue(handoff_id="H-00037950", reason="the only real sequential row"),
+        ])
+        db.session.commit()
+
+    response = client.post(
+        "/api/crm/agent/write",
+        json={
+            "action": "create_handoff",
+            "payload": {
+                "traveler_id": "TRPG001",
+                "reason_code": "customer_requested_human",
+                "reason_text": "Customer asked for an agent.",
+                "user_requested_human": True,
+            },
+            "session_context": {"session_id": "handoff-collision-repro-1", "language": "en", "user_requested_human": True},
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.get_json()["result"]
+    assert result["write_result_contract"]["status"] == "created"
+    assert result["result_id"] == "H-00037951"
+    with app.app_context():
+        assert db.session.query(HandoffQueue).filter_by(handoff_id="H-00037951").count() == 1
+        assert db.session.query(HandoffQueue).count() == 4
+
+
+def test_next_prefixed_id_starts_from_one_when_every_row_is_non_conforming(bridge_app):
+    from app.services.agent_crm_bridge import PostgresAgentBridgeService
+    from app.models import HandoffQueue
+
+    app, db = bridge_app
+    with app.app_context():
+        db.session.add_all([
+            HandoffQueue(handoff_id="H-B3AE7949", reason="legacy/manual test data"),
+            HandoffQueue(handoff_id="H-914C4F11", reason="legacy/manual test data"),
+        ])
+        db.session.commit()
+
+        next_id = PostgresAgentBridgeService()._next_prefixed_id("handoff_queue", "handoff_id", "H-", 8)
+
+        assert next_id == "H-00000001"
+
+
 def test_direct_booking_bypass_remains_blocked():
     from flask import Flask
     from services.ai_agent.ai_agent_app.web.api_routes import api_bp
