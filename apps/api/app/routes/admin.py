@@ -135,6 +135,59 @@ def reset_user_password(user_id: int):
     return redirect(url_for('admin.users'))
 
 
+@admin_bp.route('/users/<int:user_id>/delete', methods=['POST'])
+@permission_required('manage_users')
+def delete_user(user_id: int):
+    from app.models.assignment_history import AssignmentHistory
+    from app.models.trip_media import TripMedia
+
+    user = db.get_or_404(User, user_id)
+    actor = current_user()
+    if actor and actor.id == user.id:
+        flash('You cannot delete your own account while logged in as them.', 'error')
+        return redirect(url_for('admin.users'))
+
+    lead_count = user.assigned_leads.count()
+    booking_count = user.assigned_bookings.count()
+    if lead_count or booking_count:
+        flash(
+            f'Reassign {lead_count} lead(s) and {booking_count} booking(s) before deleting {user.display_name}.',
+            'error',
+        )
+        return redirect(url_for('admin.users'))
+
+    username = user.username
+    display_name = user.display_name
+    role = user.role
+
+    # user.id is about to stop existing -- every other FK reference to it
+    # (none of which represent a *current* assignment, since that was
+    # already checked above) must be detached first, the same discipline
+    # travelers.py's delete() uses for its own dependent tables. These are
+    # historical/audit references, not active work, so they're nulled out
+    # in place rather than deleted -- the row and its context (reason,
+    # timestamp, resource) stay, only the dangling user link is dropped.
+    UserAuditLog.query.filter(UserAuditLog.actor_user_id == user.id).update({'actor_user_id': None})
+    UserAuditLog.query.filter(UserAuditLog.target_user_id == user.id).update({'target_user_id': None})
+    AssignmentHistory.query.filter(AssignmentHistory.previous_user_id == user.id).update({'previous_user_id': None})
+    AssignmentHistory.query.filter(AssignmentHistory.new_user_id == user.id).update({'new_user_id': None})
+    AssignmentHistory.query.filter(AssignmentHistory.assigned_by_user_id == user.id).update({'assigned_by_user_id': None})
+    Lead.query.filter(Lead.assigned_by_user_id == user.id).update({'assigned_by_user_id': None})
+    TripBooking.query.filter(TripBooking.assigned_by_user_id == user.id).update({'assigned_by_user_id': None})
+    TripMedia.query.filter(TripMedia.uploaded_by_user_id == user.id).update({'uploaded_by_user_id': None})
+
+    db.session.add(UserAuditLog(
+        actor_user_id=actor.id if actor else None,
+        target_user_id=None,
+        action='user_deleted',
+        details=f'username={username} full_name={display_name} role={role}',
+    ))
+    db.session.delete(user)
+    db.session.commit()
+    flash(f'Employee {display_name} deleted.', 'success')
+    return redirect(url_for('admin.users'))
+
+
 @admin_bp.route('/')
 def index():
     return redirect(url_for('admin.dashboard'))

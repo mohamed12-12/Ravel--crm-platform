@@ -9,10 +9,12 @@ import shutil
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, Response, current_app, send_file, abort
 from werkzeug.utils import secure_filename
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
 from app.models.booking import TripBooking, CEBooking
 from app.models.booking_event import BookingEventTrail
+from app.models.booking_status_history import BookingStatusHistory
 from app.models.handoff import HandoffQueue
 from app.models.interaction import Interaction
 from app.models.lead import Lead
@@ -540,12 +542,35 @@ def delete(traveler_id):
 
     BookingEventTrail.query.filter(or_(*event_filters)).delete(synchronize_session=False)
     HandoffQueue.query.filter(or_(*handoff_filters)).delete(synchronize_session=False)
+    # booking_status_history.booking_id -> trip_bookings.booking_id is
+    # NOT NULL with no cascade relationship configured on either model, so
+    # deleting a TripBooking that ever had a status change logged (the
+    # normal case for any real booking, not just a fresh test record) would
+    # otherwise fail with a foreign key violation on a backend that enforces
+    # it (Postgres in production; SQLite does not by default, which is why
+    # this was never caught locally).
+    if booking_ids:
+        BookingStatusHistory.query.filter(BookingStatusHistory.booking_id.in_(booking_ids)).delete(synchronize_session=False)
     TripBooking.query.filter(TripBooking.traveler_id == traveler_id).delete(synchronize_session=False)
     CEBooking.query.filter(CEBooking.traveler_id == traveler_id).delete(synchronize_session=False)
     Interaction.query.filter(Interaction.traveler_id == traveler_id).delete(synchronize_session=False)
     Lead.query.filter(Lead.traveler_id == traveler_id).delete(synchronize_session=False)
+    # TravelerDocument rows are handled by Traveler.documents' own
+    # cascade='all, delete-orphan' relationship (see models/traveler.py) --
+    # db.session.delete(traveler) below already deletes them; no explicit
+    # bulk delete needed here (unlike TripBooking/CEBooking/Interaction/Lead
+    # above, which have no delete cascade configured on their relationships
+    # and are handled procedurally instead).
     db.session.delete(traveler)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError as exc:
+        db.session.rollback()
+        current_app.logger.error("Traveler delete failed traveler_id=%s error=%s", traveler_id, exc, exc_info=True)
+        return jsonify({
+            "status": "error",
+            "message": "This traveler still has records that could not be removed automatically. Please contact support.",
+        }), 409
 
     _remove_sheet_record("Travelers", traveler_id)
     for lead_id in lead_ids:

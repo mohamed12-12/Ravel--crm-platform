@@ -189,5 +189,46 @@ class ApiClientWriteFailureTests(unittest.TestCase):
         self.assertEqual(result["write_result_contract"]["status"], "reused")
 
 
+class LocalHandlerExceptionLoggingTests(unittest.TestCase):
+    """Distinct from ApiClientWriteFailureTests above: that class covers a
+    CRMApiError from an HTTP round-trip (CRM_ACCESS_MODE=api's api_client
+    branch). This covers the OTHER branch -- api_client is None, so
+    execute() calls a local _execute_* handler directly (this is what
+    actually runs *inside* apps/api/app/routes/crm.py's agent_write(),
+    since that route builds its own executor with no api_client at all).
+    A real production incident traced a "clean, no-exception" handoff
+    failure (Path B in tool_calling_runtime.py's _execute_manual_handoff)
+    to exactly this branch: some exception inside the local handler was
+    being caught and converted into a normal-looking failed contract with
+    zero diagnostic detail. This is deliberately decoupled from any
+    specific theory of what that exception actually is (a prior
+    investigation guessed idempotency_key column drift; that guess turned
+    out to be unconfirmed) -- it proves the LOGGING fix works for any
+    exception this branch might ever see, not just one hypothesized cause.
+    """
+
+    def test_any_exception_from_the_local_handler_is_logged_at_error_with_the_real_detail(self) -> None:
+        service = SimpleNamespace(
+            create_handoff_case=Mock(side_effect=RuntimeError("something specific and diagnosable")),
+        )
+        read_only_tools = SimpleNamespace(service=service, api_client=None)
+        settings = SimpleNamespace(crm_access_mode="shared_service", default_country_code="20")
+        executor = GeminiWriteToolExecutor(settings=settings, read_only_tools=read_only_tools)
+        executor.action_validator = _ApprovingValidator()
+
+        with self.assertLogs("rahma_agent", level="ERROR") as captured:
+            result = executor.execute(
+                action="create_handoff",
+                payload={"user_requested_human": True},
+                session_context={"session_id": "S-LOCAL-1"},
+            )
+
+        self.assertEqual(result["write_result_contract"]["status"], "failed")
+        self.assertFalse(result["executed"])
+        joined = "\n".join(captured.output)
+        self.assertIn("Local write handler failed", joined)
+        self.assertIn("something specific and diagnosable", joined)
+
+
 if __name__ == "__main__":
     unittest.main()

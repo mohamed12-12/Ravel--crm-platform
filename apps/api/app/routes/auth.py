@@ -69,6 +69,24 @@ def _credentials_match(submitted_username: str, submitted_password: str) -> bool
     return False
 
 
+def _employee_login_match(submitted_username: str, submitted_password: str) -> User | None:
+    """Validate a real employee row created via /admin/users/create.
+
+    Distinct from _credentials_match, which only ever recognizes the single
+    env-var-configured admin identity -- this is what lets any other stored
+    employee (agent/manager/sales/admin) actually log in with their own
+    username and temporary/reset password.
+    """
+    if not submitted_username or not submitted_password:
+        return None
+    user = User.query.filter(db.func.lower(User.username) == submitted_username.casefold()).first()
+    if user is None or not user.is_active or not user.password_hash:
+        return None
+    if not check_password_hash(user.password_hash, submitted_password):
+        return None
+    return user
+
+
 def _provision_login_user(username: str, password: str) -> User:
     user = User.query.filter(db.func.lower(User.username) == username.casefold()).first()
     timestamp = datetime.now(timezone.utc).replace(microsecond=0)
@@ -116,8 +134,20 @@ def login():
         else:
             username = (request.form.get("username") or "").strip()
             password = request.form.get("password") or ""
+            user = None
             if _credentials_match(username, password):
+                # The one operator identity configured entirely from env vars
+                # (ADMIN_USERNAME/ADMIN_PASSWORD or CRM_ADMIN_PASSWORD_HASH) --
+                # always admin by definition, provisioned/kept in sync here.
                 user = _provision_login_user(username, password)
+            else:
+                # Any other employee row created via /admin/users/create: this
+                # branch previously didn't exist at all, so a real employee's
+                # username/password could never authenticate here -- only the
+                # single env-var admin identity above ever could. Resolve the
+                # role from the stored record instead of assuming admin.
+                user = _employee_login_match(username, password)
+            if user is not None:
                 _record_login_event(user)
                 session.clear()
                 session["logged_in"] = True

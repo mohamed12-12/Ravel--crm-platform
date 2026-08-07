@@ -601,6 +601,105 @@ class Phase4TravelerManagementTests(unittest.TestCase):
             self.assertIsNotNone(replacement)
             self.assertEqual(replacement.full_name, "Replacement Traveler")
 
+    def _enable_sqlite_fk_enforcement(self, app) -> None:
+        """SQLite does not enforce foreign keys by default -- every delete
+        test elsewhere in this file would pass even with a broken cascade.
+        A one-off `PRAGMA foreign_keys = ON` execute() only applies to
+        whichever pooled connection happens to run it, so a request served
+        later by a different connection wouldn't see it; a connect-time
+        listener guarantees every connection this engine ever hands out
+        gets it, matching Postgres's always-on enforcement in production.
+        """
+        from sqlalchemy import event
+
+        event.listen(self.db.engine, "connect", lambda dbapi_conn, _: dbapi_conn.execute("PRAGMA foreign_keys=ON"))
+        self.db.session.remove()
+        self.db.engine.dispose()  # drop any pooled connection opened before the listener was registered
+
+    def test_delete_traveler_with_a_document_succeeds_under_real_foreign_key_enforcement(self) -> None:
+        """traveler_documents.traveler_id is NOT NULL with a foreign key to
+        travelers.traveler_id, and Traveler.documents' cascade='all,
+        delete-orphan' relationship is what actually deletes those rows
+        when db.session.delete(traveler) runs (the _delete_traveler_document_*
+        helpers above it only clean up the files on disk).
+        """
+        app, db_path, workbook_path = self._build_app()
+        client = app.test_client()
+        uploads_root = self.tmp_path / "uploads_fk"
+        traveler_dir = uploads_root / "TR00200"
+        traveler_dir.mkdir(parents=True, exist_ok=True)
+        passport_file = traveler_dir / "passport.pdf"
+        passport_file.write_bytes(b"passport")
+        app.config["TRAVELER_UPLOAD_ROOT"] = str(uploads_root)
+
+        with app.app_context():
+            self._enable_sqlite_fk_enforcement(app)
+            self.db.session.add(self.Traveler(traveler_id="TR00200", full_name="Document Traveler", status="Active"))
+            self.db.session.add(self.TravelerDocument(
+                traveler_id="TR00200",
+                category="passport",
+                file_name="passport.pdf",
+                original_file_name="passport.pdf",
+                mime_type="application/pdf",
+                file_extension="pdf",
+                file_size=8,
+                storage_path=str(passport_file),
+            ))
+            self.db.session.commit()
+
+        response = client.delete("/travelers/TR00200")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["message"], "Traveler deleted permanently")
+
+        with app.app_context():
+            self.assertIsNone(self.db.session.get(self.Traveler, "TR00200"))
+            self.assertEqual(self.TravelerDocument.query.filter_by(traveler_id="TR00200").count(), 0)
+
+    def test_delete_traveler_with_a_booking_status_history_succeeds_under_real_foreign_key_enforcement(self) -> None:
+        """Confirmed bug: booking_status_history.booking_id is NOT NULL with
+        a foreign key to trip_bookings.booking_id, and neither model
+        declares a cascade relationship for it. delete()'s bulk
+        TripBooking.query...delete() would fail on any backend that
+        enforces foreign keys (Postgres in production) for any traveler
+        whose booking ever had a status change logged -- the normal case
+        for a real booking, not just a freshly created draft with no
+        history at all, which is why this was never caught locally on
+        SQLite (no enforcement by default) or by fixtures that never
+        exercised a booking with real status history.
+        """
+        app, db_path, workbook_path = self._build_app()
+        client = app.test_client()
+        from app.models.booking_status_history import BookingStatusHistory
+
+        with app.app_context():
+            self._enable_sqlite_fk_enforcement(app)
+            self.db.session.add(self.Traveler(traveler_id="TR00201", full_name="Booking History Traveler", status="Active"))
+            self.db.session.add(self.TripBooking(
+                booking_id="B00201",
+                trip_id=None,
+                trip_name="History Trip",
+                traveler_id="TR00201",
+                traveler_name="Booking History Traveler",
+                booking_status="Confirmed",
+            ))
+            self.db.session.commit()
+            # No ORM relationship links TripBooking and BookingStatusHistory,
+            # so SQLAlchemy has no dependency to order these inserts by --
+            # committing the booking first guarantees it exists before this
+            # FK-constrained insert, regardless of unit-of-work ordering.
+            self.db.session.add(BookingStatusHistory(
+                booking_id="B00201", old_status="Draft", new_status="Confirmed", changed_by="admin",
+            ))
+            self.db.session.commit()
+
+        response = client.delete("/travelers/TR00201")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["message"], "Traveler deleted permanently")
+
+        with app.app_context():
+            self.assertIsNone(self.db.session.get(self.Traveler, "TR00201"))
+            self.assertEqual(BookingStatusHistory.query.filter_by(booking_id="B00201").count(), 0)
+
     def test_index_page_offers_a_delete_action_per_traveler(self) -> None:
         """The list/dashboard page previously had no delete affordance at
         all -- only the detail page did -- so a customer-facing traveler

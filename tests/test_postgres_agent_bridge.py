@@ -406,6 +406,89 @@ def test_sqlite_mode_still_works(bridge_app):
     assert response.get_json()["result"]["traveler"]["traveler_id"] == "TRPG001"
 
 
+# ---------------------------------------------------------------------------
+# Live-transcript bug: "esclate me" consistently produced "I couldn't submit
+# the review request automatically" once escalate-intent detection was fixed.
+# Root cause: idempotency_key was added to the TripBooking/Lead/HandoffQueue
+# SQLAlchemy models (used by _handoff_by_idempotency's raw SQL lookup) but no
+# Alembic migration ever added the column -- a database built purely from
+# `flask db upgrade` is missing it, so the very first idempotency lookup in
+# create_handoff_case raises a real "no such column" error at the database
+# level. That was previously invisible: write_tool_executor.execute()'s
+# local-handler except Exception only ever logged a sanitized reason CODE at
+# INFO, not the real exception -- see the new ERROR-level log added there.
+# ---------------------------------------------------------------------------
+def test_handoff_write_fails_loudly_when_idempotency_key_column_is_missing(bridge_app, caplog):
+    app, db = bridge_app
+    client = app.test_client()
+    app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://staging/redacted"
+
+    with app.app_context():
+        db.session.execute(db.text("ALTER TABLE handoff_queue DROP COLUMN idempotency_key"))
+        db.session.commit()
+
+    payload = {
+        "action": "create_handoff",
+        "payload": {
+            "traveler_id": "TRPG001",
+            "reason_code": "customer_requested_human",
+            "reason_text": "Customer asked for an agent.",
+            "user_requested_human": True,
+        },
+        "session_context": {"session_id": "handoff-drift-1", "language": "en", "user_requested_human": True},
+    }
+
+    with caplog.at_level("ERROR", logger="rahma_agent"):
+        response = client.post("/api/crm/agent/write", json=payload)
+
+    assert response.status_code == 200
+    result = response.get_json()["result"]
+    assert result["write_result_contract"]["status"] == "failed"
+    assert result["executed"] is False
+    assert any(
+        "Local write handler failed" in record.message and "idempotency_key" in record.message
+        for record in caplog.records
+    ), "expected the real schema-drift exception to be logged at ERROR, not silently swallowed"
+
+
+def test_handoff_write_succeeds_once_the_idempotency_key_column_is_reconciled(bridge_app):
+    """Same missing-column scenario as above, but after applying the fix
+    this migration's upgrade() would perform (see
+    database/migrations/versions/a3f6c9e2d817_*): the write goes through
+    cleanly and a real handoff record is created.
+    """
+    app, db = bridge_app
+    client = app.test_client()
+    app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://staging/redacted"
+    from app.models import HandoffQueue
+
+    with app.app_context():
+        db.session.execute(db.text("ALTER TABLE handoff_queue DROP COLUMN idempotency_key"))
+        db.session.execute(db.text("ALTER TABLE handoff_queue ADD COLUMN idempotency_key TEXT"))
+        db.session.commit()
+
+    response = client.post(
+        "/api/crm/agent/write",
+        json={
+            "action": "create_handoff",
+            "payload": {
+                "traveler_id": "TRPG001",
+                "reason_code": "customer_requested_human",
+                "reason_text": "Customer asked for an agent.",
+                "user_requested_human": True,
+            },
+            "session_context": {"session_id": "handoff-reconciled-1", "language": "en", "user_requested_human": True},
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.get_json()["result"]
+    assert result["write_result_contract"]["status"] == "created"
+    assert result["executed"] is True
+    with app.app_context():
+        assert db.session.query(HandoffQueue).count() == 1
+
+
 def test_direct_booking_bypass_remains_blocked():
     from flask import Flask
     from services.ai_agent.ai_agent_app.web.api_routes import api_bp

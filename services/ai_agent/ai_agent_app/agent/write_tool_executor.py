@@ -128,6 +128,11 @@ class GeminiWriteToolExecutor:
                 "write_result_contract": contract,
             }
 
+        # CRM_ACCESS_MODE=api: forward the write over HTTP instead of calling
+        # a local _execute_* handler below -- see read_only_tools.py's
+        # ReadOnlyCRMTools.__init__ for how api_client gets set, and
+        # services/crm/README.md for what actually handles this write on
+        # the other end of that HTTP call.
         if self.read_only_tools.api_client is not None:
             try:
                 result = self.read_only_tools.api_client.write(action, payload, session_context)
@@ -170,6 +175,34 @@ class GeminiWriteToolExecutor:
             result["validation"] = validation_payload
             return result
         except Exception as exc:
+            # _log_audit only ever records the sanitized error CODE (e.g.
+            # "write_failed") at INFO level -- that's deliberate for the
+            # audit trail, but it means the real exception (a DB error, a
+            # schema mismatch, whatever) was previously invisible in this
+            # process's own logs. This is the actual decision point for a
+            # "clean" write failure with no exception visible to the
+            # caller (_execute_manual_handoff's Path B in
+            # tool_calling_runtime.py) -- everything above this line
+            # already succeeded or was approved, so anything that lands
+            # here IS the real, specific reason, not a re-derivation of it.
+            #
+            # WHICH PROCESS'S LOG THIS APPEARS IN DEPENDS ON WHO CALLS
+            # execute() -- this module is imported by both PM2 processes.
+            # In production (CRM_ACCESS_MODE=api), the agent process
+            # forwards the write over HTTP and never reaches this branch
+            # itself; it is apps/api/app/routes/crm.py's agent_write() that
+            # constructs its OWN GeminiWriteToolExecutor and calls
+            # execute() again locally -- so for that path, THIS exact log
+            # line executes inside, and is only visible in, the
+            # rahma-crm-api process's log (`pm2 logs rahma-crm-api`), even
+            # though agent_logger is named "rahma_agent" and lives under
+            # services/ai_agent/ -- the logger's name/location does not
+            # determine which process's log captures it, only which
+            # process actually executes this line does.
+            agent_logger.error(
+                "Local write handler failed action=%s session=%s error=%s",
+                action, session_context.get("session_id", ""), exc, exc_info=True,
+            )
             audit["reason"] = self._safe_error_code_for_exception(exc)
             self._log_audit(audit)
             return self._failed_write_result(
