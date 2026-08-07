@@ -1057,3 +1057,78 @@ def test_update_lead_stage_builds_a_result_without_a_name_error() -> None:
     assert result["result_id"] == "LD00001"
     assert result["write_result"]["created_traveler"] is None
     assert result["lead_update"]["lead_stage"] == "Qualified"
+
+
+# ---------------------------------------------------------------------------
+# Bug 9: live transcript -- customer typed "esclate me" (a typo for
+# "escalate me") twice in a row while stuck at handle_empty_trip_results (an
+# international search with zero results). _is_human_agent_request had no
+# entry for escalate/esclate at all, so both messages fell through to the
+# generic "no trips of this type" reply instead of ever reaching
+# _execute_manual_handoff -- confirmed via the log line "handled unclear
+# input without model rewrite step=handle_empty_trip_results".
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("message_text", ["escalate me", "esclate me", "can you escalate this"])
+def test_escalate_request_during_empty_trip_results_reaches_manual_handoff(
+    runtime: ToolCallingSessionRuntime, message_text: str
+) -> None:
+    identity = {"traveler_id": "TR00777", "full_name": "Youssef Kamal", "status": "Active"}
+    read_tools = RecordingReadTools(identity=identity)
+    read_tools.trips = []  # `trips=[]` in the constructor falls back to the TRIPS default (falsy check)
+    runtime._read_only_tools = read_tools
+    runtime._write_executor.execute.return_value = {
+        "executed": True,
+        "result_id": "H-0099",
+        "handoff_case": {"handoff_id": "H-0099"},
+        "write_result_contract": {
+            "status": "success",
+            "record_id": "H-0099",
+            "record_type": "handoff",
+            "executed": True,
+        },
+    }
+    session = runtime.create_session()
+    session = _send(runtime, "01270482380", session)
+    session = _send(runtime, "2", session)  # international
+    assert session.stage == "no_trips_available"
+
+    session = _send(runtime, message_text, session)
+
+    assert session.handoff_state == "handed_off"
+    reply = session.messages[-1]["text"].lower()
+    assert "no active inventory" not in reply
+    assert "do not have any available" not in reply
+
+
+# ---------------------------------------------------------------------------
+# The customer-facing handoff messages used to say only "a team member will
+# follow up" -- no persona at all. The codebase already has a configured
+# named persona for exactly this (settings.post_trip_handoff_responsible_employee,
+# previously wired only into the older session_flow.py runtime's post-trip
+# handoff message), so ToolCallingSessionRuntime's own handoff messages now
+# use it too instead of a generic "team member".
+# ---------------------------------------------------------------------------
+def test_manual_handoff_success_message_names_the_configured_persona(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    runtime.settings = replace(runtime.settings, post_trip_handoff_responsible_employee="Sara")
+    runtime._write_executor.execute.return_value = {
+        "executed": True,
+        "result_id": "H-0100",
+        "handoff_case": {"handoff_id": "H-0100"},
+        "write_result_contract": {
+            "status": "success",
+            "record_id": "H-0100",
+            "record_type": "handoff",
+            "executed": True,
+        },
+    }
+    session = runtime.create_session()
+    session.customer_name = "Youssef Kamal"
+    session.raw_phone = "01270482380"
+
+    session = _send(runtime, "I want to talk to a human please", session)
+
+    reply = session.messages[-1]["text"]
+    assert "Sara" in reply
+    assert session.handoff_state == "handed_off"

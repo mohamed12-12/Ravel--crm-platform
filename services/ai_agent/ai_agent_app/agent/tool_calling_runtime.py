@@ -629,9 +629,10 @@ class ToolCallingSessionRuntime:
         except Exception as exc:
             agent_logger.warning("Auto-escalation handoff could not be created session=%s error=%s", session.id, exc)
         agent_logger.error("Auto-escalated to human handoff after repeated contradiction session=%s", session.id)
+        responsible = self.settings.post_trip_handoff_responsible_employee
         if arabic:
-            return "معلش، حصل عندي لخبطة في الرد. هحولك لموظف من فريق Ravel يتابع معاك فورا."
-        return "Sorry, I ran into trouble preparing a correct reply. I'm connecting you with a member of the Ravel team right now."
+            return f"معلش، حصل عندي لخبطة في الرد. هحولك لـ{responsible} من فريق Ravel يتابع معاك فورا."
+        return f"Sorry, I ran into trouble preparing a correct reply. I'm connecting you with {responsible} from the Ravel team right now."
 
     def _finalize_assistant_reply(
         self,
@@ -1449,6 +1450,17 @@ class ToolCallingSessionRuntime:
                 "call me",
                 "support",
                 "help",
+                "escalate",
+                "speak to someone",
+                "speak to a person",
+                "transfer me",
+                "connect me",
+                # common misspellings of "escalate" seen live -- kept as an
+                # explicit small list rather than fuzzy-matching, to avoid
+                # false positives elsewhere in this substring check.
+                "esclate",
+                "excalate",
+                "escallate",
                 "\u0645\u0648\u0638\u0641",
                 "\u0627\u0646\u0633\u0627\u0646",
                 "\u0643\u0644\u0645\u0646\u064a",
@@ -1456,6 +1468,9 @@ class ToolCallingSessionRuntime:
                 # "help/support" (masa'ada), spelled with a plain ha: normalization
                 # maps ta marbuta to ha before this check runs.
                 "\u0645\u0633\u0627\u0639\u062f\u0647",
+                "\u062a\u0635\u0639\u064a\u062f",
+                "\u062d\u0648\u0644 \u0644\u0645\u0648\u0638\u0641",
+                "\u0639\u0627\u064a\u0632 \u062d\u062f \u064a\u0631\u062f",
             )
         )
 
@@ -3036,30 +3051,24 @@ class ToolCallingSessionRuntime:
         )
 
     def _handoff_success_message(self, session: SessionState, reason_code: str = "") -> str:
+        responsible = self.settings.post_trip_handoff_responsible_employee
         if session.language.startswith("ar"):
             if reason_code == "duplicate_phone_match":
-                return "رقم واتساب ده مرتبط بأكتر من ملف مسافر، لذلك أرسلت الطلب لفريق Ravel للمراجعة، وسيتواصل معك أحد أعضاء الفريق."
+                return f"رقم واتساب ده مرتبط بأكتر من ملف مسافر، لذلك أرسلت الطلب لـ{responsible} في فريق Ravel للمراجعة، وسيتواصل معك."
             if reason_code == "room_capacity":
-                return "خيار الغرفة المطلوب غير متاح حاليا للمجموعة كلها. أرسلت الطلب لفريق Ravel لمراجعة البدائل المتاحة، وسيتواصل معك أحد أعضاء الفريق بعد المراجعة."
-            return "تم إرسال طلبك لفريق Ravel للمراجعة، وسيتواصل معك أحد أعضاء الفريق بعد التحقق من التفاصيل."
-        if session.language.startswith("ar"):
-            if reason_code == "duplicate_phone_match":
-                return "رقم واتساب هذا مرتبط بأكثر من ملف مسافر، لذلك أرسلت الطلب إلى فريق Ravel للمراجعة وسيتواصل معك أحد أعضاء الفريق."
-            if reason_code == "room_capacity":
-                return "خيار الغرفة المطلوب غير متاح حاليا للمجموعة كلها. أرسلت الطلب إلى فريق Ravel لمراجعة البدائل المتاحة، وسيتواصل معك أحد أعضاء الفريق بعد المراجعة."
-            return "تم إرسال طلبك إلى فريق Ravel للمراجعة، وسيتواصل معك أحد أعضاء الفريق بعد التحقق من التفاصيل."
+                return f"خيار الغرفة المطلوب غير متاح حاليا للمجموعة كلها. أرسلت الطلب لـ{responsible} في فريق Ravel لمراجعة البدائل المتاحة، وسيتواصل معك بعد المراجعة."
+            return f"تم إرسال طلبك لـ{responsible} في فريق Ravel للمراجعة، وسيتواصل معك بعد التحقق من التفاصيل."
         if reason_code == "duplicate_phone_match":
-            return "This WhatsApp number matches more than one traveler profile, so I've sent the request to the Ravel team for review. A team member will follow up with you."
+            return f"This WhatsApp number matches more than one traveler profile, so I've sent the request to {responsible} on the Ravel team for review. They'll follow up with you."
         if reason_code == "room_capacity":
-            return "The requested room option is not currently available for the full group. I've sent the request to the Ravel team to check the available alternatives, and a team member will follow up with you."
-        return "I've sent your request to the Ravel team for review, and a team member will follow up with you once they have an update."
+            return f"The requested room option is not currently available for the full group. I've sent the request to {responsible} on the Ravel team to check the available alternatives, and they'll follow up with you."
+        return f"I've sent your request to {responsible} on the Ravel team for review, and they'll follow up with you once they have an update."
 
     def _handoff_already_under_review_message(self, session: SessionState) -> str:
+        responsible = self.settings.post_trip_handoff_responsible_employee
         if session.language.startswith("ar"):
-            return "طلبك موجود بالفعل مع فريق Ravel للمراجعة. سيتواصلون معك بعد التحقق من البدائل المتاحة."
-        if session.language.startswith("ar"):
-            return "طلبك موجود بالفعل مع فريق Ravel للمراجعة. سيتواصلون معك بعد التحقق من البدائل المتاحة."
-        return "Your request is already with the Ravel team for review. They'll follow up with you once they've checked the available options."
+            return f"طلبك موجود بالفعل مع {responsible} في فريق Ravel للمراجعة. سيتواصلون معك بعد التحقق من البدائل المتاحة."
+        return f"Your request is already with {responsible} on the Ravel team for review. They'll follow up with you once they've checked the available options."
 
     def _handle_existing_handoff_message(self, session: SessionState, clean_text: str) -> bool:
         if not self._has_active_handoff(session):
@@ -3129,7 +3138,10 @@ class ToolCallingSessionRuntime:
                 session_context={**session_context, "user_requested_human": True},
             )
         except Exception as exc:
-            agent_logger.warning("Manual handoff could not be created session=%s error=%s", session.id, exc)
+            agent_logger.error(
+                "Manual handoff could not be created session=%s error=%s",
+                session.id, exc, exc_info=True,
+            )
             result = {}
         session.messages.append({"role": "user", "text": clean_text})
         # create_handoff is called with deduplicate_open=True, so a repeat

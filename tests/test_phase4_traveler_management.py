@@ -601,6 +601,31 @@ class Phase4TravelerManagementTests(unittest.TestCase):
             self.assertIsNotNone(replacement)
             self.assertEqual(replacement.full_name, "Replacement Traveler")
 
+    def test_index_page_offers_a_delete_action_per_traveler(self) -> None:
+        """The list/dashboard page previously had no delete affordance at
+        all -- only the detail page did -- so a customer-facing traveler
+        could only be removed by first navigating into their profile. This
+        confirms the list page itself now offers delete, wired to the same
+        DELETE /travelers/<id> endpoint the detail page already used.
+        """
+        app, db, workbook_path = self._build_app()
+        client = app.test_client()
+
+        with app.app_context():
+            self.db.session.add(self.Traveler(traveler_id="TR00160", full_name="List Delete Traveler", status="Active"))
+            self.db.session.commit()
+
+        response = client.get("/travelers/")
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("deleteTravelerFromList", html)
+        self.assertIn("TR00160", html)
+
+        delete_response = client.delete("/travelers/TR00160")
+        self.assertEqual(delete_response.status_code, 200)
+        with app.app_context():
+            self.assertIsNone(self.db.session.get(self.Traveler, "TR00160"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from services.ai_agent.ai_agent_app.agent.crm_api_client import CRMApiError
 from services.ai_agent.ai_agent_app.agent.read_only_tools import ReadOnlyCRMTools
 from services.ai_agent.ai_agent_app.config import Settings
 from services.ai_agent.ai_agent_app.logger import agent_logger
@@ -128,7 +129,22 @@ class GeminiWriteToolExecutor:
             }
 
         if self.read_only_tools.api_client is not None:
-            result = self.read_only_tools.api_client.write(action, payload, session_context)
+            try:
+                result = self.read_only_tools.api_client.write(action, payload, session_context)
+            except CRMApiError as exc:
+                agent_logger.error(
+                    "CRM API write failed action=%s session=%s error=%s",
+                    action, session_context.get("session_id", ""), exc,
+                )
+                audit["reason"] = self._safe_error_code_for_exception(exc)
+                self._log_audit(audit)
+                return self._failed_write_result(
+                    action=action,
+                    exc=exc,
+                    session_context=session_context,
+                    validation_payload=validation_payload,
+                    audit=audit,
+                )
             audit["executed"] = bool(result.get("executed", True))
             audit["result_id"] = str(result.get("result_id") or "")
             audit["reason"] = str(result.get("assistant_message") or "CRM API write executed")

@@ -245,3 +245,19 @@ for the production environment template.
   `services/ai_agent/ai_agent_app`, `services/crm`, `services/instagram`
   (blocking at high severity only - currently 0 findings; medium/low
   findings are reported but don't fail the build until triaged).
+- **A CRM write triggered from the AI agent (e.g. `create_handoff`) fails and
+  you can't find why**: the exception can be logged in either of two
+  separate PM2 processes depending on where it actually happened, and
+  checking only one is a common source of long, fruitless debugging:
+  - `rahma-agent`'s log gets the `agent_logger.error(...)` call in
+    `tool_calling_runtime.py`'s `_execute_manual_handoff` (or the equivalent
+    `write_tool_executor.py` catch around `api_client.write()`) - this is
+    where the agent process *noticed* the write didn't go through.
+  - `rahma-crm-api`'s log gets the actual server-side exception, if the
+    failure happened inside the CRM API's `/api/crm/agent/write` route
+    handler (`apps/api/app/routes/crm.py`) rather than in the HTTP
+    round-trip itself (a timeout/connection error is logged agent-side only,
+    since the CRM API process never received or finished the request).
+  - When investigating a failed write, check both logs (`pm2 logs
+    rahma-agent` and `pm2 logs rahma-crm-api`), not just whichever one you
+    happen to open first.

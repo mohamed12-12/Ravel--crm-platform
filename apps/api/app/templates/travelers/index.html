@@ -184,6 +184,7 @@
                     <th style="text-align: center;" title="Community Events">CE</th>
                     <th style="text-align: right;">Revenue (USD)</th>
                     <th style="text-align: center;">Rating</th>
+                    <th style="text-align: center;">Actions</th>
                 </tr>
             </thead>
             <tbody>
@@ -247,10 +248,15 @@
                             {% endif %}
                         </div>
                     </td>
+                    <td style="text-align: center;">
+                        <button onclick="event.stopPropagation(); deleteTravelerFromList(event, '{{ traveler.traveler_id }}')" class="btn btn-ghost btn-sm" style="color:var(--red);border-color:rgba(239,68,68,0.3)">
+                            Delete
+                        </button>
+                    </td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="10" style="text-align: center; padding: 3rem; color: var(--text-muted);">
+                    <td colspan="11" style="text-align: center; padding: 3rem; color: var(--text-muted);">
                         <div style="font-size: 2rem; margin-bottom: 1rem;"></div>
                         No travelers found.
                     </td>
@@ -377,5 +383,24 @@
             closeModal();
         }
     });
+
+    async function deleteTravelerFromList(event, id) {
+        event.preventDefault();
+        if (!confirm('Are you sure you want to permanently delete this traveler and related CRM records?')) return;
+        try {
+            const response = await fetch(`/travelers/${id}`, {
+                method: 'DELETE',
+                credentials: 'same-origin',
+                headers: { 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN }
+            });
+            if (response.ok) {
+                window.location.reload();
+            } else {
+                alert('Failed to delete traveler.');
+            }
+        } catch (error) {
+            alert('An error occurred.');
+        }
+    }
 </script>
 {% endblock %}

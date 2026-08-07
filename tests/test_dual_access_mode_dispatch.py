@@ -138,5 +138,56 @@ class NoFutureBypassOfExecuteTests(unittest.TestCase):
         self.assertEqual(violations, [], "Found a call to an unsanctioned write-executor method:\n" + "\n".join(violations))
 
 
+class ApiClientWriteFailureTests(unittest.TestCase):
+    """A create_handoff (or any) write in CRM_ACCESS_MODE=api can raise
+    CRMApiError -- a real HTTP failure, timeout, or malformed CRM response --
+    from self.read_only_tools.api_client.write(). Before this fix, execute()
+    had no try/except around that call, so the exception propagated all the
+    way up uncaught instead of returning a normal failed write_result_contract
+    the caller already knows how to render safely.
+    """
+
+    def test_crm_api_error_from_create_handoff_is_caught_and_returns_a_failed_contract(self) -> None:
+        from services.ai_agent.ai_agent_app.agent.crm_api_client import CRMApiError
+
+        def _raise_write(action, payload, session_context):
+            raise CRMApiError("CRM API request failed: connection timed out")
+
+        api_client = SimpleNamespace(read=lambda action, payload: None, write=_raise_write)
+        read_only_tools = SimpleNamespace(service=None, api_client=api_client)
+        settings = SimpleNamespace(crm_access_mode="api")
+        executor = GeminiWriteToolExecutor(settings=settings, read_only_tools=read_only_tools)
+        executor.action_validator = _ApprovingValidator()
+
+        result = executor.execute(action="create_handoff", payload={}, session_context={"session_id": "S1"})
+
+        self.assertFalse(result["executed"])
+        self.assertEqual(result["write_result_contract"]["status"], "failed")
+        self.assertEqual(result["write_result_contract"]["record_type"], "handoff")
+
+    def test_deduplication_reuse_path_is_unaffected_by_the_new_error_handling(self) -> None:
+        """The non-error, `reused` case (api_client.write succeeding and
+        reporting a deduplicated handoff) must still pass straight through,
+        exactly as before -- the new try/except must only intercept an actual
+        exception, never a normal successful/reused response.
+        """
+        write_calls: list[str] = []
+        executor = _api_mode_executor(write_calls)
+        executor.read_only_tools.api_client.write = lambda action, payload, session_context: (
+            write_calls.append(action),
+            {
+                "executed": False,
+                "result_id": "H-0009",
+                "write_result_contract": {"status": "reused", "reused": True, "record_id": "H-0009"},
+            },
+        )[1]
+
+        result = executor.execute(action="create_handoff", payload={}, session_context={})
+
+        self.assertEqual(write_calls, ["create_handoff"])
+        self.assertFalse(result["executed"])
+        self.assertEqual(result["write_result_contract"]["status"], "reused")
+
+
 if __name__ == "__main__":
     unittest.main()
