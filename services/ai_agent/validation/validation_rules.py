@@ -154,9 +154,16 @@ def normalize_trip_type(value: str | None) -> str:
     if normalized in TRIP_TYPE_ALIASES:
         return TRIP_TYPE_ALIASES[normalized]
 
-    for alias, trip_type in TRIP_TYPE_ALIASES.items():
-        if len(alias) < 3:
-            continue
-        if re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", normalized):
-            return trip_type
+    # The Arabic definite article "ال" attaches directly to the noun with no
+    # space ("المحلية" = "ال" + "محلية"), so a plain \w word-boundary check
+    # never matches it -- "خلينا في المحلية" ("let's stay with the local
+    # one") would otherwise silently fail to normalize at all. Also try the
+    # same search with a leading "ال" stripped from every word.
+    dearticled = re.sub(r"(?<!\S)ال", "", normalized)
+    for candidate in (normalized, dearticled):
+        for alias, trip_type in TRIP_TYPE_ALIASES.items():
+            if len(alias) < 3:
+                continue
+            if re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", candidate):
+                return trip_type
     return ""

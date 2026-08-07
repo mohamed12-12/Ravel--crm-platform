@@ -213,7 +213,7 @@ class ToolCallingSessionRuntime:
         session.agent_mode = "tool_calling"
         session.stage = "identity_required"
         self._state_by_session[session.id] = AgentState(goal="help the traveler plan a trip")
-        session.messages.append(
+        session.messages.append(  # checkpoint-exempt: brand-new session, no confirmed facts exist yet to contradict
             {
                 "role": "assistant",
                 "text": self._agent_reply(
@@ -551,6 +551,137 @@ class ToolCallingSessionRuntime:
             record_type,
         )
 
+    def _reply_contradicts_confirmed_facts(self, session: SessionState, reply: str) -> str:
+        """Return a short reason if `reply` states something that directly
+        contradicts a recently CONFIRMED session fact, else "".
+
+        This is the single mandatory checkpoint every outgoing reply passes
+        through (see _finalize_assistant_reply) -- the same discipline as
+        write_result.py's write-status boundary: one place decides, instead
+        of trusting every reply-generation path to get it right
+        independently. Currently checks the exact failure mode from a real
+        production incident: claiming "no trips of type X" while a trip of
+        the OPPOSITE type is already selected/confirmed for this session.
+        Extend here as new contradiction shapes are found.
+        """
+        if not reply or not session.selected_trip_id:
+            return ""
+        effective_type = self._effective_trip_type(session)
+        opposite_type = {"local": "international", "international": "local"}.get(effective_type, "")
+        if not opposite_type:
+            return ""
+        opposite_label_ar = "محلية" if opposite_type == "local" else "دولية"
+        negation_markers_ar = ("مفيش", "لا يوجد", "لا توجد", "للأسف")
+        if opposite_label_ar in reply and any(marker in reply for marker in negation_markers_ar):
+            return f"reply claims no {opposite_type} trips while a {effective_type} trip ({session.selected_trip_id}) is already selected"
+        if f"no {opposite_type} trip" in reply.lower():
+            return f"reply claims no {opposite_type} trips while a {effective_type} trip ({session.selected_trip_id}) is already selected"
+        return ""
+
+    def _safe_recovery_message(self, session: SessionState) -> str:
+        """Re-ground the conversation in the most recently confirmed,
+        ACTUALLY true fact instead of a dead-end apology that gives the
+        customer nothing to do and the conversation nowhere to go.
+        """
+        arabic = session.language.startswith("ar")
+        if session.selected_trip_id:
+            trip_name = session.selected_trip_name or session.selected_trip_id
+            effective_type = self._effective_trip_type(session)
+            if arabic:
+                type_word = "محلية" if effective_type == "local" else "دولية" if effective_type == "international" else ""
+                type_phrase = f" ({type_word})" if type_word else ""
+                return f"إنت بتحجز {trip_name}{type_phrase}. خلينا نكمل من هنا -- تحب نكمل في إجراءات الحجز؟"
+            type_phrase = f" ({effective_type})" if effective_type else ""
+            return f"You're booking {trip_name}{type_phrase}. Let's continue from here -- would you like to keep going with this booking?"
+        if arabic:
+            return "خلينا نكمل من الأول: تحب رحلة محلية داخل مصر أم رحلة دولية؟"
+        return "Let's start fresh: would you like a local trip inside Egypt, or an international trip?"
+
+    def _escalate_after_repeated_contradiction(self, session: SessionState, clean_text: str = "") -> str:
+        """Auto-escalate to human handoff after 2 consecutive
+        contradiction-detections in the same session, instead of continuing
+        to loop on a customer who would otherwise just leave (see
+        session.contradiction_strikes). Best-effort: a failed handoff write
+        must not block telling the customer honestly that we're stuck.
+        """
+        arabic = session.language.startswith("ar")
+        try:
+            session_context = self._build_context(session, clean_text)
+            payload = {
+                "traveler_id": session_context.get("traveler_id") or "",
+                "raw_phone": session.raw_phone or session.pending_raw_phone,
+                "country_code": session.country_code or self.settings.default_country_code,
+                "lead_id": session_context.get("lead_id") or "",
+                "trip_id": session.selected_trip_id,
+                "flow_key": f"tool_calling:{session.id}",
+                "reason_code": "repeated_contradiction",
+                "reason_text": "The assistant produced contradictory replies twice in a row and needs human review.",
+                "priority": "High",
+                "channel": "web",
+                "customer_name": session.customer_name,
+                "agent_summary": "Automatic escalation: repeated internal contradiction detected before sending.",
+                "customer_summary": clean_text,
+                "notes": f"Session {session.id}: 2 consecutive contradiction-detections before sending a reply.",
+                "update_lead": True,
+                "deduplicate_open": True,
+            }
+            self._write_executor.execute(action="create_handoff", payload=payload, session_context=session_context)
+        except Exception as exc:
+            agent_logger.warning("Auto-escalation handoff could not be created session=%s error=%s", session.id, exc)
+        agent_logger.error("Auto-escalated to human handoff after repeated contradiction session=%s", session.id)
+        if arabic:
+            return "معلش، حصل عندي لخبطة في الرد. هحولك لموظف من فريق Ravel يتابع معاك فورا."
+        return "Sorry, I ran into trouble preparing a correct reply. I'm connecting you with a member of the Ravel team right now."
+
+    def _finalize_assistant_reply(
+        self,
+        session: SessionState,
+        *,
+        text: str,
+        language: str,
+        media: list[dict[str, Any]] | None = None,
+        user_text: str = "",
+    ) -> dict[str, Any]:
+        """The single choke point every outgoing reply passes through.
+
+        Blocks a reply that contradicts a confirmed session fact, and
+        auto-escalates to human handoff after 2 consecutive contradictions
+        -- see _reply_contradicts_confirmed_facts / _safe_recovery_message /
+        _escalate_after_repeated_contradiction.
+
+        Deliberately does NOT blanket-block every exact repeated message:
+        legitimately repeating the same specific guidance for the same
+        repeated customer mistake (e.g. "EGP" then "USD" both typed as a
+        nationality) is correct, expected behavior, not a stuck loop. Only
+        the substituted recovery text itself is guarded against repeating,
+        since that specific case -- the same safety-net message firing
+        again right after it already fired -- is what indicates a genuinely
+        unresolved contradiction rather than two unrelated validation
+        rejections that happen to render identically.
+        """
+        contradiction = self._reply_contradicts_confirmed_facts(session, text)
+        if contradiction:
+            agent_logger.error(
+                "Blocked contradictory reply before sending session=%s reason=%s",
+                session.id,
+                contradiction,
+            )
+            session.contradiction_strikes += 1
+            last_assistant_text = next(
+                (message.get("text") for message in reversed(session.messages) if message.get("role") == "assistant"),
+                None,
+            )
+            recovery_text = self._safe_recovery_message(session)
+            if session.contradiction_strikes >= 2 or recovery_text == last_assistant_text:
+                text = self._escalate_after_repeated_contradiction(session, user_text)
+                session.contradiction_strikes = 0
+            else:
+                text = recovery_text
+        else:
+            session.contradiction_strikes = 0
+
+        return self._assistant_message(text=text, language=language, media=media)
+
     def _safe_response_fallback(self, session: SessionState, *, message_key: str, base_text: str = "") -> str:
         if "handoff_failed" in message_key:
             if session.language.startswith("ar"):
@@ -566,9 +697,10 @@ class ToolCallingSessionRuntime:
             record_type=record_type,
             known_record_ids=self._session_known_record_ids(session),
         ):
-            if session.language.startswith("ar"):
-                return "\u0645\u0639\u0644\u0634\u060c \u0645\u0642\u062f\u0631\u062a\u0634 \u0623\u062c\u0647\u0632 \u0627\u0644\u0631\u062f \u0628\u0634\u0643\u0644 \u0635\u062d\u064a\u062d. \u0645\u0645\u0643\u0646 \u062a\u0628\u0639\u062a \u0637\u0644\u0628\u0643 \u0645\u0631\u0629 \u062a\u0627\u0646\u064a\u0629\u061f"
-            return "Sorry, I couldn\u2019t prepare that response properly. Could you try that again?"
+            # A dead-end apology gives the customer nothing to do and the
+            # conversation nowhere to go -- re-ground it in whatever is
+            # actually confirmed instead (see _safe_recovery_message).
+            return self._safe_recovery_message(session)
         return fallback
 
     def _agent_reply(
@@ -666,7 +798,9 @@ class ToolCallingSessionRuntime:
             required_action=required_action,
             session_context=session_context,
         )
-        session.messages.append(self._assistant_message(text=reply, language=session.language, media=media))
+        session.messages.append(
+            self._finalize_assistant_reply(session, text=reply, language=session.language, media=media, user_text=user_text)
+        )
 
     def _append_authoritative_reply(
         self,
@@ -679,7 +813,7 @@ class ToolCallingSessionRuntime:
         """Append backend-owned copy without sending it through the LLM."""
 
         reply = self._safe_response_fallback(session, message_key=message_key, base_text=base_text)
-        session.messages.append(self._assistant_message(text=reply, language=session.language, media=media))
+        session.messages.append(self._finalize_assistant_reply(session, text=reply, language=session.language, media=media))
 
     @staticmethod
     def _collection_state(session: SessionState) -> dict[str, bool]:
@@ -1596,7 +1730,9 @@ class ToolCallingSessionRuntime:
                 message_key=f"workflow.interruption.{decision.required_step or 'unknown'}",
                 base_text=self._natural_interruption_fallback(session, decision, clean_text),
             )
-        session.messages.append({"role": "assistant", "text": reply, "state": "completed"})
+        session.messages.append(
+            self._finalize_assistant_reply(session, text=reply, language=session.language, user_text=clean_text)
+        )
         session.tools_used = []
         session.fallback_used = False
         return True
@@ -2234,7 +2370,9 @@ class ToolCallingSessionRuntime:
             # booking can never be created if this unconditionally set it
             # back to True right after.
             session.booking_completed = True
-        session.messages.append({"role": "assistant", "text": reply, "state": "completed"})
+        session.messages.append(
+            self._finalize_assistant_reply(session, text=reply, language=session.language, user_text=clean_text)
+        )
         session.tools_used = []
         session.fallback_used = False
         return True
@@ -3099,7 +3237,9 @@ class ToolCallingSessionRuntime:
             if session.language.startswith("ar")
             else "Hello. Please share your WhatsApp number first so I can check your traveler profile safely, then I will continue with your trip request."
         )
-        session.messages.append(self._assistant_message(text=reply, language=session.language))
+        session.messages.append(
+            self._finalize_assistant_reply(session, text=reply, language=session.language, user_text=clean_text)
+        )
         session.tools_used = []
         session.fallback_used = False
         return True
@@ -3447,7 +3587,9 @@ class ToolCallingSessionRuntime:
                 if session.language.startswith("ar")
                 else "I'm having trouble completing that request right now. Please try again in a moment."
             )
-            session.messages.append({"role": "assistant", "text": error_reply})
+            session.messages.append(
+                self._finalize_assistant_reply(session, text=error_reply, language=session.language, user_text=clean_text)
+            )
             session.fallback_used = True
             return session
 
@@ -3466,7 +3608,9 @@ class ToolCallingSessionRuntime:
             )
             reply = self._safe_response_fallback(session, message_key="model.response.invalid", base_text="")
             response_fallback_used = True
-        session.messages.append(self._assistant_message(text=reply, language=session.language, media=media))
+        session.messages.append(
+            self._finalize_assistant_reply(session, text=reply, language=session.language, media=media, user_text=clean_text)
+        )
         session.tools_used = [
             str(event.get("name") or "").strip()
             for event in result.get("tool_requests", [])
@@ -3480,9 +3624,9 @@ class ToolCallingSessionRuntime:
         if workflow_decision.required_step == "search_matching_trips":
             # The model may describe CRM results, but it must not own their
             # numbering or invent a result while the backend is still searching.
-            session.messages[-1] = {
-                "role": "assistant",
-                "text": self._agent_reply(
+            session.messages[-1] = self._finalize_assistant_reply(
+                session,
+                text=self._agent_reply(
                     session,
                     message_key="trip.search.results",
                     base_text=self._canonical_trip_search_reply(session),
@@ -3490,8 +3634,9 @@ class ToolCallingSessionRuntime:
                     required_action="Present exactly these verified trip search results without adding trip facts.",
                     session_context=session_context,
                 ),
-                "state": "completed",
-            }
+                language=session.language,
+                user_text=clean_text,
+            )
         for event in [*preloaded_tool_results, *list(result.get("tool_requests", []))]:
             if not isinstance(event, dict):
                 continue
@@ -4404,6 +4549,72 @@ class ToolCallingSessionRuntime:
         }
 
     @staticmethod
+    def _is_exploratory_question(text: str) -> bool:
+        """A field-relevant word inside a hypothetical/question is not a
+        decision, for ANY free-text field the hint pipeline extracts (trip
+        type, room type, room group, flight option, ...).
+
+        "لو دولية؟" ("what if international?") mid-conversation must not
+        mutate session.trip_type the same way a direct answer to "local or
+        international?" does -- that silent mutation is the root cause of a
+        real production incident (a customer's exploratory question
+        permanently corrupted their session's trip type, and every
+        downstream field extracted from free text carries the same risk).
+        Default to read-only: mutation requires a positive, unambiguous
+        decision signal, not just an incidental keyword match.
+        """
+        stripped = str(text or "").strip()
+        if not stripped:
+            return False
+        lowered = stripped.lower()
+        # A bare "?"/"؟" alone is NOT a reliable hypothetical signal -- Arabic
+        # (and English) routinely phrases plain, decisive requests as
+        # grammatical questions, e.g. "ايه الرحلات الداخلية؟" ("what are the
+        # local trips?") is a direct request to see local trips, equivalent
+        # to answering "local" outright. Only an actual conditional/
+        # hypothetical marker counts.
+        # "لو سمحت"/"لو تسمح" ("please") are extremely common Egyptian
+        # Arabic politeness idioms that happen to contain "لو" without being
+        # remotely hypothetical -- e.g. "لو سمحت عايز رحلة دولية" is a plain,
+        # decisive request.
+        if any(phrase in lowered for phrase in ("لو سمحت", "لو تسمح", "لو سمحتي")):
+            return False
+        hypothetical_markers = (
+            "لو ",
+            "لو كان",
+            "لو كانت",
+            "لو في",
+            "لو فيه",
+            "ايه لو",
+            "إيه لو",
+            "ماذا لو",
+            "what if",
+        )
+        return any(marker in lowered for marker in hypothetical_markers)
+
+    @staticmethod
+    def _is_explicit_trip_type_restart_signal(text: str) -> bool:
+        """An unambiguous "I changed my mind, start over" signal.
+
+        Required before a trip-type change is allowed to override an
+        already-selected trip (see _merge_hints) -- an incidental keyword
+        match should never silently discard a real selection.
+        """
+        lowered = str(text or "").strip().lower()
+        if not lowered:
+            return False
+        restart_markers = (
+            "instead",
+            "actually",
+            "بدل",
+            "خليها",
+            "غير رأيي",
+            "عايز اغير",
+            "عايزة اغير",
+        )
+        return any(marker in lowered for marker in restart_markers)
+
+    @staticmethod
     def _extract_hints(text: str, *, stage: str = "") -> dict[str, Any]:
         digit_normalized = str(text or "").translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
         lowered = digit_normalized.strip().lower()
@@ -4473,14 +4684,20 @@ class ToolCallingSessionRuntime:
             flight_option = "Without Flight"
         elif flight_context and ("with flight" in lowered or "with flights" in lowered or "مع طيران" in lowered):
             flight_option = "With Flight"
+        candidate_trip_type = trip_type or ("local"
+        if "local" in lowered or "داخلي" in lowered or "محلي" in lowered
+        else (
+            "international"
+            if "international" in lowered or "دولي" in lowered or "عمرة" in lowered or "turkey" in lowered or "تركيا" in lowered
+            else ""
+        ))
+        message_is_exploratory = ToolCallingSessionRuntime._is_exploratory_question(text)
         return {
-            "candidate_trip_type": trip_type or ("local"
-            if "local" in lowered or "داخلي" in lowered
-            else (
-                "international"
-                if "international" in lowered or "دولي" in lowered or "عمرة" in lowered or "turkey" in lowered or "تركيا" in lowered
-                else ""
-            )),
+            "candidate_trip_type": candidate_trip_type,
+            "message_is_exploratory": message_is_exploratory,
+            "trip_type_hint_is_restart_signal": bool(
+                candidate_trip_type and ToolCallingSessionRuntime._is_explicit_trip_type_restart_signal(text)
+            ),
             "candidate_group_size": group_size,
             "candidate_raw_phone": raw_phone,
             "candidate_destination": "Turkey" if "turkey" in lowered or "تركيا" in lowered else "",
@@ -4507,15 +4724,44 @@ class ToolCallingSessionRuntime:
 
     def _merge_hints(self, session: SessionState, hints: dict[str, Any]) -> None:
         trip_type = str(hints.get("candidate_trip_type") or "").strip()
-        if session.selected_trip_id and trip_type and trip_type != self._effective_trip_type(session):
-            agent_logger.warning(
-                "Ignored conflicting trip-type hint session=%s selected_trip=%s current_type=%s candidate_type=%s",
+        is_exploratory = bool(hints.get("message_is_exploratory"))
+        is_restart_signal = bool(hints.get("trip_type_hint_is_restart_signal"))
+        if trip_type and is_exploratory and not is_restart_signal:
+            # A hypothetical/exploratory mention ("what if international?")
+            # is not a decision -- see _is_exploratory_question. Never touch
+            # session.trip_type for a question; the informational answer
+            # (if any) is handled elsewhere without mutating state.
+            agent_logger.info(
+                "Ignored exploratory trip-type mention session=%s candidate_type=%s",
                 session.id,
-                session.selected_trip_id,
-                self._effective_trip_type(session),
                 trip_type,
             )
             trip_type = ""
+        elif session.selected_trip_id and trip_type:
+            effective_type = self._effective_trip_type(session)
+            if trip_type == effective_type:
+                # The candidate matches the trip actually selected -- this is
+                # a reaffirmation/realignment (e.g. "let's stay local" after
+                # session.trip_type had drifted from an earlier exploratory
+                # mention), not a real change. Correct the stale field
+                # directly without the destructive "trip type changed" reset
+                # below -- nothing about the actual selected trip changed,
+                # so wiping selected_trip_id/booking state here would only
+                # force a pointless re-search.
+                if session.trip_type != trip_type:
+                    session.trip_type = trip_type
+                trip_type = ""
+            elif not is_restart_signal:
+                agent_logger.warning(
+                    "Ignored conflicting trip-type hint session=%s selected_trip=%s current_type=%s candidate_type=%s",
+                    session.id,
+                    session.selected_trip_id,
+                    effective_type,
+                    trip_type,
+                )
+                trip_type = ""
+            # else: an explicit restart signal while a trip is selected --
+            # fall through and let the block below perform the real change.
         if trip_type and session.trip_type != trip_type:
             session.trip_type = trip_type
             session.trip_query = ""
@@ -4555,6 +4801,13 @@ class ToolCallingSessionRuntime:
             self._update_collection_state(session, nationality=True)
 
         flight_option = str(hints.get("candidate_flight_option") or "").strip()
+        if flight_option and is_exploratory:
+            agent_logger.info(
+                "Ignored exploratory flight-option mention session=%s candidate_option=%s",
+                session.id,
+                flight_option,
+            )
+            flight_option = ""
         if flight_option:
             if session.flight_option and session.flight_option != flight_option:
                 self._clear_passport_state(session)
@@ -4569,14 +4822,29 @@ class ToolCallingSessionRuntime:
             self._update_collection_state(session, currency=True)
 
         room_type = str(hints.get("candidate_room_type") or "").strip()
+        room_group = str(hints.get("candidate_room_group") or "").strip()
+        if is_exploratory:
+            if room_type:
+                agent_logger.info(
+                    "Ignored exploratory room-type mention session=%s candidate_type=%s",
+                    session.id,
+                    room_type,
+                )
+                room_type = ""
+            if room_group:
+                agent_logger.info(
+                    "Ignored exploratory room-group mention session=%s candidate_group=%s",
+                    session.id,
+                    room_group,
+                )
+                room_group = ""
         if room_type:
             session.room_type = room_type
             self._update_collection_state(session, room_type=True)
-        room_group = str(hints.get("candidate_room_group") or "").strip()
         if room_group:
             session.room_group = room_group
             self._update_collection_state(session, room_group=True)
-        room_requirements = hints.get("candidate_room_requirements")
+        room_requirements = hints.get("candidate_room_requirements") if not is_exploratory else None
         if isinstance(room_requirements, dict) and room_requirements.get("requirements"):
             session.room_requirements = dict(room_requirements)
             if not session.room_type:
@@ -4719,7 +4987,15 @@ class ToolCallingSessionRuntime:
             return False
 
         if session.stage == "trip_type_required":
-            trip_type = {1: "local", 2: "international"}.get(option_number) or normalize_trip_type(normalized_text)
+            trip_type = {1: "local", 2: "international"}.get(option_number)
+            if not trip_type and not self._is_exploratory_question(text):
+                # normalize_trip_type does substring/word-boundary matching,
+                # not whole-answer matching -- "لو دولية؟" ("what if
+                # international?") would otherwise be captured here as a
+                # real decision on the very first trip-type question, before
+                # _merge_hints's own exploratory gate ever gets a chance to
+                # run (this branch mutates session.trip_type directly).
+                trip_type = normalize_trip_type(normalized_text)
             if trip_type:
                 session.trip_type = trip_type
                 self._update_collection_state(session, trip_type=True)

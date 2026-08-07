@@ -127,6 +127,12 @@ class SessionState:
     _open_lead_trip_type: str = field(default="", repr=False)
     _last_persona_intent: str = field(default="", repr=False)
     _persona_intent_repeat_count: int = field(default=0, repr=False)
+    # Consecutive times an about-to-be-sent reply was blocked for
+    # contradicting a confirmed session fact (see
+    # ToolCallingSessionRuntime._finalize_assistant_reply). Reset on any
+    # reply that passes the check cleanly; 2 in a row auto-escalates to
+    # human handoff instead of continuing to loop on a customer.
+    contradiction_strikes: int = field(default=0, repr=False)
 
 
 # ---------------------------------------------------------------------------

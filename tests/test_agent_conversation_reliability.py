@@ -13,6 +13,7 @@ import pytest
 from services.ai_agent.ai_agent_app.agent.session_flow import SessionState
 from services.ai_agent.ai_agent_app.agent.tool_calling_runtime import ToolCallingSessionRuntime
 from services.ai_agent.ai_agent_app.server import _route_live_message_with_gemini, _sanitize_gemini_reply
+from services.ai_agent.validation.validation_rules import normalize_trip_type
 from tests.test_phase11_demo_features import _make_app_with_db
 
 
@@ -1561,4 +1562,142 @@ def test_booking_confirmation_requested_handles_unclear_reply_without_model_fall
     assert session.stage == "booking_confirmation_required"
     assert not session.booking_confirmed
     assert "yes" in session.messages[-1]["text"].lower()
+
+
+def test_exploratory_trip_type_question_does_not_corrupt_session(runtime: ToolCallingSessionRuntime) -> None:
+    """Regression for a real production incident: "لو دولية" ("what if
+    international?") mid-conversation used to silently set
+    session.trip_type = "international" through the same free-text
+    hint-detection path a direct answer uses. Every downstream reply then
+    validated against the wrong type, eventually reaching a full
+    conversational breakdown. A hypothetical question must never mutate
+    committed session state.
+    """
+    local_trip = dict(TRIPS[1])
+    runtime._read_only_tools = RecordingReadTools(trips=[local_trip])
+    session = _trip_selection_session(runtime, local_trip)
+
+    session = _send(runtime, "لو دولية", session)  # "لو دولية" (what if international)
+
+    assert session.trip_type == "local"
+    reply = session.messages[-1]["text"]
+    assert "دولية" not in reply or "مفيش" not in reply  # no false "no international trips" claim
+    assert not runtime._write_executor.execute.called
+
+
+def test_hypothetical_first_answer_to_trip_type_question_does_not_capture(runtime: ToolCallingSessionRuntime) -> None:
+    """Regression: _apply_required_step_capture's trip_type_required branch
+    calls normalize_trip_type() directly on the whole message, which does
+    substring/word-boundary matching (not whole-answer matching) -- "لو
+    دولية؟" ("what if international?") as the very FIRST reply to "local or
+    international?" used to be captured as a real decision here, before
+    _merge_hints's own exploratory gate ever got a chance to run (this
+    branch mutates session.trip_type directly, earlier in the pipeline).
+    """
+    session = runtime.create_session()
+    session.raw_phone = "01112223333"
+    session.country_code = "20"
+    session.preview = {
+        "traveler": {"traveler_id": "TR100", "full_name": "Mona Ali", "status": "Active"},
+        "workflow": {
+            "identity_verified": True,
+            "verified_traveler": {"traveler_id": "TR100", "full_name": "Mona Ali", "status": "Active"},
+            "verified_status": "Active",
+        },
+    }
+    session.stage = "trip_type_required"
+
+    session = _send(runtime, "لو دولية؟", session)
+
+    assert session.trip_type == ""
+    assert session.stage == "trip_type_required"
+
+
+def test_reaffirmation_after_exploratory_question_recovers_and_booking_completes(runtime: ToolCallingSessionRuntime) -> None:
+    """End-to-end replay of the live transcript: exploratory question, then
+    an explicit reaffirmation phrased with the Arabic definite article
+    ("المحلية" = "ال" + "محلية") -- which used to silently fail to
+    normalize at all (see normalize_trip_type), meaning the reaffirmation
+    itself never reached _merge_hints with a valid trip type and could
+    never correct anything. The full conversation must reach a completed
+    booking with no incorrect trip-type statement anywhere.
+    """
+    local_trip = dict(TRIPS[1])
+    runtime._read_only_tools = RecordingReadTools(trips=[local_trip])
+    runtime._write_executor.execute.return_value = {
+        "executed": True,
+        "result_id": "B-TEST-0001",
+        "booking_result": {"booking_id": "B-TEST-0001", "booking_status": "Draft"},
+        "write_result_contract": {
+            "status": "success",
+            "record_id": "B-TEST-0001",
+            "record_type": "booking",
+            "executed": True,
+        },
+        "session_update": {
+            "booking_result": {"booking_id": "B-TEST-0001", "booking_status": "Draft"},
+            "booking_status": "Draft",
+        },
+    }
+    session = _trip_selection_session(runtime, local_trip)
+
+    session = _send(runtime, "لو دولية", session)
+    assert session.trip_type == "local"
+
+    session = _send(runtime, "خلينا في المحلية شرم", session)  # "خلينا في المحلية شرم"
+    assert session.trip_type == "local"
+
+    for text in ("1", "بنات", "فردي", "1", "بدون طيران", "EGP", "نعم"):
+        session = _send(runtime, text, session)
+
+    reply = session.messages[-1]["text"]
+    assert "B-TEST-0001" in reply
+    assert "دولية" not in reply  # final reply never wrongly mentions international
+    assert session.trip_type == "local"
+    runtime._write_executor.execute.assert_called_once()
+
+
+def test_unanswered_hypothetical_leaves_trip_type_unchanged_without_reaffirmation(runtime: ToolCallingSessionRuntime) -> None:
+    """If the customer asks the hypothetical and then just moves on without
+    ever explicitly reaffirming, session.trip_type must still read the
+    original, correct value -- the gate in _merge_hints alone (not any
+    reaffirmation-specific logic) is what prevents the corruption, since no
+    trip is selected yet in this variant either.
+    """
+    session = _trip_selection_session(runtime)  # trip_type defaults from TRIPS[1] = "local"
+    assert session.trip_type == "local"
+
+    session = _send(runtime, "لو دولية", session)
+
+    assert session.trip_type == "local"
+
+
+def test_normalize_trip_type_handles_arabic_definite_article() -> None:
+    """Regression: the Arabic definite article "ال" attaches directly to
+    the noun with no space ("المحلية" = "ال" + "محلية"), so the plain \\w
+    word-boundary alias search never matched it -- "خلينا في المحلية"
+    ("let's stay with the local one") silently normalized to "" instead of
+    "local", which is exactly why a spoken reaffirmation could never
+    correct a corrupted session.trip_type.
+    """
+    assert normalize_trip_type("محلية") == "local"
+    assert normalize_trip_type("المحلية") == "local"
+    assert normalize_trip_type("خلينا في المحلية") == "local"
+    assert normalize_trip_type("الدولية") == "international"
+
+
+def test_explicit_restart_after_selection_switches_trip_type(runtime: ToolCallingSessionRuntime) -> None:
+    """A genuine restart ("actually, show me international trips instead")
+    after a trip is already selected must still be allowed to change
+    trip_type and clear the stale selection -- the exploratory-question gate
+    must not overcorrect into blocking legitimate restarts.
+    """
+    session = _selected_trip_session(runtime, TRIPS[1])
+    assert session.trip_type == "local"
+    assert session.selected_trip_id == TRIPS[1]["trip_id"]
+
+    session = _send(runtime, "actually, show me international trips instead", session)
+
+    assert session.trip_type == "international"
+    assert session.selected_trip_id == ""
     assert "couldn't prepare" not in session.messages[-1]["text"].lower()
