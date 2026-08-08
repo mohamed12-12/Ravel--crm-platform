@@ -1,3 +1,8 @@
+"""Used by GeminiAgent (gemini_agent.py) to build a one-off prompt asking
+Gemini to rephrase a canned/base reply naturally, in the customer's own
+language and conversation context -- not the main tool-calling prompt
+loop itself, just the rewrite step for otherwise-robotic canned text.
+"""
 from __future__ import annotations
 
 import json

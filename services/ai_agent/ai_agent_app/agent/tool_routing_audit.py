@@ -1,3 +1,13 @@
+"""A stricter, state-machine-shaped alternative to workflow_policy.py's
+allowed-tools gate: maps session context to a CanonicalAgentState, then
+`evaluate_tool_route()` decides whether a requested tool belongs in that
+state. `ToolRouterMode` (OFF/DRY_RUN/ENFORCE, set via
+AGENT_TOOL_ROUTER_MODE) controls whether a bad route is only logged
+(DRY_RUN -- the default safe-demo posture, see
+services/ai_agent/TOOL_INVENTORY_AND_CONTRACTS.md) or actually blocked
+(ENFORCE) -- `should_enforce_tool_route()` is what gemini_agent.py checks
+before deciding to block versus just audit-log a call.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

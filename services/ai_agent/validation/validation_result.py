@@ -1,3 +1,8 @@
+"""The three possible outcomes of ActionValidator.validate_action()
+(action_validator.py) and the shape of its answer -- reasons, missing
+info, and warnings, used to build both the audit trail and the
+customer-facing "what's still needed" message.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

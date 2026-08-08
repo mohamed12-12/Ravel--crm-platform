@@ -1,3 +1,8 @@
+"""AgentPersona: the fixed tone/policy description folded into every
+turn's prompt context (see context_builder.py). Distinct from the
+customer-facing conversation copy in prompts/agent_conversation.md --
+this is metadata handed to the model, not the reply text itself.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass

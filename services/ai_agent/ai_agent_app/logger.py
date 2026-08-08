@@ -1,3 +1,8 @@
+"""Rotating file + console logger setup, shared by every module in this
+service via `agent_logger`/`sheet_logger` (constructed at the bottom of
+this file) -- see setup_logger()'s own comment for why idempotency is
+checked per-logger-name rather than via hasHandlers().
+"""
 import logging
 import logging.handlers
 import os

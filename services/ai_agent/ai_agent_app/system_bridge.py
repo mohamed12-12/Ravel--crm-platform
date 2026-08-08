@@ -1,3 +1,9 @@
+"""The `CRM_ACCESS_MODE=shared_service` half of the dual-backend split
+documented in read_only_tools.py: `get_system_service()` builds
+UnifiedCRMService (services/crm/system_services) directly in-process
+against SQLite, for when the agent and CRM share one process instead of
+talking over HTTP (CRM_ACCESS_MODE=api, crm_api_client.py).
+"""
 from __future__ import annotations
 
 import sys

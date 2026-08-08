@@ -1,3 +1,8 @@
+"""Short/long-term key-value scratch space plus a rolling observation log
+for ProductionAgentCoordinator -- `.snapshot()` (last 20 observations
+only) is what ends up in the prompt context each turn, not the full
+history.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

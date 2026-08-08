@@ -1,3 +1,11 @@
+"""Enforces the runtime contract boundary every tool call must pass
+through: validates a tool call's arguments against its ToolSpec's
+JSON-schema `required`/type fields before execution, and normalizes
+whatever a tool raises or returns into a safe, customer-presentable
+result afterward (SAFE_TOOL_ERROR_MESSAGES) rather than ever surfacing a
+raw exception. See services/ai_agent/TOOL_INVENTORY_AND_CONTRACTS.md's
+"Contract Rules" section for the human-readable version of these rules.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

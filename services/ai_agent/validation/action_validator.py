@@ -1,3 +1,9 @@
+"""The real, enforced pre-write gate: write_tool_executor.py calls
+`validate_action()` before every write action, and a REJECTED/
+NEED_MORE_INFORMATION decision (validation_result.py) actually blocks
+the write from happening -- unlike planner.py's decision elsewhere in
+this codebase, which is informational only.
+"""
 from __future__ import annotations
 
 import json

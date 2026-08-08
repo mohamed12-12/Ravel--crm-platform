@@ -1,3 +1,8 @@
+"""Turns a completed tool call into a short human-readable label + detail
+dict, stored into AgentMemory by ProductionAgentCoordinator.observe()
+after each real tool execution -- purely a summary/audit trail, not
+itself part of any decision.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1,3 +1,9 @@
+"""Legacy/demo `/api/v1/*` routes (stats, CRM preview, a one-shot
+"agent/interact" sales-cycle call) registered in server.py alongside the
+main session/message API. server.py's own before_request hook
+(check_api_auth) requires the same session login auth.py's /login
+establishes for every route in this blueprint.
+"""
 from __future__ import annotations
 from flask import Blueprint, jsonify, request, current_app
 from services.ai_agent.ai_agent_app.sheets.excel_gateway import ExcelSheetGateway

@@ -1,3 +1,10 @@
+"""SHEET_BACKEND=google: subclasses ExcelSheetGateway, adding
+download-before-read/upload-after-write sync of the actual .xlsx file to
+Google Drive around the same file-based logic -- still fundamentally
+openpyxl-on-a-local-file underneath, just with Drive as the durable copy.
+Distinct from google_sheets_api_gateway.py, which talks to the Sheets
+API directly with no local file at all.
+"""
 from __future__ import annotations
 
 import io

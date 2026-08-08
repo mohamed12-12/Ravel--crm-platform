@@ -1,3 +1,8 @@
+"""Rewrites internal-sounding wording ("CRM", "database", "backend") into
+customer-safe phrasing and reformats list-shaped replies into prose --
+style/wording cleanup, not the leak/safety detection response_guard.py
+does.
+"""
 from __future__ import annotations
 
 import re

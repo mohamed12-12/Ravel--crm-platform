@@ -1,3 +1,9 @@
+"""Business-rule constants and normalizers ActionValidator (action_validator.py)
+checks against -- allowed fields, status sets, thresholds -- imported
+directly from unified_service.py's own status constants where applicable
+so the two never define an overlapping status list independently and
+drift apart.
+"""
 from __future__ import annotations
 
 import re

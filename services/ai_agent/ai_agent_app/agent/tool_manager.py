@@ -1,3 +1,8 @@
+"""Thin wrapper around the tool registry (tool_registry.py) for
+ProductionAgentCoordinator: `.describe()` produces the tool list shown in
+the prompt context, `.registry`/`.get()` back the real safety-layer
+validation against actually-allowed tool names.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass

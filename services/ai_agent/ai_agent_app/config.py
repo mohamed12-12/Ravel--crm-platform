@@ -1,3 +1,8 @@
+"""Settings: every environment-driven knob for the AI agent service (mode
+selection, Gemini config, CRM access mode, rate limits, etc.), plus
+production-safety validation for the values that must never be left at
+their permissive/demo defaults once APP_ENV=production.
+"""
 from __future__ import annotations
 
 import os

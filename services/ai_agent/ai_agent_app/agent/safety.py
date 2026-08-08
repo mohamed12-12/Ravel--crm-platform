@@ -1,3 +1,8 @@
+"""Real, enforced validation on whatever tool Gemini actually decided to
+call (unlike planner.py's decision, which is informational only) --
+tool_calling_runtime.py calls `validate_tool_args` before executing any
+model-requested tool call.
+"""
 from __future__ import annotations
 
 from typing import Any

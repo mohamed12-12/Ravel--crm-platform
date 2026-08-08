@@ -1,3 +1,9 @@
+"""build_llm_provider(): returns a configured GeminiProvider only when
+ai_agent_mode is "gemini" or "tool_calling" AND a real API key is set --
+None otherwise, which is how callers (GeminiAgent construction in
+server.py/tool_calling_runtime.py) detect "no LLM available" and fall
+back to deterministic behavior instead.
+"""
 from __future__ import annotations
 
 from typing import Any

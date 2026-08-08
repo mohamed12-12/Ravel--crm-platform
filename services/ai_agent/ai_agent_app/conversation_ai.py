@@ -1,3 +1,12 @@
+"""GeminiConversationAI: the simplest of three similarly-named Gemini
+integrations in this codebase -- a raw HTTP call to Gemini with only one
+job, `.rewrite_message()`, to reword a canned/scripted reply naturally
+without changing its meaning. No tool-calling, no CRM access, no
+decision-making; it's a wording layer on top of SessionFlowManager's
+deterministic scripted flow. Contrast with GeminiAgent (gemini_agent.py,
+the full tool-calling loop) and GeminiProvider (llm/gemini_provider.py,
+the low-level API client GeminiAgent itself uses).
+"""
 from __future__ import annotations
 
 import json

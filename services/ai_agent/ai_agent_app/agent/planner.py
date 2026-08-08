@@ -1,3 +1,11 @@
+"""Computes a keyword-based PlannerDecision each turn, but -- important
+for anyone changing this file expecting it to affect behavior -- its
+`tool_name`/`action` fields are NOT what actually selects which tool
+runs; only `.reason` is used (surfaced as agent_state.subgoal, purely
+informational/logging). The real tool choice is Gemini's own tool-calling
+response in gemini_agent.py. See production_agent.py's docstring for the
+full picture of how this fits into the turn loop.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

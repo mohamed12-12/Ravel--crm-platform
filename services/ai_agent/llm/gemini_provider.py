@@ -1,3 +1,7 @@
+"""Low-level Gemini API HTTP client (raw urllib, no SDK dependency) --
+the thing GeminiAgent (gemini_agent.py) actually calls to talk to the
+model; build_llm_provider() (llm_factory.py) is what constructs one.
+"""
 from __future__ import annotations
 
 import json

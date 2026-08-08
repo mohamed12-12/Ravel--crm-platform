@@ -1,3 +1,11 @@
+"""Last-line-of-defense checks on the model's generated reply before it
+reaches the customer: strips/rejects raw JSON keys, internal tool/state
+names, and tracebacks that should never appear in customer-facing text
+(_RAW_JSON_KEY_RE / _INTERNAL_TERM_RE), and catches a false claim of
+write success via write_response_gating.py. Distinct from
+response_format.py, which handles wording/style cleanup rather than
+leak/safety detection.
+"""
 from __future__ import annotations
 
 import json

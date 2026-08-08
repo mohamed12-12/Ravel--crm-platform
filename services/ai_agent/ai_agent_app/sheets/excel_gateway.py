@@ -1,3 +1,12 @@
+"""The base sheet-backend implementation (SHEET_BACKEND=excel): reads/
+writes a local .xlsx workbook file directly via openpyxl, while several
+operations (booking/handoff/lead writes, trip/preview reads) actually
+delegate to system_bridge.py's UnifiedCRMService rather than touching the
+workbook themselves -- this file is not a pure spreadsheet layer, it's a
+hybrid that also reaches into the real CRM database for anything
+write-related. GoogleDriveWorkbookGateway subclasses this to add Drive
+sync on top of the same file-based logic.
+"""
 from __future__ import annotations
 
 import re

@@ -1,3 +1,8 @@
+"""Hardcoded, non-model answers for "who built you"/"what AI are you"
+questions -- deliberately bypasses Gemini entirely so the disclosed
+identity/provider story can never drift from what's approved here,
+regardless of prompt changes.
+"""
 from __future__ import annotations
 
 import re

@@ -1,3 +1,9 @@
+"""FakeCell/FakeWorkbook/SheetRowAdapter mimic openpyxl's Workbook/Cell
+interface over live Google Sheets data (google_sheets_api_gateway.py) --
+purely a shape-compatibility shim so code written against real openpyxl
+workbooks (excel_gateway.py's helpers) works unmodified against either
+backend.
+"""
 from __future__ import annotations
 from typing import Any
 

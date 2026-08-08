@@ -1,3 +1,9 @@
+"""Assembles persona/memory/state/CRM-facts into the AgentContextBundle
+ProductionAgentCoordinator.think() returns each turn -- its fields end up
+merged into the session context Gemini's prompt is built from (see
+tool_calling_runtime.py's use of turn.context after calling
+self._coordinator.think()).
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass

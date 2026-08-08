@@ -1,3 +1,7 @@
+"""Write-tool ToolSpecs (create_lead, create_booking_draft, etc.) --
+tool_registry.py's build_agent_tool_registry() merges these in alongside
+the read-only tools when include_write_tools=True.
+"""
 from __future__ import annotations
 
 from services.ai_agent.ai_agent_app.agent.tool_registry import ToolSpec

@@ -1,3 +1,8 @@
+"""Single shared-password login for the legacy/demo web UI and api_routes.py
+-- APP_PASSWORD_HASH (preferred) or APP_PASSWORD wins if set; the
+DEBUG-only APP_DEMO_PASSWORD fallback (default "rahma2026") only applies
+when neither is configured, so it never silently activates in production.
+"""
 from functools import wraps
 import hmac
 import os

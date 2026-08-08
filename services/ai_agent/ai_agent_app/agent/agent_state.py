@@ -1,3 +1,8 @@
+"""Per-turn scratch state for ProductionAgentCoordinator (production_agent.py)
+-- goal/subgoal/task tracking and a turn counter, folded into the prompt
+context each turn. Distinct from SessionState (session_flow.py), which is
+the actual durable per-customer conversation state.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

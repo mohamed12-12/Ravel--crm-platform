@@ -1,3 +1,7 @@
+"""Blocks the agent from answering a question about a DIFFERENT
+traveler's data than the one currently verified in this session --
+SENSITIVE_TOOLS lists which tool calls are gated by this check.
+"""
 from __future__ import annotations
 
 import re

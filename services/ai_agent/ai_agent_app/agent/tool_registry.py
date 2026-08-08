@@ -1,3 +1,12 @@
+"""Defines every read-only tool the Gemini-facing agent can call --
+name/description/JSON-schema args/output shape -- and
+`build_agent_tool_registry()` combines these with the write tools from
+write_tool_registry.py into the single registry passed to Gemini's
+tool-calling API. services/ai_agent/TOOL_INVENTORY_AND_CONTRACTS.md has
+the human-readable version of this same inventory, including allowed
+workflow states and failure modes per tool -- re-verify that doc against
+this file (the ground truth) if the two disagree.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

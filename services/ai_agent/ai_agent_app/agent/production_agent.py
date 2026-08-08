@@ -1,3 +1,17 @@
+"""ProductionAgentCoordinator: runs alongside the real Gemini tool-calling
+loop (gemini_agent.py) each turn, but does NOT decide which tool actually
+executes -- that decision is entirely Gemini's own tool-calling response.
+`.think()` assembles context (persona/memory/state) for the Gemini prompt
+and runs AgentPlanner.plan() only for its `.reason` text (surfaced as
+agent_state.subgoal, informational) and logging; `.tool_name`/`.action`
+from that planner decision are computed but never used to pick or force a
+tool. `.observe()` and `.safety` (AgentSafetyLayer), by contrast, ARE
+real: they store what happened after a tool call and validate whatever
+tool Gemini actually requested, respectively. See
+tool_calling_runtime.py's call sites (`self._coordinator.think(...)` /
+`.observe(...)` / `.safety.validate_tool_args(...)`) for exactly how this
+composes with the real decision loop.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass

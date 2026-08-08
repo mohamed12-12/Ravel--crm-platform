@@ -1,3 +1,8 @@
+"""Parses customer-supplied birthdate/expiry-date text in whatever loose
+format it actually arrives in (Arabic-Indic digits, month names, partial
+dates), rather than requiring a strict format the customer would need to
+be told about.
+"""
 from __future__ import annotations
 
 import calendar

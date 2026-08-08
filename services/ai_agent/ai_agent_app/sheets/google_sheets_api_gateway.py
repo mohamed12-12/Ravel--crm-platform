@@ -1,3 +1,13 @@
+"""SHEET_BACKEND=google_sheets: talks to the Google Sheets API directly
+via gspread, no local .xlsx file at all -- a different approach from
+excel_gateway.py/google_drive_gateway.py. Wraps live sheet data in
+FakeWorkbook/SheetRowAdapter (sheets_adapter.py) so it presents the same
+openpyxl-shaped interface those file-based gateways use, letting shared
+downstream code (get_demo_stats_from_wb, build_agent_response_from_wb)
+work against either without knowing which backend is active. CACHE_TTL
+below is an in-memory read cache with write-through mutation tracking,
+not a real-time view of the sheet.
+"""
 from __future__ import annotations
 
 import json
