@@ -249,9 +249,11 @@
                         </div>
                     </td>
                     <td style="text-align: center;">
+                        {% if current_employee_role == 'admin' %}
                         <button onclick="event.stopPropagation(); deleteTravelerFromList(event, '{{ traveler.traveler_id }}')" class="btn btn-ghost btn-sm" style="color:var(--red);border-color:rgba(239,68,68,0.3)">
                             Delete
                         </button>
+                        {% endif %}
                     </td>
                 </tr>
                 {% else %}
@@ -396,10 +398,17 @@
             if (response.ok) {
                 window.location.reload();
             } else {
-                alert('Failed to delete traveler.');
+                let detail = '';
+                try {
+                    const body = await response.json();
+                    detail = body.message || body.error || '';
+                } catch (parseError) {
+                    detail = '';
+                }
+                alert(detail ? `Failed to delete traveler: ${detail}` : `Failed to delete traveler (HTTP ${response.status}).`);
             }
         } catch (error) {
-            alert('An error occurred.');
+            alert('An error occurred while deleting the traveler.');
         }
     }
 </script>

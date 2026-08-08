@@ -158,6 +158,9 @@ def index():
     elif queue == 'documents_missing':
         query = query.filter(TripBooking.passport_status == 'pending')
 
+    if not has_permission('view_all'):
+        query = query.filter(or_(TripBooking.assigned_to_user_id.is_(None), TripBooking.assigned_to_user_id == current_user_id()))
+
     pagination = query.order_by(TripBooking.draft_created_at.desc()).paginate(
         page=page, per_page=per_page, error_out=False)
     bookings = pagination.items

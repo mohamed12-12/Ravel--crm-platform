@@ -28,6 +28,11 @@ ROLE_PERMISSIONS = {
     "sales": {"update_followup"},
 }
 USER_ADMIN_PREFIXES = ("/admin/users",)
+# Only these three admin.* endpoints are exclusive to admin/manager -- unlike
+# admin.dashboard/admin.index (the general landing page every employee is
+# allowed to see) or the internal debug/db-health/sync-issues diagnostics
+# (not customer data, left open to any authenticated employee).
+FULL_ACCESS_ONLY_ADMIN_ENDPOINTS = {"admin.users", "admin.import_data", "admin.duplicates"}
 
 
 def _configured_token() -> str:
@@ -86,6 +91,19 @@ def _requires_admin() -> bool:
 
 def _requires_user_admin() -> bool:
     return request.path.startswith(USER_ADMIN_PREFIXES)
+
+
+def _requires_admin_delete() -> bool:
+    """Permanently deleting a traveler/booking/lead is admin-only.
+
+    Matched generically (HTTP DELETE, or a POST path ending in "/delete")
+    rather than a hardcoded route list, so any future delete-style endpoint
+    is covered automatically instead of silently falling back to the
+    looser CRM_WRITE_ROLES check.
+    """
+    if request.method == "DELETE":
+        return True
+    return request.method == "POST" and request.path.rstrip("/").endswith("/delete")
 
 
 def current_user() -> User | None:
@@ -247,6 +265,17 @@ def crm_request_guard():
     if request.method == "GET" and _browser_auth_required() and not _authenticated():
         flash("Login required", "error")
         return redirect(url_for("auth.login", next=request.url))
+    # Employees / Import-Sync / Duplicates are off-limits to non-full-access
+    # roles even to view -- unlike the rest of CRM_WRITE_ROLES gating below,
+    # which only blocks writes and always lets any authenticated role read
+    # the page. admin.dashboard/admin.index stay open to everyone.
+    if str(request.endpoint or "") in FULL_ACCESS_ONLY_ADMIN_ENDPOINTS and _authenticated() and not can_view_all_records():
+        if not wants_json:
+            # admin.dashboard (the default _browser_redirect target) is
+            # a sibling of the endpoint this check just blocked, not the
+            # endpoint itself, so it's a safe redirect target -- no loop.
+            return _browser_redirect("You do not have permission", "error", status_code=403)
+        return jsonify({"error": "forbidden"}), 403
     if request.method not in WRITE_METHODS and not is_sensitive_read:
         return None
     if not _authenticated():
@@ -263,6 +292,10 @@ def crm_request_guard():
             return _browser_redirect("You do not have permission", "error", status_code=403)
         return jsonify({"error": "forbidden"}), 403
     if _requires_admin() and _role() not in {"admin", "manager"}:
+        if not wants_json:
+            return _browser_redirect("You do not have permission", "error", status_code=403)
+        return jsonify({"error": "forbidden"}), 403
+    if _requires_admin_delete() and _role() != "admin":
         if not wants_json:
             return _browser_redirect("You do not have permission", "error", status_code=403)
         return jsonify({"error": "forbidden"}), 403

@@ -257,6 +257,9 @@ def index():
     elif queue == 'handoff_required':
         query = query.filter(Lead.handoff_required == True)
 
+    if not has_permission('view_all'):
+        query = query.filter(or_(Lead.assigned_to_user_id.is_(None), Lead.assigned_to_user_id == current_user_id()))
+
     pagination = query.order_by(
         db.func.coalesce(Lead.updated_at, Lead.created_at).desc(),
         Lead.created_at.desc(),

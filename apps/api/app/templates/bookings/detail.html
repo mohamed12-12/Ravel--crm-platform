@@ -4,10 +4,12 @@
 
 {% block topbar_actions %}
 <a href="{{ url_for('bookings.index') }}" class="btn btn-ghost btn-sm">â† All Bookings</a>
+{% if current_employee_role == 'admin' %}
 <form action="{{ url_for('bookings.delete', booking_id=booking.booking_id) }}" method="POST" onsubmit="return confirm('Delete this booking permanently?')">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit" class="btn btn-danger btn-sm">Delete Booking</button>
 </form>
+{% endif %}
 {% endblock %}
 
 {% block content %}

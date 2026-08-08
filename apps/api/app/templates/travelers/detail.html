@@ -4,9 +4,11 @@
 
 {% block topbar_actions %}
 <div style="display:flex;gap:0.75rem">
+    {% if current_employee_role == 'admin' %}
     <button onclick="deleteTraveler('{{ traveler.traveler_id }}')" class="btn btn-ghost btn-sm" style="color:var(--red);border-color:rgba(239,68,68,0.3)">
         Delete Traveler
     </button>
+    {% endif %}
     <button onclick="openModal('editModal')" class="btn btn-primary btn-sm">
         Edit Profile
     </button>
@@ -664,10 +666,17 @@ async function deleteTraveler(id) {
         if (response.ok) {
             window.location.href = '/travelers/';
         } else {
-            alert('Failed to delete traveler.');
+            let detail = '';
+            try {
+                const body = await response.json();
+                detail = body.message || body.error || '';
+            } catch (parseError) {
+                detail = '';
+            }
+            alert(detail ? `Failed to delete traveler: ${detail}` : `Failed to delete traveler (HTTP ${response.status}).`);
         }
     } catch (error) {
-        alert('An error occurred.');
+        alert('An error occurred while deleting the traveler.');
     }
 }
 </script>

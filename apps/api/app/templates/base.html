@@ -738,6 +738,7 @@
                 <span class="nav-badge" id="sidebar-handoff-badge" style="display:none">0</span>
             </a>
 
+            {% if current_employee_role in ('admin', 'manager') %}
             <div class="nav-section-label">Admin</div>
             <a href="{{ url_for('admin.users') }}" class="nav-link {% if request.endpoint == 'admin.users' %}active{% endif %}">
                 <span class="nav-icon"></span> Employees
@@ -748,6 +749,7 @@
             <a href="{{ url_for('admin.duplicates') }}" class="nav-link {% if request.endpoint == 'admin.duplicates' %}active{% endif %}">
                 <span class="nav-icon"></span> Duplicates
             </a>
+            {% endif %}
         </div>
 
         <div class="sidebar-footer">Nanovate Workspace v3.0</div>

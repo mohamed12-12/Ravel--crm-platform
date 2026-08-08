@@ -60,7 +60,9 @@ class IdorOwnershipTests(unittest.TestCase):
             agent_a = self.User(username="agent-a", full_name="Agent A", password_hash="x", role="agent", is_active=True)
             agent_b = self.User(username="agent-b", full_name="Agent B", password_hash="x", role="agent", is_active=True)
             admin = self.User(username="admin-x", full_name="Admin X", password_hash="x", role="admin", is_active=True)
-            self.db.session.add_all([agent_a, agent_b, admin])
+            manager = self.User(username="manager-x", full_name="Manager X", password_hash="x", role="manager", is_active=True)
+            sales = self.User(username="sales-x", full_name="Sales X", password_hash="x", role="sales", is_active=True)
+            self.db.session.add_all([agent_a, agent_b, admin, manager, sales])
             self.db.session.commit()
             self.agent_a_id = agent_a.id
             self.agent_a_username = agent_a.username
@@ -68,13 +70,17 @@ class IdorOwnershipTests(unittest.TestCase):
             self.agent_b_username = agent_b.username
             self.admin_id = admin.id
             self.admin_username = admin.username
+            self.manager_id = manager.id
+            self.manager_username = manager.username
+            self.sales_id = sales.id
+            self.sales_username = sales.username
 
             self.db.session.add(self.Traveler(
-                traveler_id="TR-IDOR-1", full_name="Owned By B",
+                traveler_id="TR-IDOR-1", full_name="Owned By B", status="Active",
                 normalized_whatsapp="+201000000001", phone_lookup_key="20:1000000001",
             ))
             self.db.session.add(self.Traveler(
-                traveler_id="TR-IDOR-2", full_name="Unclaimed Traveler",
+                traveler_id="TR-IDOR-2", full_name="Unclaimed Traveler", status="Active",
                 normalized_whatsapp="+201000000002", phone_lookup_key="20:1000000002",
             ))
             self.db.session.add(self.Trip(
@@ -198,6 +204,156 @@ class IdorOwnershipTests(unittest.TestCase):
             "/bookings/B-IDOR-UNASSIGNED",
             headers={"X-CRM-API-Key": "idor-test-token"},
         )
+        self.assertEqual(response.status_code, 200)
+
+    # --- sales behaves the same as agent for ownership (identical ROLE_PERMISSIONS) ---
+
+    def test_sales_role_is_forbidden_from_viewing_booking_assigned_elsewhere(self):
+        self._login(user_id=self.sales_id, username=self.sales_username)
+        response = self.client.get("/bookings/B-IDOR-B")
+        self.assertEqual(response.status_code, 403)
+
+    def test_manager_can_view_any_booking(self):
+        self._login(user_id=self.manager_id, username=self.manager_username)
+        response = self.client.get("/bookings/B-IDOR-B")
+        self.assertEqual(response.status_code, 200)
+
+    # --- list views must apply the same ownership filter as the detail views ---
+
+    def test_agent_list_view_hides_bookings_assigned_to_someone_else(self):
+        self._login(user_id=self.agent_a_id, username=self.agent_a_username)
+        response = self.client.get("/bookings/")
+        self.assertNotIn(b"B-IDOR-B", response.data)
+        self.assertIn(b"B-IDOR-UNASSIGNED", response.data)
+
+    def test_owning_agent_list_view_shows_their_own_booking(self):
+        self._login(user_id=self.agent_b_id, username=self.agent_b_username)
+        response = self.client.get("/bookings/")
+        self.assertIn(b"B-IDOR-B", response.data)
+
+    def test_admin_list_view_shows_every_booking(self):
+        self._login(user_id=self.admin_id, username=self.admin_username)
+        response = self.client.get("/bookings/")
+        self.assertIn(b"B-IDOR-B", response.data)
+        self.assertIn(b"B-IDOR-UNASSIGNED", response.data)
+
+    def test_sales_list_view_hides_leads_assigned_to_someone_else(self):
+        self._login(user_id=self.sales_id, username=self.sales_username)
+        response = self.client.get("/leads/")
+        self.assertNotIn(b"L-IDOR-B", response.data)
+        self.assertIn(b"L-IDOR-UNASSIGNED", response.data)
+
+    def test_admin_list_view_shows_every_lead(self):
+        self._login(user_id=self.admin_id, username=self.admin_username)
+        response = self.client.get("/leads/")
+        self.assertIn(b"L-IDOR-B", response.data)
+        self.assertIn(b"L-IDOR-UNASSIGNED", response.data)
+
+    def test_agent_list_view_hides_traveler_owned_via_lead_by_someone_else(self):
+        self._login(user_id=self.agent_a_id, username=self.agent_a_username)
+        response = self.client.get("/travelers/")
+        self.assertNotIn(b"TR-IDOR-1", response.data)
+        self.assertIn(b"TR-IDOR-2", response.data)
+
+    def test_owning_agent_list_view_shows_traveler_owned_via_their_lead(self):
+        self._login(user_id=self.agent_b_id, username=self.agent_b_username)
+        response = self.client.get("/travelers/")
+        self.assertIn(b"TR-IDOR-1", response.data)
+
+    def test_agent_csv_export_also_hides_traveler_owned_by_someone_else(self):
+        self._login(user_id=self.agent_a_id, username=self.agent_a_username)
+        response = self.client.get("/travelers/export")
+        self.assertNotIn(b"TR-IDOR-1", response.data)
+        self.assertIn(b"TR-IDOR-2", response.data)
+
+    # --- deleting a traveler/booking is admin-only ---
+
+    def _csrf_token(self) -> str:
+        token = "test-csrf-token"
+        with self.client.session_transaction() as sess:
+            sess["csrf_token"] = token
+        return token
+
+    def test_agent_cannot_delete_a_traveler(self):
+        self._login(user_id=self.agent_a_id, username=self.agent_a_username)
+        token = self._csrf_token()
+        response = self.client.delete("/travelers/TR-IDOR-2", headers={"X-CSRF-Token": token})
+        self.assertEqual(response.status_code, 403)
+        with self.app.app_context():
+            self.assertIsNotNone(self.db.session.get(self.Traveler, "TR-IDOR-2"))
+
+    def test_manager_cannot_delete_a_traveler(self):
+        self._login(user_id=self.manager_id, username=self.manager_username)
+        token = self._csrf_token()
+        response = self.client.delete("/travelers/TR-IDOR-2", headers={"X-CSRF-Token": token})
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_can_delete_a_traveler(self):
+        self._login(user_id=self.admin_id, username=self.admin_username)
+        token = self._csrf_token()
+        response = self.client.delete("/travelers/TR-IDOR-2", headers={"X-CSRF-Token": token})
+        self.assertEqual(response.status_code, 200)
+        with self.app.app_context():
+            self.assertIsNone(self.db.session.get(self.Traveler, "TR-IDOR-2"))
+
+    def test_agent_cannot_delete_a_booking(self):
+        self._login(user_id=self.agent_b_id, username=self.agent_b_username)
+        token = self._csrf_token()
+        response = self.client.post(
+            "/bookings/B-IDOR-B/delete",
+            data={"csrf_token": token},
+            headers={"Accept": "application/json"},
+        )
+        self.assertEqual(response.status_code, 403)
+        with self.app.app_context():
+            self.assertIsNotNone(self.db.session.get(self.TripBooking, "B-IDOR-B"))
+
+    def test_admin_can_delete_a_booking(self):
+        self._login(user_id=self.admin_id, username=self.admin_username)
+        token = self._csrf_token()
+        response = self.client.post(
+            "/bookings/B-IDOR-B/delete",
+            data={"csrf_token": token},
+        )
+        # bookings.delete() is a classic HTML form endpoint (flash + redirect
+        # to bookings.index), unlike travelers.delete()'s JSON API response.
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            self.assertIsNone(self.db.session.get(self.TripBooking, "B-IDOR-B"))
+
+    # --- Employees / Import-Sync / Duplicates are admin+manager only; the
+    # general dashboard stays open to every authenticated role ---
+
+    def test_sales_cannot_view_admin_import_page(self):
+        self._login(user_id=self.sales_id, username=self.sales_username)
+        response = self.client.get("/admin/import")
+        self.assertEqual(response.status_code, 403)
+
+    def test_sales_cannot_view_admin_duplicates_page(self):
+        self._login(user_id=self.sales_id, username=self.sales_username)
+        response = self.client.get("/admin/duplicates")
+        self.assertEqual(response.status_code, 403)
+
+    def test_sales_cannot_view_employees_page(self):
+        self._login(user_id=self.sales_id, username=self.sales_username)
+        response = self.client.get("/admin/users")
+        self.assertEqual(response.status_code, 403)
+
+    def test_manager_can_view_admin_import_page(self):
+        self._login(user_id=self.manager_id, username=self.manager_username)
+        response = self.client.get("/admin/import")
+        self.assertEqual(response.status_code, 200)
+
+    def test_manager_cannot_view_employees_page(self):
+        # manage_users is admin-only -- distinct from the broader
+        # admin/manager "view_all" permission checked for import/duplicates.
+        self._login(user_id=self.manager_id, username=self.manager_username)
+        response = self.client.get("/admin/users")
+        self.assertEqual(response.status_code, 403)
+
+    def test_sales_can_still_view_the_general_dashboard(self):
+        self._login(user_id=self.sales_id, username=self.sales_username)
+        response = self.client.get("/admin/dashboard")
         self.assertEqual(response.status_code, 200)
 
 

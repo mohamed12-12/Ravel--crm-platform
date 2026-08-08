@@ -23,7 +23,7 @@ from app.models.traveler_document import TravelerDocument
 from services.crm.system_services import UnifiedCRMService
 from services.crm.system_services.phone_normalization import normalize_phone_input
 from services.data_authority import load_data_authority
-from app.security import can_view_all_records, current_user_id
+from app.security import can_view_all_records, current_user_id, has_permission
 
 travelers_bp = Blueprint('travelers', __name__, url_prefix='/travelers')
 ARCHIVE_LIKE_STATUSES = {"inactive", "archived", "blacklisted", "blocked"}
@@ -259,6 +259,26 @@ def _delete_traveler_document_directory(traveler_id: str) -> None:
     shutil.rmtree(traveler_dir, ignore_errors=True)
 
 
+def _restrict_travelers_to_viewable(query):
+    """Mirror detail()'s visibility rule for the list view too: a traveler
+    with no leads at all, or with any lead that is unclaimed or assigned to
+    the current user, stays visible; a traveler whose every lead belongs to
+    someone else does not. Bookings are not part of this rule, matching the
+    existing detail() check, which only ever consulted lead ownership.
+    """
+    if has_permission('view_all'):
+        return query
+    uid = current_user_id()
+    leads_with_traveler = db.session.query(Lead.traveler_id).filter(Lead.traveler_id.isnot(None))
+    viewable_leads = leads_with_traveler.filter(
+        or_(Lead.assigned_to_user_id.is_(None), Lead.assigned_to_user_id == uid)
+    )
+    return query.filter(or_(
+        ~Traveler.traveler_id.in_(leads_with_traveler),
+        Traveler.traveler_id.in_(viewable_leads),
+    ))
+
+
 @travelers_bp.route('/')
 def index():
     q = request.args.get('q', '').strip()
@@ -268,6 +288,7 @@ def index():
     per_page = 20
 
     query = _apply_traveler_filters(Traveler.query, q, status, nationality)
+    query = _restrict_travelers_to_viewable(query)
 
     pagination = query.order_by(Traveler.created_at.desc()).paginate(page=page, per_page=per_page, error_out=False)
     travelers = pagination.items
@@ -692,6 +713,7 @@ def export():
     nationality = request.args.get('nationality', '')
 
     query = _apply_traveler_filters(Traveler.query, q, status, nationality)
+    query = _restrict_travelers_to_viewable(query)
 
     travelers = query.all()
 
