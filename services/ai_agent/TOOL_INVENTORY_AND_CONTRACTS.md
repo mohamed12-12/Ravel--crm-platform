@@ -1,6 +1,12 @@
 # Tool Inventory and Contracts
 
 Scope: Rahma/Ravel Traveler CRM + AI agent, promoted main commit `d306eb2`.
+Relocated from the repo root during a 2026-08-08 cleanup pass (was one of
+several one-off dated reports there; this one is a genuine reference doc,
+not a status report, so it moved here instead of being deleted). Hand-
+written, not generated -- treat `tool_registry.py` in this directory as
+the ground truth if the two ever disagree, and re-verify this file
+against it before trusting a detail that matters.
 
 Safe demo mode remains:
 

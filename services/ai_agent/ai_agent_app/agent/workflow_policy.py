@@ -1,4 +1,11 @@
-﻿from __future__ import annotations
+﻿"""Computes what stage of the sales workflow a session is actually in
+(identity/trip-search/booking/etc, via WorkflowDecision) and which tools
+are allowed from there -- the gate that keeps the agent from, say,
+creating a booking before a traveler is verified. Read this alongside
+tool_registry.py's per-tool `allowed_states` (services/ai_agent/TOOL_INVENTORY_AND_CONTRACTS.md
+has the human-readable version of that mapping).
+"""
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any

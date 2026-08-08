@@ -1,3 +1,12 @@
+"""Flask app factory for the customer-facing AI agent service (the demo
+chat widget, the Instagram webhook, and the session/message REST API).
+`create_app()` picks the actual conversation driver based on
+`ai_agent_mode`: `ToolCallingSessionRuntime` for `tool_calling`, or
+`SessionFlowManager` (session_flow.py) for everything else -- see that
+branch below for exactly which settings select which. Served in
+production via services/ai_agent/wsgi.py, not by running this file
+directly (see deploy/pm2/ecosystem.config.js).
+"""
 from __future__ import annotations
 
 import os

@@ -1,3 +1,11 @@
+"""The tool-calling AI agent's core runtime: owns every customer session,
+drives the read/write tool-calling loop against Gemini (see gemini_agent.py),
+and enforces the workflow/validation/safety policies that keep the agent
+from claiming success on a write that didn't actually happen or leaking
+internal state to the customer. `ToolCallingSessionRuntime` (below) is
+instantiated once per `create_app()` call in server.py -- i.e. once per
+worker PROCESS, not once globally -- see its docstring for why that matters.
+"""
 from __future__ import annotations
 
 import re
@@ -165,6 +173,18 @@ _NAME_EDGE_PUNCTUATION = ".,;:!?\u060C\u061B\u061F\"'()[]{}*_"
 
 
 class ToolCallingSessionRuntime:
+    """One instance per `create_app()` call -- i.e. one per gunicorn WORKER
+    PROCESS, not a shared singleton. `self._sessions` below is a plain
+    in-process dict with no shared store (Redis, DB, etc.) and no sticky
+    routing exists anywhere in the stack to pin a customer to the same
+    worker across requests. Confirmed live 2026-08-08: this is currently
+    safe only because production runs exactly one process for this
+    service (see deploy/pm2/ecosystem.config.js's rahma-agent entry) --
+    raising its worker count without first moving session state to a
+    shared store would silently reset a customer's conversation any time
+    their next message landed on a different worker than their last one.
+    """
+
     def __init__(self, *, settings: Settings, conversation_ai: GeminiAgent | None = None) -> None:
         self.settings = settings
         self.agent_persona_name = settings.agent_persona_name or "Ravel Agent"
@@ -4735,6 +4755,15 @@ class ToolCallingSessionRuntime:
         }
 
     def _merge_hints(self, session: SessionState, hints: dict[str, Any]) -> None:
+        """Applies the intent extractor's per-field candidates onto session
+        state, one field at a time, each with its own gate. The recurring
+        shape below is: a hypothetical/exploratory mention of a field
+        ("what if international?") must never overwrite real session state
+        -- only an actual decision should -- so every candidate is checked
+        against `message_is_exploratory` (and, for trip type specifically,
+        also against whether it merely reaffirms the already-selected trip
+        versus genuinely changing it) before being allowed through.
+        """
         trip_type = str(hints.get("candidate_trip_type") or "").strip()
         is_exploratory = bool(hints.get("message_is_exploratory"))
         is_restart_signal = bool(hints.get("trip_type_hint_is_restart_signal"))

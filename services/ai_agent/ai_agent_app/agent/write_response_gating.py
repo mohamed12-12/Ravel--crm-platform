@@ -1,3 +1,10 @@
+"""Built on write_result.py's outcome classification: the customer-facing
+half of the write-status boundary. `gate_customer_write_reply` is what
+stops the agent from telling a customer their booking/lead/handoff
+succeeded when the backend actually returned failure -- and
+`response_claims_write_success` catches the model claiming success in
+its own generated wording even when the tool result said otherwise.
+"""
 from __future__ import annotations
 
 import re

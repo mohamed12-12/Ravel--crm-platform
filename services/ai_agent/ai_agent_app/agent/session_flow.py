@@ -1,3 +1,13 @@
+"""`SessionState`: the per-conversation data the whole agent reads and
+mutates (identity, selected trip, booking-in-progress fields, collected
+customer details, etc.) -- this is the shape of what `_sessions` in
+tool_calling_runtime.py stores in memory per customer. `SessionFlowManager`
+is the conversation driver for every `ai_agent_mode` except
+`tool_calling` (plain deterministic scripted flow, and the simpler
+non-tool-calling Gemini conversation mode) -- a separate code path from
+`ToolCallingSessionRuntime` (tool_calling_runtime.py), which server.py's
+`create_app()` picks between based on that setting.
+"""
 from __future__ import annotations
 
 import re

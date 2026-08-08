@@ -1,3 +1,11 @@
+"""Drives one Gemini tool-calling round-trip: sends the conversation +
+available tools to the model, executes whatever tool calls it requests
+(via ReadOnlyCRMTools for reads, GeminiWriteToolExecutor for writes),
+feeds results back, and repeats up to `max_tool_calls` times. Used both
+as the conversation engine inside `ToolCallingSessionRuntime`
+(tool_calling_runtime.py) and, standalone, as the simpler non-tool-calling
+Gemini mode server.py's `create_app()` can select instead.
+"""
 from __future__ import annotations
 
 import json
