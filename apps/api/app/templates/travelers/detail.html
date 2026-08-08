@@ -658,13 +658,18 @@ async function saveChanges() {
 async function deleteTraveler(id) {
     if (!confirm('Are you sure you want to permanently delete this traveler and related CRM records?')) return;
     try {
-        const response = await fetch(`/travelers/${id}`, {
+        // url_for() bakes in whatever path prefix this app is actually
+        // mounted under (e.g. nginx's /rahma-crm/) -- a hardcoded leading
+        // "/travelers/..." string is always resolved against the origin
+        // root by the browser, not the current page's path, and silently
+        // lands on the wrong app/route behind a prefixed reverse proxy.
+        const response = await fetch("{{ url_for('travelers.delete', traveler_id=traveler.traveler_id) }}", {
             method: 'DELETE',
             credentials: 'same-origin',
             headers: { 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN }
         });
         if (response.ok) {
-            window.location.href = '/travelers/';
+            window.location.href = "{{ url_for('travelers.index') }}";
         } else {
             let detail = '';
             try {

@@ -1,12 +1,15 @@
 # app/routes/trips.py
 from pathlib import Path
 
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, send_file, abort
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, send_file, abort, current_app
 from app.models.trip import Trip
 from app.models.booking import TripBooking
+from app.models.booking_event import BookingEventTrail
+from app.models.handoff import HandoffQueue
 from app.models.trip_media import TripMedia
 from app.extensions import db
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 import uuid
 from datetime import datetime, date, timezone
 from services.crm.system_services import UnifiedCRMService
@@ -98,7 +101,15 @@ def index():
     if trip_type:
         query = query.filter(Trip.type == trip_type)
 
-    trips = query.order_by(Trip.start_date.desc()).all()
+    # Open trips first (many have a NULL start_date -- "TBD" -- which would
+    # otherwise sort arbitrarily relative to real dates), then soonest-first
+    # within each status group.
+    status_rank = db.case(
+        (Trip.sales_status == 'Open', 0),
+        (Trip.sales_status == 'Closed', 1),
+        else_=2,
+    )
+    trips = query.order_by(status_rank, Trip.start_date.desc()).all()
 
     statuses = [r[0] for r in db.session.query(Trip.sales_status).distinct().all() if r[0]]
     types = [r[0] for r in db.session.query(Trip.type).distinct().all() if r[0]]
@@ -164,6 +175,39 @@ def detail(trip_id):
         display_remaining=display_remaining,
         back_query=back_query,
     )
+
+
+@trips_bp.route('/<string:trip_id>', methods=['DELETE'])
+def delete(trip_id):
+    trip = db.get_or_404(Trip, trip_id)
+    booking_count = TripBooking.query.filter_by(trip_id=trip_id).count()
+    if booking_count:
+        return jsonify({
+            "status": "error",
+            "message": f"This trip has {booking_count} booking(s) tied to it and cannot be deleted. Cancel or reassign those bookings first.",
+        }), 409
+
+    # Handoff cases are real support tickets, not trip-owned data -- keep
+    # the case, just drop its now-dangling reference to this trip.
+    HandoffQueue.query.filter_by(trip_id=trip_id).update({HandoffQueue.trip_id: None}, synchronize_session=False)
+    # Event-trail rows are disposable audit noise once their subject (this
+    # trip) is gone, same treatment as travelers.delete() gives them.
+    BookingEventTrail.query.filter_by(trip_id=trip_id).delete(synchronize_session=False)
+    # TripMedia rows are handled by Trip.media's own
+    # cascade='all, delete-orphan' relationship (see models/trip.py) --
+    # db.session.delete(trip) below already deletes them.
+    db.session.delete(trip)
+    try:
+        db.session.commit()
+    except IntegrityError as exc:
+        db.session.rollback()
+        current_app.logger.error("Trip delete failed trip_id=%s error=%s", trip_id, exc, exc_info=True)
+        return jsonify({
+            "status": "error",
+            "message": "This trip still has records that could not be removed automatically. Please contact support.",
+        }), 409
+
+    return jsonify({"status": "success", "message": "Trip deleted permanently"})
 
 
 @trips_bp.route('/', methods=['POST'])

@@ -250,7 +250,7 @@
                     </td>
                     <td style="text-align: center;">
                         {% if current_employee_role == 'admin' %}
-                        <button onclick="event.stopPropagation(); deleteTravelerFromList(event, '{{ traveler.traveler_id }}')" class="btn btn-ghost btn-sm" style="color:var(--red);border-color:rgba(239,68,68,0.3)">
+                        <button onclick="event.stopPropagation(); deleteTravelerFromList(event, '{{ url_for('travelers.delete', traveler_id=traveler.traveler_id) }}')" class="btn btn-ghost btn-sm" style="color:var(--red);border-color:rgba(239,68,68,0.3)">
                             Delete
                         </button>
                         {% endif %}
@@ -386,11 +386,16 @@
         }
     });
 
-    async function deleteTravelerFromList(event, id) {
+    async function deleteTravelerFromList(event, deleteUrl) {
         event.preventDefault();
         if (!confirm('Are you sure you want to permanently delete this traveler and related CRM records?')) return;
         try {
-            const response = await fetch(`/travelers/${id}`, {
+            // deleteUrl is server-rendered via url_for() per row (see the
+            // button above) so it already carries whatever path prefix
+            // this app is mounted under -- a hardcoded "/travelers/..."
+            // string here would resolve against the origin root instead
+            // of the current page's actual path behind a prefixed proxy.
+            const response = await fetch(deleteUrl, {
                 method: 'DELETE',
                 credentials: 'same-origin',
                 headers: { 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN }

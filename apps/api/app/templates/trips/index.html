@@ -84,6 +84,9 @@
             <th>Status</th>
             <th>Capacity</th>
             <th>Price</th>
+            {% if current_employee_role == 'admin' %}
+            <th style="text-align:center">Delete</th>
+            {% endif %}
         </tr></thead>
         <tbody>
         {% for trip in trips %}
@@ -169,6 +172,13 @@
                 </div>
             </td>
             <td style="color:var(--text-main);font-weight:600">{{ trip.public_price or '—' }}</td>
+            {% if current_employee_role == 'admin' %}
+            <td style="text-align:center">
+                <button onclick="event.stopPropagation(); deleteTripFromList(event, '{{ url_for('trips.delete', trip_id=trip.trip_id) }}')" class="btn btn-ghost btn-sm" style="color:var(--red);border-color:rgba(239,68,68,0.3)">
+                    Delete
+                </button>
+            </td>
+            {% endif %}
         </tr>
         {% endfor %}
         </tbody>
@@ -307,5 +317,31 @@ function closeModal(id) { document.getElementById(id).classList.remove('open'); 
 document.querySelectorAll('.modal-overlay').forEach(m => {
     m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
 });
+
+async function deleteTripFromList(event, deleteUrl) {
+    event.preventDefault();
+    if (!confirm('Are you sure you want to permanently delete this trip?')) return;
+    try {
+        const response = await fetch(deleteUrl, {
+            method: 'DELETE',
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN }
+        });
+        if (response.ok) {
+            window.location.reload();
+        } else {
+            let detail = '';
+            try {
+                const body = await response.json();
+                detail = body.message || body.error || '';
+            } catch (parseError) {
+                detail = '';
+            }
+            alert(detail ? `Failed to delete trip: ${detail}` : `Failed to delete trip (HTTP ${response.status}).`);
+        }
+    } catch (error) {
+        alert('An error occurred while deleting the trip.');
+    }
+}
 </script>
 {% endblock %}

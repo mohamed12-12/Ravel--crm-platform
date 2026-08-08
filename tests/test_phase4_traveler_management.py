@@ -725,6 +725,52 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         with app.app_context():
             self.assertIsNone(self.db.session.get(self.Traveler, "TR00160"))
 
+    def test_delete_button_urls_respect_a_reverse_proxy_path_prefix(self) -> None:
+        """A hardcoded '/travelers/<id>' string in the delete buttons'
+        fetch() calls resolves against the browser's origin root, not the
+        current page's path -- so once this app is served behind a
+        prefixed reverse proxy (confirmed live: nginx's /rahma-crm/), the
+        request silently lands on the wrong route entirely. The app already
+        runs ProxyFix(x_prefix=1) (apps/api/app/__init__.py), so url_for()
+        picks up X-Forwarded-Prefix automatically -- this confirms both the
+        list and detail delete buttons actually use it end-to-end, not just
+        that the template still renders.
+        """
+        app, db, workbook_path = self._build_app()
+        client = app.test_client()
+
+        with app.app_context():
+            from app.models.user import User
+
+            self.db.session.add(self.Traveler(traveler_id="TR00161", full_name="Prefix Delete Traveler", status="Active"))
+            admin = User(username="admin-prefix-test", full_name="Admin", password_hash="x", role="admin", is_active=True)
+            self.db.session.add(admin)
+            self.db.session.commit()
+            admin_id, admin_username = admin.id, admin.username
+
+        # The delete button is admin-only (see security.py's role-based
+        # access round), so it only renders with a real admin session --
+        # without this, both assertions below would fail for an unrelated
+        # reason (no button rendered at all) and falsely look like the
+        # prefix fix regressed.
+        with client.session_transaction() as sess:
+            sess["logged_in"] = True
+            sess["user_id"] = admin_id
+            sess["username"] = admin_username
+
+        # Assert against the delete affordances specifically (by the exact
+        # string each one emits) -- the page also has other, already-correct
+        # url_for()-based links (e.g. the row's own click-through), so a
+        # bare "does the prefix appear anywhere on the page" check would
+        # pass even with the delete buttons left unfixed.
+        headers = {"X-Forwarded-Prefix": "/rahma-crm"}
+        list_html = client.get("/travelers/", headers=headers).get_data(as_text=True)
+        self.assertIn("deleteTravelerFromList(event, '/rahma-crm/travelers/TR00161')", list_html)
+
+        detail_html = client.get("/travelers/TR00161", headers=headers).get_data(as_text=True)
+        self.assertIn('fetch("/rahma-crm/travelers/TR00161"', detail_html)
+        self.assertIn('window.location.href = "/rahma-crm/travelers/"', detail_html)
+
 
 if __name__ == "__main__":
     unittest.main()
