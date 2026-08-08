@@ -17,3 +17,7 @@ phonenumbers>=8.13.0
 # for gunicorn to serve Flask-SocketIO's real-time handoff notifications.
 gunicorn>=21.2.0
 eventlet>=0.36.0
+# Shared backend for Socket.IO's message_queue and the rate limiter's
+# counters once more than one worker process is running -- see REDIS_URL
+# in app/extensions.py.
+redis>=5.0.0

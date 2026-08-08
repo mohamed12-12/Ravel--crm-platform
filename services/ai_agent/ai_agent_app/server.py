@@ -1820,7 +1820,14 @@ def create_app(
         return verify_webhook(settings.meta_verify_token)
 
     @app.post("/rahma-agent/webhook")
-    @limiter.limit("60 per minute")
+    # This limit is keyed by remote address (Flask-Limiter's default), but
+    # every Instagram customer's message arrives via Meta's own calling
+    # infrastructure, not the customer's own IP -- so this is one ceiling
+    # shared across ALL customers combined, not per-customer. 60/min was
+    # sized for abuse prevention alone; a handful of people chatting at
+    # once can plausibly reach it. Raised, and made adjustable without a
+    # code change since real traffic volume isn't known yet.
+    @limiter.limit(lambda: os.environ.get("WEBHOOK_RATE_LIMIT", "300 per minute"))
     def webhook_received():
         # Wrap logic to use decorator with dynamic settings.
         # TODO(production): durable retry queues for outbound Graph API sends

@@ -149,10 +149,26 @@ To roll back, `git checkout` the previous known-good commit/tag and repeat.
 See `database/postgres/POSTGRES_MIGRATION_ROLLBACK_PLAN.md` if a DB migration
 needs to be reverted too.
 
+## 11. Scaling past 1 worker: Redis-backed shared state
+
+Both `rahma-crm-api`'s Socket.IO handoff notifications and its rate
+limiter default to living in one worker process's memory -- correct only
+with exactly 1 worker (see the comments in `deploy/systemd/rahma-crm-api.service`).
+Set `REDIS_URL` (e.g. `redis://127.0.0.1:6379/0`, a small local Redis on
+the same instance is enough for this workload) in
+`/etc/rahma-traveler/.env` before running more than 1 worker for that
+service; `apps/api/app/extensions.py` picks it up automatically for both.
+`rahma-agent` should stay at 1 worker regardless (see that service file's
+comments on in-memory session state) -- its eventlet worker class already
+lets it serve many concurrent customers within that single worker.
+
+After setting `REDIS_URL` and restarting, verify it actually works, not
+just that it starts: open two separate admin sessions, trigger a handoff
+from one, and confirm the notification appears in the other. This is the
+exact scenario the single-worker constraint existed to protect against.
+
 ## What this does NOT cover yet
 
-- Horizontal scaling / multiple instances (Socket.IO needs a Redis
-  `message_queue` first - see `deploy/systemd/rahma-crm-api.service`).
 - Automated CI/CD deploy (currently manual `git pull` + `systemctl restart`;
   `.github/workflows/ci.yml` only runs tests, it does not deploy).
 - Managed Postgres failover/backups (use RDS with automated backups rather

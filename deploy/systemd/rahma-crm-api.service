@@ -9,14 +9,21 @@ Group=rahma
 WorkingDirectory=/opt/rahma-traveler/apps/api
 EnvironmentFile=/etc/rahma-traveler/.env
 # eventlet worker is required for Flask-SocketIO's real-time handoff
-# notifications (see apps/api/app/extensions.py). Single worker: Socket.IO
-# state is per-process, so scaling past 1 worker needs a Redis message_queue
-# (flask_socketio.SocketIO(message_queue=...)) - not configured yet, see
-# deploy/README.md.
+# notifications (see apps/api/app/extensions.py). CONFIRMED LIVE
+# 2026-08-08: production was actually running plain `gunicorn -w 2` (no
+# eventlet, no REDIS_URL) instead of this file -- meaning a handoff
+# notification fired on the worker process that isn't holding the target
+# admin's websocket connection was being silently dropped, not a future
+# risk but an active bug. Two fixes, both required together: the eventlet
+# worker class (this file), and REDIS_URL set in the environment (see
+# apps/api/app/extensions.py and deploy/README.md) so every worker shares
+# Socket.IO + rate-limiter state instead of each holding its own copy.
+# Bind port is 5002 to match the port actually in use in production
+# (CRM_API_PORT), not the 5000 this file previously documented.
 ExecStart=/opt/rahma-traveler/venv/bin/gunicorn \
     --worker-class eventlet \
-    --workers 1 \
-    --bind 127.0.0.1:5000 \
+    --workers 2 \
+    --bind 127.0.0.1:5002 \
     --timeout 60 \
     --access-logfile /var/log/rahma-traveler/crm-api-access.log \
     --error-logfile /var/log/rahma-traveler/crm-api-error.log \

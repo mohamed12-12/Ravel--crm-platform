@@ -538,6 +538,22 @@ def create_app(config_name=None):
     if hasattr(cfg_class, 'get_sqlalchemy_uri'):
         app.config['SQLALCHEMY_DATABASE_URI'] = cfg_class.get_sqlalchemy_uri()
 
+    # SQLAlchemy's own defaults (pool_size=5, no pre-ping, no recycle) were
+    # never overridden here, and SQLite doesn't support these options at
+    # all (only relevant once DATABASE_URL is real Postgres, e.g.
+    # production). Each gunicorn worker is a separate process with its own
+    # pool, so total possible connections scale with worker count -- size
+    # Postgres's own max_connections with that in mind if the worker count
+    # ever grows materially past what's running today.
+    resolved_uri = str(app.config.get('SQLALCHEMY_DATABASE_URI') or '')
+    if resolved_uri.startswith('postgresql'):
+        app.config.setdefault('SQLALCHEMY_ENGINE_OPTIONS', {
+            'pool_size': int(os.environ.get('DB_POOL_SIZE', '5')),
+            'max_overflow': int(os.environ.get('DB_MAX_OVERFLOW', '10')),
+            'pool_pre_ping': True,
+            'pool_recycle': int(os.environ.get('DB_POOL_RECYCLE_SECONDS', '280')),
+        })
+
     _fail_fast_on_operational_db_in_tests(app)
     config_errors = validate_config(config_name)
     if config_errors:

@@ -6,6 +6,129 @@ newer entries go at the top. Cross-reference commit hashes where available.
 
 ---
 
+## 2026-08-08d -- Load/scalability audit: production process config had silently drifted from every doc, one of the gaps is a live bug
+
+Triggered by ownership asking, directly: what actually happens under real
+concurrent load? Investigated rather than reassured, per this project's
+whole-session practice. Split into what was confirmed by direct
+inspection/live data (below) versus what still needs the user's own EC2
+access to finish (see "Explicitly NOT done").
+
+**Confirmed via a live `pm2 describe` on both processes (the user ran
+this; I have no EC2 access):** the actual production launch commands
+disagreed with `deploy/systemd/*.service` and `deploy/README.md` in every
+dimension checked. Those docs describe a deployment approach that was
+apparently never actually adopted -- production is a hand-run PM2 setup
+with no tracked ecosystem config anywhere in the repo, so it had drifted
+silently with nothing to catch it:
+
+- `rahma-agent`: `venv/bin/python demo_web/app.py` -- the raw Flask
+  **development** server, not gunicorn+`services/ai_agent/wsgi.py` as
+  documented (that file does exist and is correct, it just isn't what's
+  running). One process (PM2 fork mode, no cluster count).
+- `rahma-crm-api`: `gunicorn -w 2 -b 127.0.0.1:5002 run:app` -- **plain
+  sync workers, no `--worker-class eventlet`, no `REDIS_URL`** -- directly
+  contradicting the single-eventlet-worker constraint
+  `deploy/systemd/rahma-crm-api.service`'s own comment already documented.
+  Port (5002 live vs. 5000 documented) was a third, harmless-but-confirms-
+  the-pattern drift.
+
+**This second one is not a future risk -- it is a currently-active bug.**
+Flask-SocketIO's connection state (who is connected to which handoff
+room) lives in one process's memory with no `message_queue` configured.
+With 2 separate OS processes and no shared state, a handoff notification
+fired on the process that isn't holding the target admin's websocket
+connection is silently dropped, right now, roughly half the time.
+
+**Confirmed by direct local reproduction (not assumption) that the dev-
+server finding is real and that the proposed fix actually works:** built
+a minimal throwaway Flask app with one endpoint that sleeps 2s (standing
+in for the 1-6s Gemini calls seen throughout this session's production
+logs), and fired 5 concurrent requests at it two ways --
+  - Plain `app.run()` (`threaded=False`, the real default, matching
+    `demo_web/app.py` exactly): **5 concurrent 2s requests took 10.03s
+    total** -- precisely serial, each request starting exactly when the
+    previous one finished.
+  - The same app served via `eventlet.wsgi.server` (monkey-patched):
+    **5 concurrent 2s requests took 2.05s total** -- genuinely concurrent.
+
+**Also found, not in the original theory:** `ToolCallingSessionRuntime`'s
+session state (`services/ai_agent/ai_agent_app/agent/tool_calling_runtime.py:171`,
+a plain `dict`) and the rate limiter's counters (`storage_uri="memory://"`)
+are both created fresh per `create_app()` call -- i.e. one independent
+copy per worker **process**, with no shared store and no sticky routing
+anywhere in the stack. The in-memory session dict is currently safe only
+because there's exactly one `rahma-agent` process today, by accident, not
+by design -- naively adding more gunicorn workers to fix the blocking
+problem above would have traded "slow under load" for "silently resets a
+customer's conversation mid-way," which is worse. The correct fix is the
+same one already proven for `rahma-crm-api`: an eventlet worker class,
+kept at **1** worker, not more OS processes -- eventlet's cooperative
+concurrency lets that single worker serve many customers concurrently
+during I/O waits without needing a second process at all.
+
+**Also found:** `POST /rahma-agent/webhook`'s rate limit (60/min) is
+keyed by remote address, but every Instagram customer's message arrives
+via Meta's own calling infrastructure, not the customer's own IP -- so
+it's one ceiling shared across every customer combined, not per-customer.
+A handful of people chatting concurrently could plausibly reach it. No
+`SQLALCHEMY_ENGINE_OPTIONS` existed anywhere either -- relying on
+SQLAlchemy's small defaults regardless of worker count.
+
+**Fixed (code-side, all locally tested, none of it deployed):**
+- `apps/api/app/extensions.py`: both the Socket.IO `message_queue` and the
+  rate limiter's `storage_uri` now read `REDIS_URL` when set, falling back
+  to today's exact in-memory behavior when it isn't -- zero risk to local
+  dev/tests/the current single-worker deployment.
+- `deploy/systemd/rahma-ai-agent.service`: corrected from "2-3 plain sync
+  workers" (actively dangerous given the session-state finding above) to
+  `--worker-class eventlet --workers 1`.
+- `deploy/systemd/rahma-crm-api.service`: `--worker-class eventlet`
+  restored, port corrected to 5002, comment updated with the live-bug
+  finding.
+- `deploy/pm2/ecosystem.config.js` (new): the actual PM2 launch commands,
+  now tracked in git for the first time, matching the corrected config
+  above -- fixes the root cause of the doc/reality drift itself, not just
+  this one instance of it.
+- `services/ai_agent/ai_agent_app/server.py`: webhook rate limit raised
+  60/min -> 300/min (default) and made adjustable via `WEBHOOK_RATE_LIMIT`
+  without a code change, given real traffic volume isn't known yet.
+- `apps/api/app/__init__.py`: `SQLALCHEMY_ENGINE_OPTIONS` (pool_size=5,
+  max_overflow=10, pool_pre_ping, pool_recycle=280s) applied when
+  `DATABASE_URL` is Postgres, adjustable via `DB_POOL_SIZE`/
+  `DB_MAX_OVERFLOW`/`DB_POOL_RECYCLE_SECONDS`; left unset for SQLite,
+  which doesn't support these options at all.
+- `scripts/concurrent_load_test.py` (new): fires N simulated concurrent
+  customers (configurable) at a real running instance, each sending a few
+  paced messages, and checks for dropped/errored requests and session
+  cross-contamination -- the actual test for "will it fall over," not a
+  configuration review alone.
+
+**What is explicitly NOT done, honestly (no EC2/PM2/Redis-server access
+in this environment):**
+- None of this is deployed. The corrected PM2 commands are written down
+  in `deploy/pm2/ecosystem.config.js` but nobody has run
+  `pm2 delete rahma-agent rahma-crm-api && pm2 start deploy/pm2/ecosystem.config.js`
+  against the real box.
+- `REDIS_URL` requires a real Redis instance provisioned on the EC2 box
+  (or reachable from it) -- not done. The redis-backed wiring was only
+  verified structurally (the right manager class gets constructed) against
+  an address with nothing listening, since Flask-Limiter/Flask-SocketIO
+  both connect lazily -- never verified against a real Redis server.
+- The two-admin-session live handoff notification test (open two admin
+  sessions, trigger a handoff from one, confirm it appears in the other)
+  has not been run against the real deployed app.
+- `scripts/concurrent_load_test.py` has not been run against the real
+  deployed app, only sanity-checked as a script (gunicorn itself cannot
+  run in this Windows dev environment at all -- no `fcntl` module -- so
+  even the corrected worker config could only be proven via a standalone
+  eventlet reproduction, not the actual `gunicorn` command that will run
+  in production).
+- Whether `redis-server` or an equivalent is already available on the EC2
+  instance, or needs installing, is unknown.
+
+---
+
 ## 2026-08-08c -- Issue 1, closed: `_next_prefixed_id()`'s lexicographic-sort ID collision
 
 **This closes the Issue-1 investigation arc.** Two prior hypotheses in this

@@ -9,10 +9,27 @@ User=rahma
 Group=rahma
 WorkingDirectory=/opt/rahma-traveler
 EnvironmentFile=/etc/rahma-traveler/.env
-# No SocketIO here - plain sync workers are fine. Start with 2-3 workers;
-# tune based on observed CPU/memory on the instance size you pick.
+# CORRECTED 2026-08-08: this used to recommend 2-3 plain sync workers,
+# which is wrong and was never actually deployed this way (production was
+# found running the raw Flask dev server via `python demo_web/app.py`
+# instead of this file at all). ToolCallingSessionRuntime's session state
+# (services/ai_agent/ai_agent_app/agent/tool_calling_runtime.py) lives in
+# one plain in-process dict per app instance -- i.e. per worker process,
+# with no shared store and no sticky routing anywhere in the stack. Adding
+# more OS-level worker processes would silently fragment customer sessions
+# across them (a customer's 2nd message could land on a worker with no
+# memory of their 1st). Use the same fix already proven for
+# rahma-crm-api's Socket.IO state instead: an eventlet worker class, kept
+# at 1 worker. Eventlet's cooperative concurrency lets that single worker
+# serve many customers' requests concurrently during I/O waits (including
+# the 1-6s Gemini API call seen in production logs) without blocking
+# them behind each other, while the session dict stays single-process
+# consistent. Do not raise --workers above 1 here until session state
+# moves to a shared store (e.g. Redis, matching REDIS_URL in
+# apps/api/app/extensions.py) -- see deploy/README.md.
 ExecStart=/opt/rahma-traveler/venv/bin/gunicorn \
-    --workers 3 \
+    --worker-class eventlet \
+    --workers 1 \
     --bind 127.0.0.1:3001 \
     --timeout 60 \
     --access-logfile /var/log/rahma-traveler/ai-agent-access.log \

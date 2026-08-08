@@ -38,6 +38,11 @@ gunicorn>=21.2.0
 # Required so gunicorn can serve the CRM/API service's Flask-SocketIO
 # real-time handoff notifications correctly (see deploy/README.md).
 eventlet>=0.36.0
+# Shared backend for Socket.IO's message_queue and the rate limiter's
+# counters once more than one worker process is running -- see REDIS_URL
+# in apps/api/app/extensions.py. Installed unconditionally so the feature
+# is available the moment REDIS_URL is set, with no separate deploy step.
+redis>=5.0.0
 
 # --- Test tooling (installed in CI; harmless in production installs) ---
 pytest>=8.0.0

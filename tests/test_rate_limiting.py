@@ -86,13 +86,32 @@ class AgentApiRateLimitTests(unittest.TestCase):
         self.assertEqual(statuses[20], 429)
 
     def test_webhook_is_rate_limited(self) -> None:
+        """Default raised from 60/min to 300/min: this limit is keyed by
+        remote address, but every Instagram customer's message arrives via
+        Meta's own calling infrastructure, not the customer's own IP -- so
+        it's one ceiling shared across every customer combined, and 60/min
+        could plausibly throttle a handful of people chatting at once.
+        """
         from services.ai_agent.ai_agent_app.server import create_app
 
         app = create_app()
         client = app.test_client()
-        statuses = [client.post("/rahma-agent/webhook", json={}).status_code for _ in range(61)]
-        self.assertTrue(all(code != 429 for code in statuses[:60]))
-        self.assertEqual(statuses[60], 429)
+        statuses = [client.post("/rahma-agent/webhook", json={}).status_code for _ in range(301)]
+        self.assertTrue(all(code != 429 for code in statuses[:300]))
+        self.assertEqual(statuses[300], 429)
+
+    def test_webhook_rate_limit_is_adjustable_via_env_var(self) -> None:
+        from services.ai_agent.ai_agent_app.server import create_app
+
+        os.environ["WEBHOOK_RATE_LIMIT"] = "5 per minute"
+        try:
+            app = create_app()
+            client = app.test_client()
+            statuses = [client.post("/rahma-agent/webhook", json={}).status_code for _ in range(6)]
+        finally:
+            os.environ.pop("WEBHOOK_RATE_LIMIT", None)
+        self.assertTrue(all(code != 429 for code in statuses[:5]))
+        self.assertEqual(statuses[5], 429)
 
 
 if __name__ == "__main__":
