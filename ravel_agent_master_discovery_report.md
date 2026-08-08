@@ -6,6 +6,89 @@ newer entries go at the top. Cross-reference commit hashes where available.
 
 ---
 
+## 2026-08-08f -- Part A closed for real: live EC2 rollout done by ownership, three findings confirmed live and pulled back into the repo
+
+Ownership ran the 2026-08-08e runbook against the actual EC2 box. **This
+is the first entry in this whole load/scalability arc backed by a real
+deployment, not code reading or a local proxy** -- recorded here exactly
+as reported, then reconciled into the tracked files below.
+
+**Confirmed live, both processes:** logs show `Using worker: eventlet`
+for both `rahma-agent` and `rahma-crm-api`; `redis-cli CLIENT LIST` shows
+an active connection from `rahma-crm-api`; `scripts/concurrent_load_test.py`
+measured a 5.7x speedup (10.7s serial baseline vs. 1.87s concurrent) --
+the same order of magnitude as 2026-08-08d's standalone local proof
+(10.03s vs. 2.05s), now demonstrated through the real `gunicorn
+--worker-class eventlet` process instead of a substitute script.
+
+**Three real bugs found only by actually deploying, pulled back into git
+here:**
+
+1. **gunicorn 26.0.0 removed the eventlet worker entry point entirely** --
+   `--worker-class eventlet` failed to load. 2026-08-08e's source reading
+   confirmed *how* `EventletWorker` works in the version installed
+   locally at the time (`gunicorn/workers/geventlet.py` existed there);
+   it did not check whether that module still ships in the newest release,
+   which is exactly the gap that bit production. Fixed by pinning
+   `gunicorn==21.2.0` in both `requirements.txt` and
+   `apps/api/requirements.txt` (was `>=21.2.0` in both), with a comment
+   explaining why this one must not float to latest.
+2. **`deploy/pm2/ecosystem.config.js` bound `rahma-agent` to port 3001,
+   but nginx's real `/rahma-agent/` location proxies to 5003** --
+   confirmed against the live nginx config. Fixed in the ecosystem file.
+   While correcting this, also found (by re-checking every file that
+   referenced `rahma-agent`'s production port, not just the one that was
+   reported) that `deploy/systemd/rahma-ai-agent.service` and
+   `deploy/nginx/rahma-traveler.conf` both still said 3001 too --
+   corrected to 5003 in both for consistency, since a stale copy of
+   either would reproduce this same class of bug the next time someone
+   deployed from them. `deploy/nginx/rahma-traveler.conf`'s
+   `rahma_crm_api` upstream was *also* still 5000, a full day after
+   2026-08-08d already confirmed live that port is 5002 -- that
+   correction had been applied to the systemd/PM2 files but this nginx
+   example file was missed; fixed now too. `deploy/README.md`'s security-
+   group note ("do not open 5000 or 3001 publicly") and this session's own
+   just-written section 11.7 load-test command (`--base-url
+   http://127.0.0.1:3001`) were both still wrong for the same reason --
+   corrected to 5002/5003.
+3. **`services/ai_agent/wsgi.py` never had `ProxyFix`.** Switching
+   `rahma-agent` from the raw `python demo_web/app.py` dev server to
+   gunicorn+`services/ai_agent/wsgi.py` (2026-08-08d's fix) moved
+   production onto a code path that skipped it: `demo_web/app.py`'s
+   `__main__` block applies `ProxyFix(x_for=1, x_proto=1, x_host=1,
+   x_prefix=1)` for local runs, but `wsgi.py` is a separate, minimal
+   production entrypoint that never had the equivalent. Confirmed live:
+   `url_for('static', ...)` had no way to know this app is mounted at
+   nginx's `/rahma-agent/` prefix, so the chat widget served with every
+   CSS/JS request 404ing -- an unstyled page, not a crash, so it would
+   have been easy to miss without specifically checking. Fixed by adding
+   the identical `ProxyFix` call to `wsgi.py`. New tests in
+   `tests/test_ai_agent_wsgi_proxy_fix.py` cover both directions (prefix
+   present -> asset URLs prefixed; no proxy header -> unprefixed, so
+   direct/local access is provably unaffected); both verified to fail for
+   the right reason before the fix via revert-then-restore.
+
+**Lesson for this arc specifically:** 2026-08-08e's "verified by reading
+the source" pass was real and caught a genuine gap (psycopg2), but it
+verified the mechanism using whatever gunicorn/eventlet versions happened
+to be installed locally at the time -- it could not and did not check
+"is this still true of the exact version that will actually get
+installed on the box," which is a live-environment fact, not a
+code-reading one. Both kinds of verification were necessary; neither
+substitutes for the other, which is exactly why this arc kept both
+labels ("confirmed by code reading" vs. "confirmed live") distinct
+throughout rather than treating the first as sufficient.
+
+**What's left, honestly:** ownership still needs to do the standard
+pull+restart on the box so the now-corrected repo (gunicorn pin, port,
+ProxyFix) matches what's actually running there (the live box currently
+has these three fixes applied by hand, ahead of git, until that
+pull+restart happens). Nothing else from 2026-08-08d/e's "explicitly NOT
+done" list is newly closed by this entry beyond what's stated above as
+confirmed live.
+
+---
+
 ## 2026-08-08e -- Closing out Part A: eventlet-on-Linux verified by source reading (not guessed), one real gap found and fixed (psycopg2 + eventlet), deploy docs corrected for the real OS/process manager
 
 2026-08-08d's local proof used a standalone `eventlet.wsgi.server`, not

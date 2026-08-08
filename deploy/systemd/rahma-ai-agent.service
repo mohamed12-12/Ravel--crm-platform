@@ -26,11 +26,13 @@ EnvironmentFile=/etc/rahma-traveler/.env
 # them behind each other, while the session dict stays single-process
 # consistent. Do not raise --workers above 1 here until session state
 # moves to a shared store (e.g. Redis, matching REDIS_URL in
-# apps/api/app/extensions.py) -- see deploy/README.md.
+# apps/api/app/extensions.py) -- see deploy/README.md. Bind port corrected
+# to 5003 (2026-08-08) to match nginx's real /rahma-agent/ upstream; this
+# file previously said 3001, which nginx was never actually proxying to.
 ExecStart=/opt/rahma-traveler/venv/bin/gunicorn \
     --worker-class eventlet \
     --workers 1 \
-    --bind 127.0.0.1:3001 \
+    --bind 127.0.0.1:5003 \
     --timeout 60 \
     --access-logfile /var/log/rahma-traveler/ai-agent-access.log \
     --error-logfile /var/log/rahma-traveler/ai-agent-error.log \

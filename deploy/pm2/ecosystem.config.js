@@ -34,7 +34,10 @@ module.exports = {
       // concurrent customers' requests during I/O waits (including the
       // 1-6s Gemini API call) without blocking them behind each other,
       // while keeping the in-memory session dict single-process-consistent.
-      args: "--worker-class eventlet --workers 1 --bind 127.0.0.1:3001 --timeout 60 services.ai_agent.wsgi:app",
+      // Bind port is 5003 to match nginx's real /rahma-agent/ upstream
+      // (confirmed live 2026-08-08 -- this file previously said 3001,
+      // which nginx was never actually proxying to).
+      args: "--worker-class eventlet --workers 1 --bind 127.0.0.1:5003 --timeout 60 services.ai_agent.wsgi:app",
       interpreter: "none",
       exec_mode: "fork",
     },

@@ -15,7 +15,9 @@ python-dotenv>=1.0.0
 phonenumbers>=8.13.0
 # Production WSGI serving (see ../../deploy/README.md) - eventlet is required
 # for gunicorn to serve Flask-SocketIO's real-time handoff notifications.
-gunicorn>=21.2.0
+# Pinned, not >=: gunicorn 26.0.0 removed the eventlet worker entry point
+# entirely (confirmed live 2026-08-08) -- do not let this float to latest.
+gunicorn==21.2.0
 eventlet>=0.36.0
 # Shared backend for Socket.IO's message_queue and the rate limiter's
 # counters once more than one worker process is running -- see REDIS_URL

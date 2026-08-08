@@ -34,7 +34,11 @@ python-dotenv>=1.0.0
 phonenumbers>=8.13.0
 
 # --- Production WSGI server (see deploy/ for gunicorn/systemd config) ---
-gunicorn>=21.2.0
+# Pinned, not >=: confirmed live (2026-08-08) that gunicorn 26.0.0 removed
+# the eventlet worker entry point (gunicorn/workers/geventlet.py) entirely,
+# so --worker-class eventlet fails to load on anything newer than this.
+# Do not let this float to latest without re-confirming eventlet support.
+gunicorn==21.2.0
 # Required so gunicorn can serve the CRM/API service's Flask-SocketIO
 # real-time handoff notifications correctly (see deploy/README.md).
 eventlet>=0.36.0

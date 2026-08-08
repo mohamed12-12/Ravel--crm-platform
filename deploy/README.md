@@ -18,7 +18,7 @@ first deploy.
 
 - Ubuntu 22.04 LTS (or similar), t3.small or larger.
 - Security group: allow 22 (SSH, restricted to your IP), 80 and 443 (public).
-  Do **not** open 5000 or 3001 publicly - those are proxied through nginx.
+  Do **not** open 5002 or 5003 publicly - those are proxied through nginx.
 - Attach an EBS volume sized for uploads/DB growth if not using RDS/EFS.
 - Point a domain's A record at the instance's Elastic IP (needed for Meta's
   webhook HTTPS requirement and for certbot).
@@ -280,7 +280,7 @@ still be wrong if one of these fails:
 2. **Concurrent load, from on the box** (bypasses nginx/DNS, tests the
    gunicorn+eventlet layer directly):
    ```bash
-   python scripts/concurrent_load_test.py --base-url http://127.0.0.1:3001 \
+   python scripts/concurrent_load_test.py --base-url http://127.0.0.1:5003 \
        --sessions 15 --messages 3
    ```
    Expect `RESULT: PASS` -- zero dropped requests, zero cross-contaminated
