@@ -22,6 +22,31 @@ MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "database" / "migrations"
 OPERATIONAL_DB_PATH = (Path(__file__).resolve().parents[1] / "instance" / "rahma_traveler_dev.db").resolve()
 
 
+def _green_psycopg2_if_running_under_eventlet() -> None:
+    """Make psycopg2's blocking libpq calls cooperate with eventlet's hub.
+
+    gunicorn's eventlet worker (gunicorn/workers/geventlet.py: patch())
+    calls eventlet.monkey_patch() before this app is even created, which
+    covers the stdlib socket module -- but psycopg2 talks to libpq through
+    its own C extension, bypassing Python's socket module entirely, so the
+    monkey-patch alone does NOT make Postgres queries cooperative. Left
+    unpatched, one greenthread's Postgres query blocks the *entire*
+    eventlet worker for its duration -- every other concurrent request
+    that worker is holding (including Socket.IO connections) stalls too,
+    silently defeating the reason eventlet was chosen for this service.
+    Only apply when eventlet has actually monkey-patched this process
+    (i.e. really running under `gunicorn --worker-class eventlet`) so
+    local dev, tests, and the plain Flask dev server are untouched.
+    """
+    import eventlet.patcher
+
+    if not eventlet.patcher.is_monkey_patched("socket"):
+        return
+    from eventlet.support.psycopg2_patcher import make_psycopg_green
+
+    make_psycopg_green()
+
+
 def _resolve_sqlite_path(uri: str) -> Path | None:
     if not uri.startswith("sqlite"):
         return None
@@ -553,6 +578,7 @@ def create_app(config_name=None):
             'pool_pre_ping': True,
             'pool_recycle': int(os.environ.get('DB_POOL_RECYCLE_SECONDS', '280')),
         })
+        _green_psycopg2_if_running_under_eventlet()
 
     _fail_fast_on_operational_db_in_tests(app)
     config_errors = validate_config(config_name)

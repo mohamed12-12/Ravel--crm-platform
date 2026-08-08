@@ -62,3 +62,45 @@ def test_sqlite_uri_gets_no_engine_options(monkeypatch):
     app = create_app("development")
     assert not app.config.get("SQLALCHEMY_ENGINE_OPTIONS")
     _reset_app_modules()
+
+
+def test_postgres_uri_does_not_green_psycopg2_outside_eventlet(monkeypatch):
+    """Under pytest (and the plain Flask dev server) eventlet never
+    monkey-patches the process, so psycopg2's wait callback must stay
+    untouched -- confirms the eventlet-only guard is actually gating this,
+    not applying it unconditionally whenever the URI is Postgres.
+    """
+    from psycopg2 import extensions
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@127.0.0.1:59999/nonexistent")
+    _reset_app_modules()
+    from app import create_app
+
+    create_app("development")
+    assert extensions.get_wait_callback() is None
+    _reset_app_modules()
+
+
+def test_postgres_uri_greens_psycopg2_when_running_under_eventlet(monkeypatch):
+    """gunicorn's eventlet worker monkey-patches socket/select/etc before
+    this app is created, but psycopg2 talks to libpq through its own C
+    extension and bypasses that patch entirely -- left ungreened, one
+    worker's Postgres query would block every other concurrent request
+    that same eventlet worker is holding. Simulate the monkey-patched
+    condition without actually calling eventlet.monkey_patch() globally
+    (which would leak into every other test in this process).
+    """
+    import eventlet.patcher
+    from psycopg2 import extensions
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@127.0.0.1:59999/nonexistent")
+    monkeypatch.setattr(eventlet.patcher, "is_monkey_patched", lambda module: module == "socket")
+    _reset_app_modules()
+    from app import create_app
+
+    try:
+        create_app("development")
+        assert extensions.get_wait_callback() is not None
+    finally:
+        extensions.set_wait_callback(None)
+        _reset_app_modules()

@@ -6,6 +6,109 @@ newer entries go at the top. Cross-reference commit hashes where available.
 
 ---
 
+## 2026-08-08e -- Closing out Part A: eventlet-on-Linux verified by source reading (not guessed), one real gap found and fixed (psycopg2 + eventlet), deploy docs corrected for the real OS/process manager
+
+2026-08-08d's local proof used a standalone `eventlet.wsgi.server`, not
+actual `gunicorn --worker-class eventlet` (gunicorn cannot run on Windows
+at all -- no `fcntl` module -- so the real command was never runnable
+here). Rather than assert "it'll be the same on Linux," read the
+mechanism directly from the actually-installed packages:
+
+**Confirmed by reading the installed gunicorn source
+(`gunicorn/workers/geventlet.py`), not memory or docs:**
+`EventletWorker.init_process()` calls `self.patch()`, which calls
+`eventlet.monkey_patch()` (no arguments -- the full default patch set:
+`os`, `select`, `socket`, `thread`/`threading`, `time`) before the WSGI
+app is even created. This is the same underlying eventlet green-thread
+scheduler 2026-08-08d's standalone proof exercised (10.03s serial vs.
+2.05s concurrent for 5 simulated 2s-blocking requests) -- gunicorn's
+eventlet worker is not a different concurrency mechanism, it's the same
+one, invoked automatically instead of manually. This is also
+Flask-SocketIO's own documented, widely-deployed recommended production
+config (`gunicorn --worker-class eventlet -w 1 module:app`), not a novel
+choice being trusted blind.
+
+**Audited every blocking network call either service actually makes, to
+check it's really covered by that monkey-patch (grep + direct read, not
+assumption):**
+- `services/ai_agent/llm/gemini_provider.py` (Gemini API calls) and
+  `services/ai_agent/ai_agent_app/agent/crm_api_client.py` (the
+  `CRM_ACCESS_MODE=api` HTTP bridge to `rahma-crm-api`) both use raw
+  `urllib.request` -> `http.client` -> the stdlib `socket` module.
+  `google-generativeai`/grpc are not used anywhere in this repo despite
+  being pinned in `requirements.txt` (unused pin, harmless but worth
+  knowing). Fully covered by eventlet's monkey-patch -- confirmed clean,
+  no caveat for `rahma-agent`.
+- **`rahma-crm-api`'s Postgres access is not covered, and this is a real
+  gap the monkey-patch does not fix:** `apps/api` connects via
+  `postgresql+psycopg2://` (confirmed in `apps/api/app/config.py`).
+  `psycopg2` talks to `libpq` through its own C extension and makes its
+  blocking network syscalls below the Python `socket` module entirely --
+  `eventlet.monkey_patch()` cannot see or patch it. Confirmed against the
+  installed eventlet itself (0.41.1): it ships a separate, not-applied-by-
+  default module for exactly this
+  (`eventlet.support.psycopg2_patcher.make_psycopg_green()`, wraps
+  `psycopg2.extensions.set_wait_callback()`). Left unpatched, one
+  greenthread's Postgres query blocks the *entire* eventlet worker process
+  for its duration -- every other concurrent request/Socket.IO connection
+  that worker is holding stalls too, silently reintroducing the same
+  class of problem eventlet was adopted to fix, just moved from "no
+  eventlet at all" to "eventlet, but only for non-DB I/O."
+
+**Fixed:** `apps/api/app/__init__.py` adds
+`_green_psycopg2_if_running_under_eventlet()`, called right after
+`SQLALCHEMY_ENGINE_OPTIONS` is set (before `db.init_app()`, so it runs
+before any connection pool opens a connection). Guarded on
+`eventlet.patcher.is_monkey_patched("socket")` being true -- i.e. it only
+does anything when actually running under `gunicorn --worker-class
+eventlet`, so local dev, pytest, and the plain Flask dev server are
+provably untouched (`tests/test_db_connection_pool.py`: one test asserts
+the wait callback stays `None` outside eventlet, one simulates the
+monkey-patched condition via `monkeypatch` and asserts it gets set, both
+verified to fail for the right reason before the fix via
+revert-then-restore). `services/ai_agent` (`rahma-agent`) needs no
+equivalent fix -- it never touches Postgres directly, per the call-path
+audit above.
+
+**Also found while re-reading the deploy docs against the real PM2
+setup:** `deploy/pm2/ecosystem.config.js`'s `cwd`
+(`/home/ec2-user/rahma-crm-platform`) matches Amazon Linux's default
+`ec2-user` home directory, not Ubuntu's `ubuntu` user --
+`deploy/README.md` sections 1-10 are written for Ubuntu (`apt install`,
+systemd units) and were very likely never actually run on the real box,
+consistent with 2026-08-08d's finding that the systemd units document an
+approach that was never adopted. Not confirmed live (no EC2 access this
+session) -- flagged in `deploy/README.md` section 11 as "confirm via
+`cat /etc/os-release` before running any install command," not asserted
+as fact.
+
+**`deploy/README.md` section 11 rewritten** from a general explanation
+into a literal, ordered command sequence for the real box: OS/process
+confirmation, Redis install (branched by OS, not assumed), pulling the
+now-corrected `requirements.txt`, setting `REDIS_URL` in the file the app
+actually reads (`apps/api/app/config.py` loads the **repo-root** `.env`,
+not `/etc/rahma-traveler/.env` -- confirmed by reading `_load_env_file`'s
+call sites, not assumed from the systemd doc), switching PM2 over to the
+tracked ecosystem file, verifying eventlet is really the running worker
+class and Redis is really receiving traffic (not just that both started
+without error), and the two live checks that are the actual proof: the
+two-admin-session handoff test, and `scripts/concurrent_load_test.py`
+run from on the box against `127.0.0.1:3001` directly.
+
+**Still explicitly NOT done, honestly (same constraint as 2026-08-08d,
+unchanged by this pass):** none of this has been run against the real
+EC2 box -- no real OS confirmed, no real Redis provisioned, no real
+`pm2 delete && pm2 start deploy/pm2/ecosystem.config.js`, no real
+handoff test, no real `concurrent_load_test.py` run against the deployed
+app. This entry closes the *reasoning* gap (why eventlet-on-Linux should
+work, backed by reading the actual installed library source rather than
+trusting the Windows proxy proof) and ships one additional confirmed-real
+fix (psycopg2 greening) that the reasoning pass surfaced -- it does not
+substitute for the live verification, which still requires the user's
+own EC2 access.
+
+---
+
 ## 2026-08-08d -- Load/scalability audit: production process config had silently drifted from every doc, one of the gaps is a live bug
 
 Triggered by ownership asking, directly: what actually happens under real
