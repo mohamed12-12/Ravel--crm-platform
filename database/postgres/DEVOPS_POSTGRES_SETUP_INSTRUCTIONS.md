@@ -129,6 +129,30 @@ For AWS EC2/RDS:
 - Keep database and app in the same VPC/private subnets when possible.
 - Restrict outbound access from the app host to required services only.
 
+## Known Unresolved Risk: Shared RDS Instance
+
+Migrated from `POSTGRES_PRODUCTION_CUTOVER_PLAN.md` (deleted as a
+superseded cutover checklist -- cutover already happened, see
+`ravel_agent_master_discovery_report.md` -- but this specific risk was
+never confirmed resolved and shouldn't be lost with the rest of that
+file):
+
+- Staging used a shared RDS instance; as of this project's last live
+  check, production's `.env` still points `DATABASE_URL`/`POSTGRES_URL`
+  directly at that same shared instance (host `clinic-isac...rds.amazonaws.com`,
+  db `postgres`, `search_path=ravel`), shared with other apps'
+  schemas (Mem0/OlivsDashboard/safaria). The least-privilege `rahma_app`
+  role documented above in "App User"/"Minimum Permissions" addresses the
+  *permissions* half of this; a fully isolated instance (not just a
+  scoped role on a shared one) has not been provisioned.
+- A routine CI smoke job for the Postgres agent-path (matching the
+  one-off staging smoke test already run by hand once against this
+  schema -- see `RUN_GUIDE.md`'s PostgreSQL section) is still
+  recommended, not yet automated.
+- Production secrets and service accounts should be owned by DevOps
+  (Secrets Manager/SSM), not hand-edited `.env` files -- see
+  `deploy/README.md`'s "Secret Handling" pointer, not yet wired up.
+
 ## Staging First, Production Later
 
 Required order:

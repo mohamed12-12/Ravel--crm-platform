@@ -51,9 +51,9 @@ Nothing else to configure; the CRM and agent both work directly against the
 local SQLite file.
 
 **PostgreSQL** - once you've migrated data (see
-`database/postgres/SQLITE_TO_POSTGRES_MIGRATION_PLAN.md` and
-`POSTGRES_STAGING_AGENT_PATH_SMOKE_REPORT.md` for how that was done here),
-set:
+`database/postgres/SQLITE_TO_POSTGRES_MIGRATION_PLAN.md`; this has
+already been run once against staging, full agent read+write path
+smoke-tested 13/13 passing against schema `ravel`), set:
 
 ```env
 DATABASE_URL=<same value as POSTGRES_URL>
@@ -162,9 +162,8 @@ never real production data):
 python tools/production_parity_smoke_test.py
 ```
 
-PostgreSQL migration (already run once against staging - see
-`POSTGRES_STAGING_AGENT_PATH_SMOKE_REPORT.md` - safe to re-run, inserts use
-`ON CONFLICT DO NOTHING`):
+PostgreSQL migration (already run once against staging - safe to re-run,
+inserts use `ON CONFLICT DO NOTHING`):
 
 ```bash
 python tools/migrate_sqlite_to_postgres.py --dry-run
