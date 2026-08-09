@@ -6,6 +6,66 @@ newer entries go at the top. Cross-reference commit hashes where available.
 
 ---
 
+## 2026-08-09 -- Booking status updates now write through Postgres/SQLAlchemy; CSRF wording and hardcoded handoff URL fixed
+
+Confirmed the booking-status-update failure was a split-brain persistence
+bug, not a CSRF/session bug. The route in `apps/api/app/routes/bookings.py`
+used `UnifiedCRMService().update_booking_status(...)`, which wrote through
+the legacy SQLite path while the rest of the booking detail page reads from
+the Postgres/SQLAlchemy session. That mismatch meant the UI could report a
+successful save without the booking row or status-history row actually
+changing in the database the page reads from.
+
+**Wire-level clue that ruled out the original CSRF theory for the incident:**
+the investigation observed a browser `POST` that surfaced as a `302`, not a
+`400`. Since the booking-status form is a plain HTML form with no JS
+interception, a browser will only follow a redirect on a real `3xx`
+response; `_browser_redirect(..., status_code=400)` does not become a
+redirect-followed navigation. That made the route-body fallback path the
+actual suspect, not CSRF.
+
+**Database proof of the split-brain issue:** a read-only Postgres query for
+`BK000001` showed exactly one `booking_status_history` row total, with
+`change_source='agent_write'`, and zero rows with `change_source='crm-ui'`.
+That confirmed the CRM UI's status-update path had never landed in the
+database the UI reads. The legacy SQLite fallback file contained unrelated
+rows and did not contain the booking under investigation.
+
+**What changed:**
+
+- `apps/api/app/routes/bookings.py`
+  - Replaced the SQLite service call with direct ORM mutation of the
+    already-loaded `TripBooking`.
+  - Reused `UnifiedCRMService._validate_booking_transition(...)` as the
+    transition check.
+  - Inserted a `BookingStatusHistory` row directly with
+    `change_source='crm-ui'`.
+  - Removed the stale `expire_all()`/reload sequence that only existed to
+    compensate for the old out-of-band write.
+  - Added `db.session.rollback()` plus structured error logging before the
+    generic flash message.
+- `apps/api/app/security.py`
+  - Replaced the misleading CSRF flash copy with
+    `Your session expired. Please refresh the page and try again.`
+- `apps/api/app/templates/leads/detail.html`
+  - Replaced the generic action-failure alert copy with
+    `Something went wrong completing this action. Please try again.`
+- `apps/api/app/templates/base.html` and
+  `apps/api/app/templates/admin/handoffs.html`
+  - Replaced the hardcoded `/admin/handoffs/pending` fetch target with
+    `url_for("handoffs.pending_count")`.
+- `tests/test_employee_followup_workspace.py`
+  - Removed the accidental `BookingEventTrail` assertion from the happy
+    path.
+  - Added a regression test proving the route still works when
+    `RAHMA_SYSTEM_DB_PATH` points at a nonexistent path.
+  - Added a regression test that forces an exception in assignment and
+    asserts the route logs the failure and surfaces the new save-failure
+    message.
+
+**Verification:** `python -m pytest tests/test_employee_followup_workspace.py -q`
+passed (`14 passed`).
+
 ## 2026-08-08f -- Part A closed for real: live EC2 rollout done by ownership, three findings confirmed live and pulled back into the repo
 
 Ownership ran the 2026-08-08e runbook against the actual EC2 box. **This

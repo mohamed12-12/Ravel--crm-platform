@@ -1437,7 +1437,7 @@
     });
 
     function updatePendingBadge() {
-        fetch('/admin/handoffs/pending')
+        fetch('{{ url_for("handoffs.pending_count") }}')
             .then(res => res.json())
             .then(data => {
                 const badge = document.getElementById('pending-count-badge');

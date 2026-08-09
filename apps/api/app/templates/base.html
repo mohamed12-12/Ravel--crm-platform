@@ -815,7 +815,7 @@
 window.CRM_CSRF_TOKEN = "{{ csrf_token() }}";
 // Poll pending handoff count
 function updateHandoffBadge() {
-    fetch('/admin/handoffs/pending')
+    fetch('{{ url_for("handoffs.pending_count") }}')
         .then(r => r.json())
         .then(d => {
             const b = document.getElementById('sidebar-handoff-badge');

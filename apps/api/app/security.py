@@ -199,7 +199,7 @@ def employee_session_guard(*, require_csrf: bool = True):
     if require_csrf and request.method in WRITE_METHODS and not _csrf_valid():
         if wants_json:
             return jsonify({"error": "csrf_required"}), 400
-        return _browser_redirect("CRM service unavailable", "error", status_code=400)
+        return _browser_redirect("Your session expired. Please refresh the page and try again.", "error", status_code=400)
     return None
 
 
@@ -302,7 +302,7 @@ def crm_request_guard():
     if request.method in WRITE_METHODS and _session_authenticated() and not _api_token_authenticated():
         if not _csrf_valid():
             if not wants_json:
-                return _browser_redirect("CRM service unavailable", "error", status_code=400)
+                return _browser_redirect("Your session expired. Please refresh the page and try again.", "error", status_code=400)
             return jsonify({"error": "csrf_required"}), 400
     return None
 

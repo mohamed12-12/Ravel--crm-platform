@@ -374,19 +374,26 @@ def update_status(booking_id):
     status_for_service = new_status if new_status and new_status != (booking.booking_status or '') else None
     payment_for_service = new_payment if new_payment and new_payment != (booking.payment_status or '') else None
     try:
-        service = UnifiedCRMService()
-        if status_for_service or payment_for_service or note_for_service:
-            service.update_booking_status(
-                booking_id,
-                new_status=status_for_service,
-                new_payment_status=payment_for_service,
-                changed_by=actor,
-                change_source='crm-ui',
-                notes=note_for_service,
+        if status_for_service:
+            UnifiedCRMService._validate_booking_transition(
+                booking.booking_status,
+                status_for_service,
                 allow_employee_correction=employee_correction,
+                correction_note=note_for_service,
             )
-        db.session.expire_all()
-        booking = db.get_or_404(TripBooking, booking_id)
+            db.session.add(
+                BookingStatusHistory(
+                    booking_id=booking.booking_id,
+                    old_status=booking.booking_status or 'Draft',
+                    new_status=status_for_service,
+                    changed_by=actor,
+                    change_source='crm-ui',
+                    notes=note_for_service or None,
+                )
+            )
+            booking.booking_status = status_for_service
+        if payment_for_service:
+            booking.payment_status = payment_for_service
         if assignment_requested:
             apply_assignment(
                 booking,
@@ -410,7 +417,9 @@ def update_status(booking_id):
         flash(message, 'error')
         return redirect(url_for('bookings.detail', booking_id=booking_id))
     except Exception as e:
-        flash('CRM service unavailable', 'error')
+        db.session.rollback()
+        logger.error("Booking status update failed booking_id=%s error=%s", booking_id, e, exc_info=True)
+        flash('Something went wrong saving this update. Please try again.', 'error')
         return redirect(url_for('bookings.detail', booking_id=booking_id))
 
     if request.is_json:

@@ -476,9 +476,9 @@ function runQuickAction(action) {
         if (d.status === 'ok') {
             location.reload();
         } else {
-            alert(d.error || 'CRM service unavailable');
+            alert(d.error || 'Something went wrong completing this action. Please try again.');
         }
-    }).catch(() => alert('CRM service unavailable'));
+    }).catch(() => alert('Something went wrong completing this action. Please try again.'));
 }
 
 function triggerHandoff() {

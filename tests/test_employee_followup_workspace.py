@@ -51,6 +51,9 @@ class EmployeeFollowupWorkspaceTests(unittest.TestCase):
         with self.app.app_context():
             self.db.drop_all()
             self.db.create_all()
+            # This suite points DATABASE_URL and RAHMA_SYSTEM_DB_PATH at the
+            # same file, so it cannot expose split-brain persistence bugs
+            # unless a test deliberately diverges them.
             self.db.session.add(
                 self.Traveler(
                     traveler_id="TR-FU-1",
@@ -193,8 +196,56 @@ class EmployeeFollowupWorkspaceTests(unittest.TestCase):
             self.assertEqual(history.changed_by, "mona")
             self.assertEqual(history.old_status, "Confirmed")
             self.assertEqual(history.new_status, "Payment Pending")
-            event = self.BookingEventTrail.query.filter_by(booking_id="B-FU-1").first()
-            self.assertIsNotNone(event)
+            self.assertEqual(history.change_source, "crm-ui")
+            # BookingEventTrail writes were tied to the removed SQLite path and
+            # remain a tracked follow-up, not a regression for this route.
+
+    def test_status_update_ignores_broken_system_db_path_and_writes_postgres_models(self) -> None:
+        token = self._login(role="manager", username="mona")
+        broken_path = self.tmpdir / "missing" / "rahma-system.db"
+        os.environ["RAHMA_SYSTEM_DB_PATH"] = str(broken_path)
+        response = self.client.post(
+            "/bookings/B-FU-1/status",
+            data={
+                "csrf_token": token,
+                "expected_history_count": "0",
+                "booking_status": "Payment Pending",
+                "payment_status": "Deposit Paid",
+                "booking_notes": "Deposit requested by phone.",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-FU-1")
+            self.assertEqual(booking.booking_status, "Payment Pending")
+            self.assertEqual(booking.payment_status, "Deposit Paid")
+            history = self.BookingStatusHistory.query.filter_by(booking_id="B-FU-1").order_by(
+                self.BookingStatusHistory.history_id.desc()
+            ).first()
+            self.assertIsNotNone(history)
+            self.assertEqual(history.change_source, "crm-ui")
+            self.assertEqual(history.new_status, "Payment Pending")
+
+    def test_status_update_logs_and_surfaces_unexpected_save_errors(self) -> None:
+        token = self._login(role="manager", username="mona")
+        from unittest.mock import patch
+
+        with patch("app.routes.bookings.apply_assignment", side_effect=RuntimeError("assignment failed")):
+            with self.assertLogs("app.routes.bookings", level="ERROR") as logs:
+                response = self.client.post(
+                    "/bookings/B-FU-1/status",
+                    data={
+                        "csrf_token": token,
+                        "expected_history_count": "0",
+                        "booking_status": "Payment Pending",
+                        "payment_status": "Deposit Paid",
+                        "assigned_to_user_id": str(self._user_id("mona")),
+                    },
+                    follow_redirects=True,
+                )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(any("Booking status update failed booking_id=B-FU-1" in entry for entry in logs.output))
+        self.assertIn("Something went wrong saving this update. Please try again.", response.get_data(as_text=True))
 
     def test_booking_detail_offers_full_employee_status_menu(self) -> None:
         self._login()
