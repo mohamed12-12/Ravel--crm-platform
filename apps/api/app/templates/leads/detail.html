@@ -451,7 +451,14 @@ document.querySelectorAll('.modal-overlay').forEach(m => {
 });
 
 function advanceStage(leadId) {
-    fetch(`/leads/${leadId}/advance`, {
+    // url_for() bakes in whatever path prefix this app is actually mounted
+    // under (e.g. nginx's /rahma-crm/) -- a hardcoded leading "/leads/..."
+    // string is always resolved against the origin root by the browser,
+    // not the current page's path, and silently lands on the wrong
+    // app/route behind a prefixed reverse proxy. This function is only
+    // ever called with this page's own lead.lead_id, so it's baked in
+    // server-side rather than built from the leadId parameter.
+    fetch("{{ url_for('leads.advance_stage', lead_id=lead.lead_id) }}", {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN }

@@ -6,6 +6,198 @@ newer entries go at the top. Cross-reference commit hashes where available.
 
 ---
 
+## 2026-08-09 -- Session-identity-stickiness defensive hardening: implemented, unit-tested, NOT confirmed live (deploy step unavailable from this environment)
+
+**This is explicitly a defensive hardening fix, not a confirmed reproduction
+of a specific incident.** The QA pass below found the traveler-delete
+report itself not currently reproducible; the staleness bug this hardens
+against is real by code inspection, but no live incident has ever been
+pinned to it.
+
+**What changed**, `services/ai_agent/ai_agent_app/agent/tool_calling_runtime.py`:
+- Added `_traveler_still_exists_before_write(session)`: a real
+  `find_traveler_by_phone` re-check, run only right before a high-stakes
+  write (not every turn -- a CRM round-trip per message would be wasteful
+  for a rare failure mode), that deliberately bypasses
+  `_store_identity_result`'s "ignore a not_found for an already-verified
+  session" guard, since this is the one deliberate point where a genuine
+  not_found must be trusted, not discarded. Fails open (returns True,
+  proceed) on no cached identity, no phone on file, or a lookup error --
+  this is a narrow safety net for a genuine deletion, not a general retry
+  gate.
+- Added `_invalidate_stale_identity(session)`: clears the session's cached
+  `identity_verified`/`verified_traveler` state once a re-check positively
+  confirms the traveler is gone.
+- Wired into `_execute_booking_draft`: blocks the write outright and
+  restarts identity collection (`session.stage = "identity_required"`,
+  clears `raw_phone`) rather than creating a booking against a traveler_id
+  that no longer resolves to anything -- a booking has no safe fallback.
+- Wired into `_execute_manual_handoff`: falls back to a phone-only handoff
+  (clears `traveler_id`, adds an internal note flagging the discrepancy)
+  rather than blocking the customer's explicit request for human help -- a
+  handoff with no valid traveler is still useful to a human, unlike a
+  booking.
+- Deliberately NOT wired into `_escalate_after_repeated_contradiction` or
+  `_execute_policy_handoff` (the other two `create_handoff` call sites) --
+  those are backend-triggered, not directly hinging on the customer's own
+  claimed identity the same way. Flagged as a narrower follow-up if this
+  is ever revisited.
+
+**Regression tests added**, `tests/test_golden_transcript_regressions.py`:
+`test_booking_write_is_blocked_when_verified_traveler_is_deleted_mid_session`
+and
+`test_manual_handoff_falls_back_to_phone_only_when_verified_traveler_is_deleted_mid_session`.
+Both simulate the deletion by nulling the mocked read-tools double's
+`identity` attribute mid-session, then re-sending a message that reaches
+the write point. Both pass, proving the intended code path is correct in
+isolation.
+
+**Test-double gaps found and fixed while adding this** (not production
+bugs): three existing tests set up a "verified traveler" session directly
+(`_trip_selection_session`, `_selected_trip_session`, and an inline
+new-minor-traveler setup in `test_guardian_consent_workflow.py`) without
+ever configuring the mocked read-tools double to also report that same
+traveler as found on a fresh lookup -- harmless before this change (nothing
+ever re-checked), but the new pre-write re-check correctly noticed the
+inconsistency and (correctly, by the new logic's own lights) treated an
+unconfigured double as "traveler not found." Fixed by keeping each
+helper's read-tools double in sync with whatever traveler it marks
+verified. Full suite: 825 -> 840 (QA pass fixes) -> 842 (this hardening),
+0 failed throughout, confirmed with a fresh full run after every change.
+
+**Live verification: attempted four times against the deployed agent
+(`https://demos.nanovate.io/rahma-agent/`), inconclusive for this specific
+change.** Procedure each time: insert a disposable test traveler directly
+in Postgres (mirroring `create_traveler`'s own schema), verify identity in
+a fresh session, delete the traveler mid-conversation (mirroring the
+dashboard delete route's cascade), then continue the same open session
+and request escalation. In all four attempts, the persisted handoff
+correctly showed `traveler_id: null` -- but re-fetching the session
+afterward showed `session.preview.traveler` still holding the **old,
+pre-deletion** traveler dict, meaning `_invalidate_stale_identity` was
+never actually invoked. **The most likely explanation: this environment
+has no mechanism to deploy or restart the live `rahma-agent` pm2 process,
+so these live tests almost certainly exercised the previously-deployed
+code, not this session's edits.** The `traveler_id: null` result each time
+is consistent with a separate, pre-existing safety net already present in
+the write-validation layer (`write_tool_executor.py`'s `_resolve_traveler`
+re-resolves the traveler fresh via `get_traveler_profile` at write time
+regardless of what the caller passes) -- a reassuring independent finding,
+but not evidence this specific runtime-level change works live. **Action
+needed: deploy this change, then re-run the same four-step live
+procedure and confirmed `session.preview.traveler` is actually cleared
+(not just that the persisted `traveler_id` ends up null, which the
+write-validation layer may already guarantee on its own).**
+
+Also found and incidentally fixed while live-testing: the handoff-queue's
+`deduplicate_open` matching appears to match ANY open ("Pending") handoff
+sharing the same `reason_code` when `traveler_id` is empty, regardless of
+session/customer -- two of the four live attempts above deduped against
+an unrelated earlier test handoff instead of creating a fresh row. Not
+investigated further (out of scope for this hardening pass), but worth a
+dedicated look: if this also happens for two different real anonymous
+customers escalating around the same time, their requests could get
+silently merged into one handoff row for staff. All disposable test
+travelers and test handoff rows created during this verification have
+been cleaned up (deleted / marked Resolved) so nothing lingers in the
+live production queue.
+
+---
+
+## 2026-08-09 -- Traveler-delete-then-reuse-phone-number: investigated, not reproducible; production-readiness QA pass found and fixed 3 new bugs, closed a real test-coverage gap
+
+**Traveler-delete-then-reuse-phone-number.** A report claimed a deleted
+traveler's phone number still resolved as "existing" in a brand-new AI
+agent conversation. Investigated live against production before assuming
+any cause:
+
+- Ruled out, with evidence: orphaned `leads` rows (`resolve_identity()` in
+  `agent_crm_bridge.py` only ever queries `travelers`, never `leads`),
+  incomplete delete cascade (every FK-referencing table is already covered
+  in `travelers.py`'s delete route), duplicate traveler rows sharing a
+  phone number (zero found across all 541 travelers via a direct Postgres
+  query), a swallowed delete failure (both delete-button JS paths surface
+  the real server error via `alert()`), and a split-brain agent/CRM
+  dispatch mismatch (`crm.py`'s `_agent_runtime()` correctly routes to the
+  Postgres-native `PostgresAgentCRMTools` whenever `SQLALCHEMY_DATABASE_URI`
+  isn't SQLite -- confirmed live: the deployed agent's own session payload
+  reports `dbSource: "postgres:crm-api"` with a `travelerCount` matching a
+  direct DB query exactly).
+- A genuinely fresh session (confirmed via the reappearance of the opening
+  greeting, which can only come from the server's real response to
+  `POST /api/session` -- `services/ai_agent/ai_agent_app/web/static/app.js`
+  has no `localStorage`/`sessionStorage`/cookie-based session caching at
+  all), sent the exact originally-affected phone number, correctly
+  returned `not_found` live against production.
+- **Most likely explanation, not a currently-live bug**: the original
+  report's delete happened inside a ~17.5-hour window (2026-08-07 14:07 ->
+  2026-08-08 07:45) where the dashboard-list delete button had a hardcoded
+  URL bug (fixed in `e3d7504`) stacked on a separately-being-fixed FK
+  cascade gap (fixed in `cdda723`) -- a genuinely ambiguous "did this
+  actually delete" period, since resolved.
+- **Real, separate, unresolved bug found and deliberately left unfixed
+  pending a decision**: `services/ai_agent/ai_agent_app/agent/tool_calling_runtime.py:867-930`
+  never re-checks a traveler's identity once a session has verified it
+  once, and explicitly discards a fresh `not_found` result for an
+  already-verified session. Not what explains this report, but a real gap
+  if a traveler is deleted *while* a customer is mid-conversation in a
+  session that already verified them.
+
+**Production-readiness QA pass.** Full functional test matrix run across
+CRM + AI agent (see `TEST_REPORT.md`, `PRODUCTION_READINESS.md` for full
+detail). Fresh full-suite baseline: 825 passed -> 840 passed after this
+pass's fixes/new tests, 0 failed, both times (supersedes the stale "645
+passed" figure, which predated ~180 tests added across 5 later commits).
+
+New bugs found and fixed:
+- **Mojibake on the booking detail page.** `apps/api/app/templates/bookings/detail.html`
+  had 26 corrupted characters across 21 lines (`←`, `→`, `—`, `·`), all one
+  root cause: UTF-8 bytes misread as Windows-1252 and re-saved as UTF-8,
+  introduced in commit `672ee220` (2026-08-03). Same root-cause class as a
+  previously-fixed incident in the AI agent's own Arabic prompt strings
+  (`ae665552`), but that fix's mojibake guard only inspects agent-generated
+  chat text, not Jinja templates -- why this instance was never caught.
+  Fixed via precise Python codepoint replacement (`chr(0x...)`, never a
+  shell heredoc with the literal characters typed inline -- typing them
+  directly triggered the sandbox's control-character-in-command guard on
+  the first several attempts, which is itself a useful confirmation that
+  raw multi-byte/control characters should never be hand-typed into a
+  shell command for this exact class of file).
+- **Same hardcoded-path-under-reverse-proxy bug, 4 more instances the
+  prior two fix passes missed**: `leads/detail.html`'s "Advance Stage"
+  button (`fetch(\`/leads/${leadId}/advance\`)`) and `admin/handoffs.html`'s
+  three update-handoff calls (`submitResolution`, `quickAssign`, the
+  drag-and-drop handler; all `fetch(\`/admin/handoffs/${handoffId}\`)`).
+  Fixed the same way as before (`url_for()`); since `handoffId` is only
+  known client-side at runtime, used a `url_for(..., id='__HANDOFF_ID__')`
+  placeholder template substituted in JS rather than a per-render literal.
+  New regression test: `tests/test_ui_layout_regressions.py::test_leads_and_handoffs_action_urls_respect_a_reverse_proxy_path_prefix`.
+
+Real test-coverage gap found and closed (no code fix needed):
+- `_AFFIRMATIVE_REPLIES` in `tool_calling_runtime.py` defines 16 synonyms
+  accepted as a booking confirmation; only `"yes"` and `"confirm"` had ever
+  been exercised by a test. Added
+  `tests/test_golden_transcript_regressions.py::test_every_affirmative_reply_synonym_confirms_the_booking`,
+  parametrized over the remaining 14 (`y, ok, okay, sure, book it, go
+  ahead`, plus 8 Arabic variants). All 14 passed on the first run -- the
+  logic already worked, the gap was purely in coverage.
+
+Live-verified, not just read: escalate/esclate -> real handoff, both via a
+live HTTP request against the deployed agent (`toolsUsed:
+["create_handoff"]`, `write_result_contract.status: "created"`) and a
+direct Postgres query confirming the handoff row (`H-00037953`) actually
+persisted.
+
+**Flagged, not fixed -- open verification gap**: the booking-status-update
+split-brain fix (previous entry, this same date) has **zero**
+`booking_status_history` rows with `change_source='crm-ui'` in production,
+ever, per a live query run during this pass -- meaning no real CRM-UI
+session has exercised the fix since it shipped. Could not close this
+personally: only a scrypt password hash exists for the admin account, no
+usable credential. Needs one real admin click-through to confirm.
+
+---
+
 ## 2026-08-09 -- Booking status updates now write through Postgres/SQLAlchemy; CSRF wording and hardcoded handoff URL fixed
 
 Confirmed the booking-status-update failure was a split-brain persistence

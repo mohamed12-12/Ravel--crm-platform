@@ -240,6 +240,12 @@ def _selected_trip_session(rt: ToolCallingSessionRuntime, trip: dict | None = No
         "trip_reference": trip,
         "collection_state": {"trip_type": True, "selected_trip": True},
     }
+    # Keep the read-tools double consistent with the traveler this helper
+    # marks as verified above -- _traveler_still_exists_before_write does a
+    # real find_traveler_by_phone re-check before high-stakes writes, and
+    # would otherwise see this traveler as not_found (the double's default
+    # identity=None) and incorrectly treat it as deleted mid-session.
+    rt._read_only_tools.identity = {"traveler_id": "TR100", "full_name": "Mona Ali", "status": "Active"}
     session.stage = "traveler_gender_required"
     return session
 
@@ -260,6 +266,8 @@ def _trip_selection_session(rt: ToolCallingSessionRuntime, trip: dict | None = N
         "trip_result": {"open_trips": [trip], "date_tbd_trips": []},
         "collection_state": {"trip_type": True},
     }
+    # See the matching comment in _selected_trip_session above.
+    rt._read_only_tools.identity = {"traveler_id": "TR100", "full_name": "Mona Ali", "status": "Active"}
     session.messages.append(
         {
             "role": "assistant",

@@ -1135,6 +1135,16 @@
 <script>
     let activePriorityFilter = 'All';
     let currentHandoffData = null;
+    // url_for() bakes in whatever path prefix this app is actually mounted
+    // under (e.g. nginx's /rahma-crm/) -- a hardcoded leading
+    // "/admin/handoffs/..." string is always resolved against the origin
+    // root by the browser, not the current page's path. handoffId is only
+    // known at runtime (card clicks, drag-and-drop), so the id segment is
+    // a placeholder substituted in below rather than baked in per-render.
+    const HANDOFF_UPDATE_URL_TEMPLATE = "{{ url_for('handoffs.update_handoff', id='__HANDOFF_ID__') }}";
+    function handoffUpdateUrl(handoffId) {
+        return HANDOFF_UPDATE_URL_TEMPLATE.replace('__HANDOFF_ID__', handoffId);
+    }
 
     // Filter Logic
     function setPriorityFilter(priority, buttonEl) {
@@ -1215,7 +1225,7 @@
     }
 
     function submitResolution(handoffId, notes) {
-        fetch(`/admin/handoffs/${handoffId}`, {
+        fetch(handoffUpdateUrl(handoffId), {
             method: 'PUT',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN },
@@ -1241,7 +1251,7 @@
 
     function quickAssign(handoffId) {
         event.stopPropagation();
-        fetch(`/admin/handoffs/${handoffId}`, {
+        fetch(handoffUpdateUrl(handoffId), {
             method: 'PUT',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN },
@@ -1318,7 +1328,7 @@
                 };
                 const newStatus = statusMap[column.id];
                 
-                fetch(`/admin/handoffs/${handoffId}`, {
+                fetch(handoffUpdateUrl(handoffId), {
                     method: 'PUT',
                     credentials: 'same-origin',
                     headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN },

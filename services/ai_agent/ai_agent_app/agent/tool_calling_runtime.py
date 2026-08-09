@@ -910,6 +910,73 @@ class ToolCallingSessionRuntime:
         workflow = preview.get("workflow") if isinstance(preview.get("workflow"), dict) else {}
         return bool(workflow.get("identity_verified") and traveler.get("traveler_id") and traveler.get("status"))
 
+    def _traveler_still_exists_before_write(self, session: SessionState) -> bool:
+        """Defensive re-check, run only right before a high-stakes write
+        (booking draft / handoff creation) -- NOT on every turn, since a
+        CRM round-trip on every message would be wasteful and this class of
+        staleness (the verified traveler being deleted mid-conversation) is
+        rare.
+
+        _run_identity_lookup_if_ready short-circuits entirely once a session
+        is verified (see its docstring-adjacent comment), and
+        _store_identity_result deliberately discards a later not_found for
+        an already-verified session -- both exist to protect the normal
+        intake flow from a transient lookup miss. Neither ever re-confirms
+        a verified traveler still exists, so a deletion mid-conversation
+        would otherwise go undetected for the rest of the session's
+        lifetime. This is the one deliberate point that re-checks for real,
+        and trusts a genuine not_found instead of discarding it.
+
+        Returns True (safe to proceed) whenever there's nothing to
+        re-verify, the session has no phone on file, or the re-check call
+        itself errors -- this is a narrow safety net for a genuine
+        deletion, not a general retry gate, so any ambiguity fails open
+        rather than blocking a legitimate write over a transient hiccup.
+        """
+        if not self._preview_has_verified_traveler(session):
+            return True
+        raw_phone = str(session.raw_phone or session.pending_raw_phone or "").strip()
+        if not raw_phone:
+            return True
+        try:
+            result = self._read_only_tools.find_traveler_by_phone(
+                raw_phone=raw_phone,
+                country_code=session.country_code or self.settings.default_country_code,
+            )
+        except Exception as exc:
+            agent_logger.warning(
+                "Pre-write traveler re-verification failed session=%s error=%s -- proceeding with cached identity",
+                session.id,
+                exc,
+            )
+            return True
+        if isinstance(result, dict) and str(result.get("status") or "") == "not_found":
+            agent_logger.error(
+                "Traveler no longer exists at write time session=%s -- invalidating stale session identity",
+                session.id,
+            )
+            self._invalidate_stale_identity(session)
+            return False
+        return True
+
+    @staticmethod
+    def _invalidate_stale_identity(session: SessionState) -> None:
+        """Clear a session's cached identity-verification state once a
+        pre-write re-check has positively confirmed the previously-verified
+        traveler no longer exists (e.g. deleted mid-conversation) -- so
+        _preview_has_verified_traveler stops reporting True for a
+        traveler_id that no longer resolves to anything real.
+        """
+        preview = dict(session.preview or {})
+        preview["workflow"] = {
+            "lookup_status": "not_found",
+            "identity_verified": False,
+            "verified_status": "",
+            "verified_traveler": {},
+        }
+        preview["traveler"] = None
+        session.preview = preview
+
     @staticmethod
     def _store_identity_result(session: SessionState, result: dict[str, Any]) -> None:
         result = result if isinstance(result, dict) else {}
@@ -3111,7 +3178,23 @@ class ToolCallingSessionRuntime:
     def _execute_manual_handoff(self, session: SessionState, clean_text: str) -> bool:
         session_context = self._build_context(session, clean_text)
         traveler_id = str(session_context.get("traveler_id") or "").strip()
-        if not traveler_id:
+        stale_identity_note = ""
+        if traveler_id:
+            # The session already has a verified traveler_id -- but that
+            # verification could be stale (e.g. the traveler was deleted
+            # mid-conversation). A handoff with no valid traveler behind it
+            # is still useful to a human (the customer explicitly asked for
+            # help), so don't block the request over this -- just don't
+            # hand the team a traveler_id that no longer resolves, and note
+            # the discrepancy for whoever picks this up.
+            if not self._traveler_still_exists_before_write(session):
+                traveler_id = ""
+                stale_identity_note = (
+                    " (Note: this session had previously verified a traveler_id that no longer"
+                    " resolves in the CRM as of this handoff -- likely deleted mid-conversation.)"
+                )
+                session_context = self._build_context(session, clean_text)
+        else:
             # A handoff row with no traveler behind it is hard for the team to work
             # and can be rejected by the CRM, so resolve the identity first when
             # the session already knows the WhatsApp number.
@@ -3145,7 +3228,7 @@ class ToolCallingSessionRuntime:
             "customer_name": session.customer_name,
             "agent_summary": "Customer asked to speak with a Ravel team member.",
             "customer_summary": clean_text,
-            "notes": f"Session {session.id}. Latest customer message: {clean_text}",
+            "notes": f"Session {session.id}. Latest customer message: {clean_text}{stale_identity_note}",
             "update_lead": True,
             "deduplicate_open": True,
             "user_requested_human": True,
@@ -3946,6 +4029,28 @@ class ToolCallingSessionRuntime:
             return False
         if not session.booking_confirmed or not session.selected_trip_id:
             return False
+        if not self._traveler_still_exists_before_write(session):
+            # The session verified this traveler earlier, but a fresh
+            # re-check right before writing the booking shows they no
+            # longer exist in the CRM (e.g. deleted mid-conversation). A
+            # booking cannot be safely created against a traveler_id that
+            # no longer resolves to anything -- restart identity collection
+            # instead of proceeding on stale cached state.
+            agent_logger.error(
+                "Booking blocked: verified traveler no longer exists session=%s",
+                session.id,
+            )
+            session.stage = "identity_required"
+            session.raw_phone = ""
+            session.pending_raw_phone = ""
+            self._append_authoritative_reply(
+                session,
+                message_key="booking.traveler_no_longer_on_file",
+                base_text=self._traveler_no_longer_on_file_message(session),
+            )
+            session.tools_used = []
+            session.fallback_used = True
+            return True
         if session.guardian_name and session.guardian_phone and not session.guardian_consent_saved:
             # _persist_guardian_consent is only ever called from two one-shot
             # call sites (right after the guardian phone is first captured,
@@ -4107,6 +4212,18 @@ class ToolCallingSessionRuntime:
         return (
             "I could not confirm the guardian's consent yet, so I will not create the booking request now.\n"
             "Please contact us or ask to speak with a member of the Ravel team to complete this step."
+        )
+
+    @staticmethod
+    def _traveler_no_longer_on_file_message(session: SessionState) -> str:
+        if session.language.startswith("ar"):
+            return (
+                "معلش، مش لاقي بياناتك محفوظة دلوقتي فمش هقدر أكمل الحجز بالمعلومات القديمة.\n"
+                "ممكن تأكد لي رقم الواتساب تاني عشان أرجع أشوف بياناتك؟"
+            )
+        return (
+            "I'm sorry, I can no longer find your profile on file, so I can't complete the booking with the earlier details.\n"
+            "Could you confirm your WhatsApp number again so I can look up your profile?"
         )
 
     @staticmethod

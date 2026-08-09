@@ -895,6 +895,51 @@ def test_failed_booking_draft_write_lets_the_very_next_confirmation_reply_retry(
 
 
 # ===========================================================================
+# Gap found during a production-readiness QA pass: _AFFIRMATIVE_REPLIES
+# (tool_calling_runtime.py) defines 16 synonyms accepted as a booking
+# confirmation, but only "yes" and "confirm" were ever exercised by a test.
+# Parametrize over the remaining 14 so every accepted synonym is proven to
+# actually reach _handle_booking_confirmation_reply and complete the
+# booking, not just fall through to the model/router untested.
+# ===========================================================================
+@pytest.mark.parametrize(
+    "confirmation_reply",
+    [
+        "y",
+        "ok",
+        "okay",
+        "sure",
+        "book it",
+        "go ahead",
+        "تمام",
+        "ماشي",
+        "موافق",
+        "ايوه",
+        "أيوه",
+        "نعم",
+        "اوكي",
+        "اوكى",
+    ],
+)
+def test_every_affirmative_reply_synonym_confirms_the_booking(
+    runtime: ToolCallingSessionRuntime, confirmation_reply: str
+) -> None:
+    runtime._write_executor.execute.side_effect = _write_results_by_action(
+        create_booking_draft=BOOKING_DRAFT_WRITE
+    )
+    session = _answer_booking_questions(runtime)
+    assert session.stage == "booking_confirmation_required"
+
+    session = _send(runtime, confirmation_reply, session)
+
+    reply = session.messages[-1]["text"]
+    assert "BK00001" in reply
+    assert session.booking_completed is True
+    call = runtime._write_executor.execute.call_args_list[-1]
+    assert call.kwargs["action"] == "create_booking_draft"
+
+
+# ===========================================================================
 # Bug: found live while re-verifying the fix above. A real booking (BK000002)
 # was genuinely created against real production Postgres, but the customer
 # was told "I could not complete the request right now" anyway.
@@ -1098,6 +1143,83 @@ def test_escalate_request_during_empty_trip_results_reaches_manual_handoff(
     reply = session.messages[-1]["text"].lower()
     assert "no active inventory" not in reply
     assert "do not have any available" not in reply
+
+
+# ===========================================================================
+# Defensive hardening (not a confirmed reproduction of a specific incident --
+# see ravel_agent_master_discovery_report.md): a session that verified a
+# traveler once never re-checked, and _store_identity_result actively
+# discarded a later not_found for an already-verified session, so a traveler
+# deleted mid-conversation would stay treated as "existing" for the rest of
+# that session's lifetime. Added a pre-write re-check
+# (_traveler_still_exists_before_write) at the two highest-stakes write
+# points -- create_booking_draft and the customer-requested manual handoff --
+# instead of on every turn, since a CRM round-trip per message would be
+# wasteful for a rare failure mode.
+# ===========================================================================
+def test_booking_write_is_blocked_when_verified_traveler_is_deleted_mid_session(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    runtime._write_executor.execute.side_effect = _write_results_by_action(
+        create_booking_draft=BOOKING_DRAFT_WRITE
+    )
+    session = _answer_booking_questions(runtime)
+    assert session.stage == "booking_confirmation_required"
+
+    # Simulate the traveler being deleted from the CRM in a different
+    # session/tab while this conversation is still open -- the mocked
+    # read-tools double now reports not_found for the same phone number.
+    runtime._read_only_tools.identity = None
+
+    session = _send(runtime, "yes", session)
+
+    reply = session.messages[-1]["text"].lower()
+    assert session.booking_completed is False
+    assert "bk00001" not in reply
+    assert not any(
+        call.kwargs.get("action") == "create_booking_draft"
+        for call in runtime._write_executor.execute.call_args_list
+    )
+    # Identity collection must restart rather than silently retrying against
+    # a traveler_id that no longer resolves to anything real.
+    assert session.stage == "identity_required"
+    assert session.raw_phone == ""
+
+
+def test_manual_handoff_falls_back_to_phone_only_when_verified_traveler_is_deleted_mid_session(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    identity = {"traveler_id": "TR00777", "full_name": "Youssef Kamal", "status": "Active"}
+    runtime._read_only_tools = RecordingReadTools(identity=identity)
+    runtime._write_executor.execute.return_value = {
+        "executed": True,
+        "result_id": "H-0099",
+        "handoff_case": {"handoff_id": "H-0099"},
+        "write_result_contract": {
+            "status": "success",
+            "record_id": "H-0099",
+            "record_type": "handoff",
+            "executed": True,
+        },
+    }
+    session = runtime.create_session()
+    session = _send(runtime, "01270482380", session)
+    assert session.stage != "identity_required"  # verified against TR00777
+
+    # Same simulated mid-conversation deletion as the booking test above.
+    runtime._read_only_tools.identity = None
+
+    session = _send(runtime, "escalate me", session)
+
+    assert session.handoff_state == "handed_off"
+    call = runtime._write_executor.execute.call_args_list[-1]
+    assert call.kwargs["action"] == "create_handoff"
+    payload = call.kwargs["payload"]
+    # The handoff must still go through for the customer -- just without a
+    # traveler_id that no longer resolves to anything, and with an internal
+    # note flagging the discrepancy for whoever picks it up.
+    assert payload["traveler_id"] == ""
+    assert "no longer resolves" in payload["notes"]
 
 
 # ---------------------------------------------------------------------------

@@ -110,6 +110,48 @@ class UiLayoutRegressionTests(unittest.TestCase):
         self.assertIn(".filter-pill.active-medium {\n        background: rgba(234, 179, 8, 0.14);", template)
         self.assertIn(".card-glow-high {\n        border-left-color: var(--accent);", template)
 
+    def test_leads_and_handoffs_action_urls_respect_a_reverse_proxy_path_prefix(self) -> None:
+        """leads/detail.html's Advance Stage button and admin/handoffs.html's
+        three update-handoff fetch() calls used to build their request URL
+        as a hardcoded '/leads/<id>/advance' or '/admin/handoffs/<id>'
+        string -- the browser resolves that against the origin root, not
+        the current page's path, so behind a prefixed reverse proxy
+        (confirmed live: nginx's /rahma-crm/) it silently lands on the
+        wrong route, the same bug class already fixed for the traveler
+        delete buttons and the handoff-badge poller. This confirms both
+        surfaces now emit prefix-aware URLs end-to-end.
+        """
+        _reset_app_modules()
+        from app import create_app
+        from app.extensions import db
+        from app.models.lead import Lead
+
+        app = create_app("development")
+        app.config["TESTING"] = True
+        app.config["WTF_CSRF_ENABLED"] = False
+        with app.app_context():
+            db.drop_all()
+            db.create_all()
+            db.session.add(Lead(
+                lead_id="L-PREFIX-1",
+                customer_name="Prefix Advance Lead",
+                lead_stage="New Lead",
+                priority="Medium",
+            ))
+            db.session.commit()
+
+        headers = {"X-Forwarded-Prefix": "/rahma-crm"}
+        with app.test_client() as client:
+            lead_html = client.get("/leads/L-PREFIX-1", headers=headers).get_data(as_text=True)
+            self.assertIn('fetch("/rahma-crm/leads/L-PREFIX-1/advance"', lead_html)
+
+            handoffs_html = client.get("/admin/handoffs/", headers=headers).get_data(as_text=True)
+            self.assertIn(
+                'const HANDOFF_UPDATE_URL_TEMPLATE = "/rahma-crm/admin/handoffs/__HANDOFF_ID__";',
+                handoffs_html,
+            )
+            self.assertNotIn("fetch(`/admin/handoffs/${handoffId}`", handoffs_html)
+
 
 if __name__ == "__main__":
     unittest.main()

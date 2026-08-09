@@ -154,10 +154,26 @@ def test_booking_is_blocked_when_guardian_consent_write_never_verifies(runtime: 
     _execute_booking_draft must now retry once more and BLOCK the booking
     outright if it still isn't verified, rather than silently proceeding.
     """
-    runtime._write_executor.execute.side_effect = _write_results_by_action(
+    route_write = _write_results_by_action(
         create_traveler=NEW_MINOR_TRAVELER_WRITE,
         create_lead=NEW_MINOR_LEAD_WRITE,
     )
+
+    def _execute_and_sync_identity(*, action: str, payload: dict, session_context: dict) -> dict:
+        result = route_write(action=action, payload=payload, session_context=session_context)
+        if action == "create_traveler":
+            # Keep the read-tools double consistent with the traveler this
+            # write just created -- _traveler_still_exists_before_write does
+            # a real find_traveler_by_phone re-check before the booking
+            # write, and would otherwise see TR00777 as not_found (the
+            # double's default identity=None) and incorrectly treat a
+            # freshly-created traveler as deleted mid-session. Set only
+            # after this write, not upfront, since the earlier not_found is
+            # exactly what routes this test through new-traveler intake.
+            runtime._read_only_tools.identity = dict(result["traveler"])
+        return result
+
+    runtime._write_executor.execute.side_effect = _execute_and_sync_identity
     runtime._write_executor.record_guardian_consent.return_value = {"verified": False}
     session = runtime.create_session()
     for text in ("01270482380", "Ahmed Sami Youssef", "Egyptian", _birthday_for_age(16)):
@@ -230,6 +246,13 @@ def test_unverified_guardian_consent_write_does_not_mark_saved_or_flag_lead(runt
         create_lead=NEW_MINOR_LEAD_WRITE,
     )
     runtime._write_executor.record_guardian_consent.return_value = {"verified": False}
+    # Keep the read-tools double consistent with the traveler this test
+    # creates via the mocked write above -- _traveler_still_exists_before_write
+    # does a real find_traveler_by_phone re-check before the booking write,
+    # and would otherwise see TR00777 as not_found (the double's default
+    # identity=None) and incorrectly treat a freshly-created traveler as
+    # deleted mid-session.
+    runtime._read_only_tools.identity = {"traveler_id": "TR00777", "full_name": "Ahmed Sami Youssef", "status": "Active"}
     session = runtime.create_session()
     for text in ("01270482380", "Ahmed Sami Youssef", "Egyptian", _birthday_for_age(16)):
         session = _send(runtime, text, session)
