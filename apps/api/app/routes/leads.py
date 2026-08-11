@@ -14,6 +14,7 @@ from app.models.handoff import HandoffQueue
 from app.models.user import User
 from app.services.assignments import (
     active_assignees,
+    auto_assign_lead,
     apply_assignment,
     assignment_history,
     exact_legacy_user,
@@ -424,6 +425,12 @@ def create():
                 new_user_id=resolve_user_id(data.get('assigned_to_user_id'), allow_blank=False),
                 actor=current_user(),
                 reason=data.get('assignment_reason', ''),
+            )
+        else:
+            auto_assign_lead(
+                created_lead,
+                actor=current_user(),
+                reason='Automatic round-robin sales assignment on lead creation',
             )
         db.session.commit()
 
