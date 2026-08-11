@@ -16,6 +16,7 @@ from services.crm.system_services import UnifiedCRMService
 from app.services.assignments import (
     active_assignees,
     apply_assignment,
+    auto_assign_booking,
     assignment_history,
     exact_legacy_user,
     resolve_user_id,
@@ -310,9 +311,9 @@ def create():
             lead_id=lead_id,
         )
         booking_id = result["booking_id"]
+        db.session.expire_all()
+        created_booking = db.session.get(TripBooking, booking_id)
         if data.get('assigned_to_user_id'):
-            db.session.expire_all()
-            created_booking = db.session.get(TripBooking, booking_id)
             apply_assignment(
                 created_booking,
                 resource_type='booking',
@@ -321,7 +322,13 @@ def create():
                 actor=current_user(),
                 reason=data.get('assignment_reason', ''),
             )
-            db.session.commit()
+        elif created_booking:
+            auto_assign_booking(
+                created_booking,
+                actor=current_user(),
+                reason='Automatic round-robin sales assignment on booking creation',
+            )
+        db.session.commit()
         flash(f"Booking {booking_id} created successfully.", 'success')
         return redirect(url_for('bookings.detail', booking_id=booking_id))
     except ValueError as e:

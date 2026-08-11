@@ -101,6 +101,8 @@ class SessionState:
     room_group: str = ""
     room_requirements: dict[str, Any] = field(default_factory=dict)
     group_size: int = 1
+    group_nationality_type: str = ""
+    group_nationality_counts: dict[str, int] = field(default_factory=dict)
     preferred_date: str = ""
     flight_option: str = ""
     currency: str = ""

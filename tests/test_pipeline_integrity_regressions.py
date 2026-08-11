@@ -107,9 +107,6 @@ def test_new_traveler_reaches_trip_type_step_with_a_resolved_traveler_id(runtime
     session = runtime.create_session()
     for text in ("01270482380", "Nadia Samir Fouad", "Egyptian", "10/03/1995"):
         session = _send(runtime, text, session)
-    assert session.stage == "currency_required"
-
-    session = _send(runtime, "1", session)
     assert session.stage == "trip_type_required"
     assert ToolCallingSessionRuntime._linked_ids(session)["traveler_id"] == "TR00500"
 

@@ -480,6 +480,92 @@ class EmployeeFollowupWorkspaceTests(unittest.TestCase):
             )
             self.assertEqual([item.new_user_id for item in history], [first_sales_id, second_sales_id, first_sales_id])
 
+    def test_new_bookings_without_assignee_share_available_sales_round_robin_with_leads(self) -> None:
+        token = self._login(role="manager", username="mona")
+        first_sales_id = self._ensure_user(username="aya", role="sales")
+        second_sales_id = self._ensure_user(username="zain", role="sales")
+        self._ensure_user(username="omar", role="agent")
+        with self.app.app_context():
+            self.db.session.add(
+                self.Traveler(
+                    traveler_id="TR-FU-2",
+                    full_name="Shared Queue Traveler",
+                    normalized_whatsapp="+201088888888",
+                    phone_lookup_key="20:1088888888",
+                )
+            )
+            self.db.session.commit()
+
+        lead_response = self.client.post(
+            "/leads/",
+            data={
+                "csrf_token": token,
+                "customer_name": "Shared Queue Lead",
+                "raw_phone": "201066666666",
+                "lead_stage": "Contacted",
+                "priority": "Medium",
+                "lead_source": "WhatsApp",
+            },
+        )
+        self.assertEqual(lead_response.status_code, 302)
+
+        booking_response = self.client.post(
+            "/bookings/",
+            data={
+                "csrf_token": token,
+                "trip_id": "TRIP-FU-1",
+                "traveler_id": "TR-FU-2",
+                "room_type": "Single",
+                "booking_source": "Admin",
+                "payment_status": "Pending",
+                "currency": "USD",
+            },
+        )
+        self.assertEqual(booking_response.status_code, 302)
+
+        second_lead_response = self.client.post(
+            "/leads/",
+            data={
+                "csrf_token": token,
+                "customer_name": "Shared Queue Lead Two",
+                "raw_phone": "201077777777",
+                "lead_stage": "Contacted",
+                "priority": "Medium",
+                "lead_source": "WhatsApp",
+            },
+        )
+        self.assertEqual(second_lead_response.status_code, 302)
+
+        with self.app.app_context():
+            first_lead = self.Lead.query.filter_by(customer_name="Shared Queue Lead").one()
+            created_booking = (
+                self.TripBooking.query
+                .filter(self.TripBooking.booking_id != "B-FU-1")
+                .order_by(self.TripBooking.draft_created_at.desc(), self.TripBooking.booking_id.desc())
+                .first()
+            )
+            second_lead = self.Lead.query.filter_by(customer_name="Shared Queue Lead Two").one()
+
+            self.assertIsNotNone(created_booking)
+            self.assertEqual(first_lead.assigned_to_user_id, first_sales_id)
+            self.assertEqual(created_booking.assigned_to_user_id, second_sales_id)
+            self.assertEqual(second_lead.assigned_to_user_id, first_sales_id)
+
+            history = (
+                self.AssignmentHistory.query
+                .filter(
+                    self.AssignmentHistory.resource_id.in_(
+                        [first_lead.lead_id, created_booking.booking_id, second_lead.lead_id]
+                    )
+                )
+                .order_by(self.AssignmentHistory.id.asc())
+                .all()
+            )
+            self.assertEqual(
+                [(item.resource_type, item.new_user_id) for item in history],
+                [("lead", first_sales_id), ("booking", second_sales_id), ("lead", first_sales_id)],
+            )
+
     def test_explicit_manual_assignment_overrides_auto_assignment(self) -> None:
         token = self._login(role="manager", username="mona")
         self._ensure_user(username="aya", role="sales")

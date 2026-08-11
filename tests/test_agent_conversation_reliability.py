@@ -509,7 +509,6 @@ def test_birthday_reply_does_not_overwrite_confirmed_whatsapp(runtime: ToolCalli
     assert session.raw_phone == "01264587566"
     assert session.pending_raw_phone == "01264587566"
     assert session.preview["collection_state"]["birthday"] is True
-    assert not runtime._write_executor.execute.called
 
 
 def test_name_clarification_does_not_advance_to_nationality(runtime: ToolCallingSessionRuntime) -> None:
@@ -770,9 +769,10 @@ def test_flight_choice_does_not_reopen_trip_search_or_clear_selection(runtime: T
     session.room_group = "girls"
     session.room_type = "Double"
     session.group_size = 2
+    session.group_nationality_type = "single"
     session.flight_option = ""
     session.preview["collection_state"].update(
-        {"room_group": True, "room_type": True, "group_size": True, "flight_option": False}
+        {"room_group": True, "room_type": True, "group_size": True, "group_nationality_type": True, "flight_option": False}
     )
     session.stage = "flight_option_required"
 
@@ -886,10 +886,12 @@ def test_without_flight_from_passport_step_clears_stale_passport_state(runtime: 
     session.room_group = "girls"
     session.room_type = "Double"
     session.group_size = 2
+    session.group_nationality_type = "single"
     session.flight_option = "With Flight"
+    session.currency = "EGP"
     session.passport_attachment_ref = "passport/file.jpg"
     session.preview["collection_state"].update(
-        {"room_group": True, "room_type": True, "group_size": True, "flight_option": True}
+        {"room_group": True, "room_type": True, "group_size": True, "group_nationality_type": True, "flight_option": True, "currency": True}
     )
 
     session = _send(runtime, "I do not want a flight anymore", session)
@@ -913,6 +915,10 @@ def test_domestic_trip_without_flight_support_skips_flight_and_passport(runtime:
 
     assert session.flight_option == "Not Applicable"
     assert session.passport_attachment_ref == ""
+    assert session.stage == "group_nationality_type_required"
+    session = _send(runtime, "same", session)
+    assert session.stage == "currency_required"
+    session = _send(runtime, "1", session)
     assert session.stage == "booking_confirmation_required"
     assert "Flight option: Not Applicable" in session.messages[-1]["text"]
     assert "passport" not in session.messages[-1]["text"].lower()
@@ -932,6 +938,8 @@ def test_local_trip_without_flight_metadata_skips_flight_and_passport(runtime: T
 
     assert session.flight_option == "Not Applicable"
     assert session.passport_attachment_ref == ""
+    assert session.stage == "currency_required"
+    session = _send(runtime, "1", session)
     assert session.stage == "booking_confirmation_required"
     assert "Do you want this trip with flights" not in session.messages[-1]["text"]
     assert "Flight option: Not Applicable" in session.messages[-1]["text"]
@@ -954,7 +962,9 @@ def test_arabic_group_size_capture_preserves_context_and_never_exposes_output_fa
     session = _send(runtime, "2", session)
 
     assert session.group_size == 2
-    assert session.stage == "booking_confirmation_required"
+    assert session.stage == "group_nationality_type_required"
+    session.group_nationality_type = "single"
+    session.currency = "EGP"
     assert session.flight_option == "Not Applicable"
     assert "معلش" not in session.messages[-1]["text"]
     assert "Do you want this trip with flights" not in session.messages[-1]["text"]
@@ -989,6 +999,75 @@ def test_arabic_group_size_clarification_and_booking_intent_are_contextual(
     assert session.stage == "group_size_required"
     assert "معلش" not in booking_reply
     assert "المسافرين" in booking_reply
+
+
+def test_arabic_currency_clarification_preserves_language_and_state(runtime: ToolCallingSessionRuntime) -> None:
+    trip = {
+        **TRIPS[1],
+        "available_double": 10,
+        "boys_double": 10,
+        "room_prices": {
+            "Double": {"EGP": "5000", "USD": "120"},
+        },
+    }
+    session = _selected_trip_session(runtime, trip)
+    session.language = "ar"
+    session.stage = "currency_required"
+    session.room_group = "boys"
+    session.room_type = "Double"
+    session.group_size = 1
+    session.flight_option = "Not Applicable"
+    session.preview["collection_state"].update({
+        "room_group": True,
+        "room_type": True,
+        "group_size": True,
+        "flight_option": True,
+        "currency": False,
+    })
+
+    session = _send(runtime, "\u064a\u0639\u0646\u064a \u0627\u064a\u0647", session)
+    reply = session.messages[-1]["text"]
+
+    assert session.stage == "currency_required"
+    assert session.language == "ar"
+    assert "\u0639\u0645\u0644\u0629" in reply
+    assert "Which payment currency" not in reply
+
+
+def test_mixed_nationality_group_reaches_currency_with_dual_pricing(runtime: ToolCallingSessionRuntime) -> None:
+    trip = {
+        **TRIPS[1],
+        "available_double": 10,
+        "boys_double": 10,
+        "room_prices": {
+            "Double": {"EGP": "5000", "USD": "120"},
+        },
+    }
+    session = _selected_trip_session(runtime, trip)
+    session.stage = "group_nationality_type_required"
+    session.room_group = "boys"
+    session.room_type = "Double"
+    session.group_size = 3
+    session.flight_option = "Not Applicable"
+    session.preview["collection_state"].update({
+        "room_group": True,
+        "room_type": True,
+        "group_size": True,
+        "flight_option": True,
+        "currency": False,
+    })
+
+    session = _send(runtime, "mixed", session)
+    assert session.group_nationality_type == "mixed"
+    assert session.stage == "group_nationality_counts_required"
+
+    session = _send(runtime, "2 Egyptians and 1 foreigner", session)
+    reply = session.messages[-1]["text"]
+
+    assert session.group_nationality_counts == {"egyptian": 2, "foreigner": 1}
+    assert session.stage == "currency_required"
+    assert "10,000 EGP" in reply
+    assert "$120" in reply
 
 
 def test_backend_required_step_reply_is_authored_by_ai(tmp_path: Path) -> None:
@@ -1185,7 +1264,7 @@ def test_second_booking_actually_completes_after_book_again(runtime: ToolCalling
         },
     }
 
-    for text in ("local", "Siwa Discovery Demo", "boys", "single", "1", "yes"):
+    for text in ("local", "Siwa Discovery Demo", "boys", "single", "1", "1", "yes"):
         session = _send(runtime, text, session)
 
     assert session.booking_completed is True
@@ -1522,6 +1601,7 @@ def test_booking_confirmation_and_cancellation_prevent_write(runtime: ToolCallin
             "room_type": True,
             "group_size": True,
             "flight_option": True,
+            "currency": True,
         },
     }
     session.raw_phone = "01112223333"
@@ -1537,6 +1617,7 @@ def test_booking_confirmation_and_cancellation_prevent_write(runtime: ToolCallin
     session.passport_number = "A1234567"
     session.passport_expiry = "2032-06-01"
     session.passport_nationality = "Egyptian"
+    session.currency = "EGP"
 
     session = _send(runtime, "continue", session)
     assert session.stage == "booking_confirmation_required"

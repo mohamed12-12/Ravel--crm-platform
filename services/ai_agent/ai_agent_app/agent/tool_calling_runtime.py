@@ -70,6 +70,8 @@ SAFE_STATUS_MAP = {
     "room_type_required": "Waiting for customer response",
     "traveler_gender_required": "Waiting for customer response",
     "group_size_required": "Waiting for customer response",
+    "group_nationality_type_required": "Waiting for customer response",
+    "group_nationality_counts_required": "Waiting for customer response",
     "capacity_handoff_required": "Human review required",
     "flight_option_required": "Waiting for customer response",
     "nationality_required": "Waiting for customer response",
@@ -157,6 +159,8 @@ _BACKEND_OWNED_COLLECTION_STEPS = {
     "collect_traveler_gender",
     "collect_room_type",
     "collect_group_size",
+    "collect_group_nationality_type",
+    "collect_group_nationality_counts",
     "collect_flight_preference",
     "collect_passport_attachment",
     "collect_passport_number",
@@ -351,6 +355,8 @@ class ToolCallingSessionRuntime:
                 "room_type": session.room_type,
                 "room_requirements": dict(session.room_requirements or {}),
                 "group_size": session.group_size,
+                "group_nationality_type": session.group_nationality_type,
+                "group_nationality_counts": dict(session.group_nationality_counts or {}),
                 "flight_option": session.flight_option,
             },
             "user_messages": user_messages[-20:],
@@ -425,6 +431,8 @@ class ToolCallingSessionRuntime:
             "room_type": session.room_type,
             "room_group": session.room_group,
             "room_requirements": dict(session.room_requirements or {}),
+            "group_nationality_type": session.group_nationality_type,
+            "group_nationality_counts": dict(session.group_nationality_counts or {}),
             "currency": session.currency,
             "is_minor": is_minor,
             "open_lead_id": session._open_lead_id,
@@ -461,6 +469,8 @@ class ToolCallingSessionRuntime:
                 "room_type": session.room_type,
                 "room_group": session.room_group,
                 "room_requirements": dict(session.room_requirements or {}),
+                "group_nationality_type": session.group_nationality_type,
+                "group_nationality_counts": dict(session.group_nationality_counts or {}),
                 "currency": session.currency,
             },
             "conversation_history": list(session.messages[-12:]),
@@ -851,6 +861,8 @@ class ToolCallingSessionRuntime:
             "room_type": bool(stored.get("room_type") or session.room_type or session.room_requirements),
             "room_group": bool(stored.get("room_group") or session.room_group),
             "group_size": bool(stored.get("group_size")),
+            "group_nationality_type": bool(stored.get("group_nationality_type") or session.group_nationality_type),
+            "group_nationality_counts": bool(stored.get("group_nationality_counts") or session.group_nationality_counts),
             "flight_option": bool(stored.get("flight_option") or session.flight_option),
             "currency": bool(stored.get("currency") or session.currency),
         }
@@ -1758,6 +1770,14 @@ class ToolCallingSessionRuntime:
             return "I don't recognize that nationality. Could you type it as it appears on your passport or ID? For example: Egyptian, Saudi."
         if step == "collect_group_size":
             return "كم عدد المسافرين في الطلب؟" if language.startswith("ar") else "How many travelers should I include in the request?"
+        if step == "collect_group_nationality_type":
+            if language.startswith("ar"):
+                return "محتاج أعرف هل المجموعة كلها نفس فئة السعر أم مختلطة بين مصريين وأجانب، لأن سعر المصريين يكون بالجنيه وسعر الأجانب بالدولار من CRM."
+            return "I need to know whether the group is one pricing nationality group or mixed, because Egyptians use EGP pricing and foreigners use USD pricing from CRM."
+        if step == "collect_group_nationality_counts":
+            if language.startswith("ar"):
+                return "للمجموعة المختلطة، اكتب عدد المصريين وعدد الأجانب حتى أحسب الإجمالي من أسعار CRM فقط."
+            return "For a mixed group, send the Egyptian and foreigner counts so I can calculate the CRM-backed total only."
         if step == "collect_flight_preference":
             return (
                 "\u062a\u062d\u0628 \u0627\u0644\u0631\u062d\u0644\u0629 \u0645\u0639 \u0637\u064a\u0631\u0627\u0646 \u0623\u0645 \u0628\u062f\u0648\u0646 \u0637\u064a\u0631\u0627\u0646\u061f\n\n1. \u0645\u0639 \u0637\u064a\u0631\u0627\u0646\n2. \u0628\u062f\u0648\u0646 \u0637\u064a\u0631\u0627\u0646"
@@ -1794,6 +1814,10 @@ class ToolCallingSessionRuntime:
             return any(token in normalized for token in ("room", "single", "double", "triple", "غرفة"))
         if required_step == "collect_group_size":
             return any(token in normalized for token in ("traveler", "people", "مسافر", "عدد"))
+        if required_step == "collect_group_nationality_type":
+            return any(token in normalized for token in ("same", "single", "mixed", "egyptian", "foreigner", "nationality", "group", "مصري", "اجنبي", "أجنبي", "مختلط"))
+        if required_step == "collect_group_nationality_counts":
+            return any(token in normalized for token in ("egyptian", "foreigner", "foreigners", "مصري", "اجنبي", "أجنبي"))
         if required_step == "collect_flight_preference":
             return any(token in normalized for token in ("flight", "without", "طيران"))
         if required_step == "collect_passport_attachment":
@@ -2101,6 +2125,8 @@ class ToolCallingSessionRuntime:
                 )
         elif step == "collect_group_size":
             prompt = "\u0643\u0645 \u0639\u062f\u062f \u0627\u0644\u0645\u0633\u0627\u0641\u0631\u064a\u0646 \u0641\u064a \u0637\u0644\u0628 \u0627\u0644\u062d\u062c\u0632\u061f" if language.startswith("ar") else "How many travelers should I put on this booking request?"
+        elif step in {"collect_group_nationality_type", "collect_group_nationality_counts"}:
+            prompt = self._normalize_reply(decision.assistant_message, language)
         elif step == "collect_flight_preference":
             prompt = (
                 "\u062a\u062d\u0628 \u0627\u0644\u0631\u062d\u0644\u0629 \u0645\u0639 \u0637\u064a\u0631\u0627\u0646 \u0623\u0645 \u0628\u062f\u0648\u0646 \u0637\u064a\u0631\u0627\u0646\u061f\n\n1. \u0645\u0639 \u0637\u064a\u0631\u0627\u0646\n2. \u0628\u062f\u0648\u0646 \u0637\u064a\u0631\u0627\u0646"
@@ -2464,10 +2490,12 @@ class ToolCallingSessionRuntime:
         session.preferred_date = ""
         session.flight_option = ""
         session.currency = ""
+        session.group_nationality_type = ""
+        session.group_nationality_counts = {}
         session.booking_confirmation_requested = False
         session.booking_confirmed = False
         session.stage = "new_booking_intent"
-        self._update_collection_state(session, trip_type=False, selected_trip=False, room_type=False, room_group=False, group_size=False, flight_option=False, currency=False)
+        self._update_collection_state(session, trip_type=False, selected_trip=False, room_type=False, room_group=False, group_size=False, group_nationality_type=False, group_nationality_counts=False, flight_option=False, currency=False)
 
     def _post_booking_reply(self, session: SessionState, clean_text: str) -> str:
         record = self._post_booking_record(session)
@@ -3119,10 +3147,12 @@ class ToolCallingSessionRuntime:
         session.group_size = 1
         session.flight_option = ""
         session.currency = ""
+        session.group_nationality_type = ""
+        session.group_nationality_counts = {}
         session.booking_confirmation_requested = False
         session.booking_confirmed = False
         self._clear_passport_state(session)
-        self._update_collection_state(session, room_type=False, room_group=False, group_size=False, flight_option=False, currency=False)
+        self._update_collection_state(session, room_type=False, room_group=False, group_size=False, group_nationality_type=False, group_nationality_counts=False, flight_option=False, currency=False)
 
     def _reset_booking_state(self, session: SessionState) -> None:
         session.trip_type = ""
@@ -4682,6 +4712,34 @@ class ToolCallingSessionRuntime:
         return counts
 
     @classmethod
+    def _extract_nationality_group_counts(cls, text: str) -> dict[str, int]:
+        lowered = str(text or "").strip().casefold()
+        counts = {"egyptian": 0, "foreigner": 0}
+        group_terms = {
+            "egyptian": ("egyptian", "egypt", "مصري", "مصرى", "مصريين"),
+            "foreigner": ("foreigner", "foreign", "non egyptian", "non-egyptian", "اجنبي", "أجنبي", "اجانب", "أجانب"),
+        }
+        number_pattern = r"[1-9][0-9]?|one|two|three|four|five|six|seven|eight|nine"
+        for group, terms in group_terms.items():
+            for term in terms:
+                for match in re.finditer(
+                    rf"(?:\b({number_pattern})\s+{re.escape(term)}s?\b)|(?:\b{re.escape(term)}s?\s+([1-9][0-9]?)\b)",
+                    lowered,
+                ):
+                    counts[group] += cls._number_from_text(match.group(1) or match.group(2) or "1") or 1
+        return counts
+
+    @staticmethod
+    def _same_nationality_group_answer(text: str, option_number: int = 0) -> bool:
+        lowered = " ".join(str(text or "").strip().casefold().split())
+        return option_number == 1 or lowered in {"same", "single", "same group", "one group", "same nationality", "1", "نفس الفئة", "نفس الجنسيه", "نفس الجنسية"}
+
+    @staticmethod
+    def _mixed_nationality_group_answer(text: str, option_number: int = 0) -> bool:
+        lowered = " ".join(str(text or "").strip().casefold().split())
+        return option_number == 2 or any(token in lowered for token in ("mixed", "egyptian and foreign", "egyptians and foreigners", "مصري", "اجنبي", "أجنبي", "مختلط"))
+
+    @classmethod
     def _has_mixed_group_hint(cls, text: str) -> bool:
         lowered = " ".join(str(text or "").strip().casefold().split())
         if not lowered:
@@ -5041,6 +5099,9 @@ class ToolCallingSessionRuntime:
 
         room_type = str(hints.get("candidate_room_type") or "").strip()
         room_group = str(hints.get("candidate_room_group") or "").strip()
+        if session.stage in {"group_nationality_type_required", "group_nationality_counts_required"}:
+            room_type = ""
+            room_group = ""
         if is_exploratory:
             if room_type:
                 agent_logger.info(
@@ -5298,6 +5359,28 @@ class ToolCallingSessionRuntime:
                 # the original trip search cached minutes (or sessions) ago.
                 self._refresh_selected_trip_capacity(session)
                 self._ensure_room_requirements_for_group(session)
+                return True
+            return False
+        if session.stage == "group_nationality_type_required" and not session.group_nationality_type:
+            if self._same_nationality_group_answer(normalized_text, option_number):
+                session.group_nationality_type = "single"
+                session.group_nationality_counts = {}
+                self._update_collection_state(session, group_nationality_type=True, group_nationality_counts=False)
+                return True
+            if self._mixed_nationality_group_answer(normalized_text, option_number):
+                session.group_nationality_type = "mixed"
+                counts = self._extract_nationality_group_counts(normalized_text)
+                if counts["egyptian"] or counts["foreigner"]:
+                    session.group_nationality_counts = counts
+                    self._update_collection_state(session, group_nationality_counts=True)
+                self._update_collection_state(session, group_nationality_type=True)
+                return True
+            return False
+        if session.stage == "group_nationality_counts_required":
+            counts = self._extract_nationality_group_counts(normalized_text)
+            if counts["egyptian"] or counts["foreigner"]:
+                session.group_nationality_counts = counts
+                self._update_collection_state(session, group_nationality_counts=True)
                 return True
             return False
         if session.stage == "flight_option_required" and not session.flight_option:

@@ -74,6 +74,7 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         from app.models.handoff import HandoffQueue
         from app.models.interaction import Interaction
         from app.models.lead import Lead
+        from app.models.trip import Trip
         from app.models.traveler import Traveler
         from app.models.traveler_document import TravelerDocument
 
@@ -87,6 +88,7 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         self.HandoffQueue = HandoffQueue
         self.BookingEventTrail = BookingEventTrail
         self.TravelerDocument = TravelerDocument
+        self.Trip = Trip
 
         app = create_app()
         create_app_db_schema(app)
@@ -349,6 +351,61 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         response = client.get("/travelers/")
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("TR00999", response.get_data(as_text=True))
+
+    def test_index_displays_revenue_aggregated_by_booking_currency(self) -> None:
+        app, db, workbook_path = self._build_app()
+        client = app.test_client()
+
+        with app.app_context():
+            self.db.session.add(
+                self.Traveler(
+                    traveler_id="TR02000",
+                    full_name="Revenue Traveler",
+                    status="Active",
+                    normalized_whatsapp="201000000000",
+                )
+            )
+            self.db.session.add(
+                self.Trip(
+                    trip_id="RT-REV-1",
+                    trip_name="Revenue Trip",
+                    type="Local",
+                    room_prices_json='{"Double":{"USD":"1000","EGP":"50000"}}',
+                    sales_status="Open",
+                )
+            )
+            self.db.session.add_all([
+                self.TripBooking(
+                    booking_id="BK-REV-USD",
+                    trip_id="RT-REV-1",
+                    traveler_id="TR02000",
+                    traveler_name="Revenue Traveler",
+                    room_type="Double",
+                    currency="USD",
+                    group_size=1,
+                    booking_status="Confirmed",
+                    payment_status="Fully Paid",
+                ),
+                self.TripBooking(
+                    booking_id="BK-REV-EGP",
+                    trip_id="RT-REV-1",
+                    traveler_id="TR02000",
+                    traveler_name="Revenue Traveler",
+                    room_type="Double",
+                    currency="EGP",
+                    group_size=1,
+                    booking_status="Confirmed",
+                    payment_status="Paid",
+                ),
+            ])
+            self.db.session.commit()
+
+        response = client.get("/travelers/")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("REVENUE", body)
+        self.assertIn("$1,000.00 / 50,000.00 EGP", body)
 
 
     def test_index_hides_archived_and_inactive_travelers_by_default_and_shows_filter(self) -> None:
