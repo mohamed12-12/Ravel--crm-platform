@@ -28,6 +28,7 @@ def _make_app(tmpdir: Path):
     from app.extensions import db as local_db
     app = create_app("development")
     app.config["TESTING"] = True
+    app.config["TRAVELER_UPLOAD_ROOT"] = str(tmpdir / "uploads")
     with app.app_context():
         local_db.create_all()
         local_db.session.add_all([
@@ -132,6 +133,63 @@ class PassportAttachmentTests(unittest.TestCase):
             self.assertEqual(docs, 3)
             traveler = conn.execute("SELECT passport_number FROM travelers WHERE traveler_id = ?", ('TR900',)).fetchone()
             self.assertEqual(traveler[0], 'A123453')
+
+    def test_payment_screenshot_upload_does_not_update_passport_fields(self) -> None:
+        client, app, db_path = _make_app(self.tmpdir)
+        with app.app_context():
+            from app.extensions import db as local_db
+
+            traveler = Traveler.query.filter_by(traveler_id="TR900").one()
+            traveler.passport_name = "Original Passport Name"
+            traveler.passport_number = "ORIGINAL123"
+            traveler.passport_nationality = "Egyptian"
+            traveler.passport_attachment_ref = "TR900/original-passport.pdf"
+            local_db.session.commit()
+
+        resp = client.post(
+            '/travelers/TR900/documents',
+            data={
+                'category': 'payment_screenshot',
+                'passport_full_name': 'Malicious Passport Name',
+                'passport_number': 'OVERWRITE999',
+                'passport_nationality': 'Overwrite Nationality',
+                'passport_expiry': '2040-01-01',
+                'notes': 'Deposit receipt',
+                'file': (io.BytesIO(b'png-payment-screenshot'), 'payment.png', 'image/png'),
+            },
+            content_type='multipart/form-data',
+            follow_redirects=False,
+        )
+
+        self.assertEqual(resp.status_code, 302)
+        with sqlite3.connect(db_path) as conn:
+            doc = conn.execute(
+                """
+                SELECT category, original_file_name, passport_full_name, passport_number, notes
+                FROM traveler_documents
+                WHERE traveler_id = ?
+                """,
+                ('TR900',),
+            ).fetchone()
+            self.assertEqual(doc[0], 'payment_screenshot')
+            self.assertEqual(doc[1], 'payment.png')
+            self.assertIsNone(doc[2])
+            self.assertIsNone(doc[3])
+            self.assertEqual(doc[4], 'Deposit receipt')
+
+            traveler = conn.execute(
+                """
+                SELECT passport_name, passport_number, passport_nationality, passport_expiry, passport_attachment_ref
+                FROM travelers
+                WHERE traveler_id = ?
+                """,
+                ('TR900',),
+            ).fetchone()
+            self.assertEqual(traveler[0], 'Original Passport Name')
+            self.assertEqual(traveler[1], 'ORIGINAL123')
+            self.assertEqual(traveler[2], 'Egyptian')
+            self.assertIsNone(traveler[3])
+            self.assertEqual(traveler[4], 'TR900/original-passport.pdf')
 
     def test_upload_rejects_invalid_type_and_oversize(self) -> None:
         client, app, db_path = _make_app(self.tmpdir)

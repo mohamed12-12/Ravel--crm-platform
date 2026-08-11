@@ -116,7 +116,7 @@
 
             <div class="card">
                 <div class="card-header">
-                    <h3 class="card-title">Documents / Passport</h3>
+                    <h3 class="card-title">Documents</h3>
                     <span style="font-size:0.75rem;color:var(--text-muted)">{{ documents|length if documents is defined else 0 }} file(s)</span>
                 </div>
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem;padding:0.95rem 1rem;border:1px solid var(--border);border-radius:0.75rem;background:var(--bg-base)">
@@ -147,7 +147,7 @@
                     <input type="hidden" name="category" value="passport">
                     <input type="file" name="file" accept=".jpg,.jpeg,.png,.pdf" required style="flex:1;min-width:220px">
                     <input type="text" name="notes" placeholder="Upload notes" style="flex:1;min-width:160px;padding:0.6rem 0.8rem;background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
-                    <button type="submit" class="btn btn-primary btn-sm">Upload Document</button>
+                    <button type="submit" class="btn btn-primary btn-sm">Upload Passport</button>
                 </form>
                 {% if passport_documents %}
                 <div style="display:flex;flex-direction:column;gap:0.65rem;max-height:180px;overflow-y:auto;padding-right:0.35rem;margin-bottom:0.9rem">
@@ -169,13 +169,51 @@
                     {% endfor %}
                 </div>
                 {% endif %}
-                {% if documents %}
+
+                <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.75rem">
+                        <div style="font-size:0.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em">Payment Screenshots</div>
+                        <span style="font-size:0.75rem;color:var(--text-muted)">{{ payment_screenshot_documents|length if payment_screenshot_documents is defined else 0 }} file(s)</span>
+                    </div>
+                    <form action="{{ url_for('travelers.upload_document', traveler_id=traveler.traveler_id) }}" method="POST" enctype="multipart/form-data" style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;margin-bottom:0.9rem">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="category" value="payment_screenshot">
+                        <input type="file" name="file" accept=".jpg,.jpeg,.png,.pdf" required style="flex:1;min-width:220px">
+                        <input type="text" name="notes" placeholder="Payment reference or notes" style="flex:1;min-width:160px;padding:0.6rem 0.8rem;background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
+                        <button type="submit" class="btn btn-primary btn-sm">Upload Screenshot</button>
+                    </form>
+                    {% if payment_screenshot_documents %}
+                    <div style="display:flex;flex-direction:column;gap:0.65rem;max-height:180px;overflow-y:auto;padding-right:0.35rem;margin-bottom:0.9rem">
+                        {% for item in payment_screenshot_documents %}
+                        {% set doc = item.document %}
+                        <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:0.7rem 0.85rem;display:flex;justify-content:space-between;gap:0.75rem;align-items:center">
+                            <div>
+                                <strong style="font-size:0.88rem;color:var(--text-main)">{{ doc.original_file_name or doc.file_name }}</strong>
+                                <div class="mono" style="font-size:0.72rem;color:var(--text-muted)">{{ doc.uploaded_at.strftime('%d %b %Y %H:%M') if doc.uploaded_at else '—' }}</div>
+                            </div>
+                            <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+                                <span class="badge {% if item.exists %}badge-green{% else %}badge-yellow{% endif %}">{{ 'Available' if item.exists else 'Missing' }}</span>
+                                {% if item.exists %}
+                                <a href="{{ url_for('travelers.view_document', traveler_id=traveler.traveler_id, document_id=doc.document_id) }}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">Open</a>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:0.9rem">No payment screenshots uploaded yet.</p>
+                    {% endif %}
+                </div>
+
+                {% if other_documents %}
                 <div style="display:flex;flex-direction:column;gap:0.65rem;max-height:280px;overflow-y:auto;padding-right:0.35rem">
-                    {% for doc in documents %}
+                    <div style="font-size:0.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em">Other Documents</div>
+                    {% for item in other_documents %}
+                    {% set doc = item.document %}
                     <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:0.75rem 0.9rem">
                         <div style="display:flex;justify-content:space-between;gap:1rem;align-items:center">
                             <div>
-                                <strong style="font-size:0.88rem;color:var(--text-main)">{{ doc.category or 'document' }}</strong>
+                                <strong style="font-size:0.88rem;color:var(--text-main)">{{ document_category_labels.get(doc.category, doc.category or 'Document') if document_category_labels is defined else (doc.category or 'Document') }}</strong>
                                 <div class="mono" style="font-size:0.72rem;color:var(--text-muted)">{{ doc.original_file_name or doc.file_name }}</div>
                             </div>
                             <span class="badge badge-blue">{{ doc.file_extension or 'file' }}</span>
@@ -189,7 +227,7 @@
                     {% endfor %}
                 </div>
                 {% else %}
-                <p style="font-size:0.85rem;color:var(--text-muted)">No documents uploaded yet.</p>
+                <p style="font-size:0.85rem;color:var(--text-muted)">No other documents uploaded yet.</p>
                 {% endif %}
             </div>
 

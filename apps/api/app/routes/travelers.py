@@ -32,6 +32,11 @@ BLACKLIST_FILTER_STATUSES = {"blacklisted", "blocked"}
 _ALLOWED_DOC_EXTENSIONS = {"jpg", "jpeg", "png", "pdf"}
 _ALLOWED_DOC_MIME_TYPES = {"image/jpeg", "image/png", "application/pdf"}
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+DOCUMENT_CATEGORY_LABELS = {
+    "passport": "Passport",
+    "payment_screenshot": "Payment Screenshot",
+    "document": "Document",
+}
 
 
 def _build_revenue_summary(lifetime_revenue_usd: float | int | None, preferred_currency: str, usd_to_egp_rate: float) -> dict[str, str]:
@@ -78,6 +83,11 @@ def _safe_document_path(base_dir: Path, filename: str) -> Path:
     if base_resolved not in dest.parents and dest != base_resolved:
         raise ValueError('Unsafe upload path')
     return dest
+
+
+def _normalize_document_category(value: str | None) -> str:
+    category = (value or "passport").strip().lower().replace("-", "_").replace(" ", "_")
+    return category if category in DOCUMENT_CATEGORY_LABELS else "document"
 
 
 def _phone_match_filter(service: UnifiedCRMService, phone_info: dict[str, str]):
@@ -328,21 +338,26 @@ def detail(traveler_id):
     documents = TravelerDocument.query.filter_by(traveler_id=traveler_id).order_by(TravelerDocument.uploaded_at.desc()).all()
     docs_root = _documents_root().resolve()
     passport_documents = []
+    payment_screenshot_documents = []
+    other_documents = []
     for doc in documents:
-        is_passport = (doc.category or "").strip().lower() == "passport"
+        category = _normalize_document_category(doc.category)
         doc_path = Path(doc.storage_path)
         if not doc_path.is_absolute():
             doc_path = (_documents_root() / doc_path).resolve()
         else:
             doc_path = doc_path.resolve()
         doc_exists = (docs_root in doc_path.parents or doc_path == docs_root) and doc_path.exists()
-        if is_passport:
-            passport_documents.append(
-                {
-                    "document": doc,
-                    "exists": doc_exists,
-                }
-            )
+        document_item = {
+            "document": doc,
+            "exists": doc_exists,
+        }
+        if category == "passport":
+            passport_documents.append(document_item)
+        elif category == "payment_screenshot":
+            payment_screenshot_documents.append(document_item)
+        else:
+            other_documents.append(document_item)
     passport_document = passport_documents[0]["document"] if passport_documents else None
     passport_document_exists = passport_documents[0]["exists"] if passport_documents else False
     interactions = Interaction.query.filter_by(traveler_id=traveler_id).order_by(Interaction.timestamp.desc()).all()
@@ -379,6 +394,9 @@ def detail(traveler_id):
         documents=documents,
         passport_document=passport_document,
         passport_documents=passport_documents,
+        payment_screenshot_documents=payment_screenshot_documents,
+        other_documents=other_documents,
+        document_category_labels=DOCUMENT_CATEGORY_LABELS,
         passport_document_exists=passport_document_exists,
         trip_type_map=trip_type_map,
         interactions=interactions,
@@ -627,7 +645,8 @@ def upload_document(traveler_id):
     storage_path = _safe_document_path(docs_root, original_name)
     f.save(storage_path)
 
-    category = (request.form.get('category') or 'passport').strip() or 'passport'
+    category = _normalize_document_category(request.form.get('category'))
+    is_passport = category == "passport"
     document = TravelerDocument(
         traveler_id=traveler_id,
         category=category,
@@ -638,18 +657,19 @@ def upload_document(traveler_id):
         file_size=size,
         storage_path=str(storage_path),
         uploaded_by=request.form.get('uploaded_by') or 'crm-ui',
-        passport_full_name=request.form.get('passport_full_name') or traveler.passport_name,
-        passport_number=request.form.get('passport_number') or traveler.passport_number,
-        passport_nationality=request.form.get('passport_nationality') or traveler.passport_nationality,
-        passport_expiry=_parse_date(request.form.get('passport_expiry')),
+        passport_full_name=(request.form.get('passport_full_name') or traveler.passport_name) if is_passport else None,
+        passport_number=(request.form.get('passport_number') or traveler.passport_number) if is_passport else None,
+        passport_nationality=(request.form.get('passport_nationality') or traveler.passport_nationality) if is_passport else None,
+        passport_expiry=_parse_date(request.form.get('passport_expiry')) if is_passport else None,
         verification_status=request.form.get('verification_status') or 'pending',
         notes=request.form.get('notes'),
     )
-    traveler.passport_name = document.passport_full_name or traveler.passport_name
-    traveler.passport_number = document.passport_number or traveler.passport_number
-    traveler.passport_nationality = document.passport_nationality or traveler.passport_nationality
-    traveler.passport_expiry = document.passport_expiry or traveler.passport_expiry
-    traveler.passport_attachment_ref = str(storage_path.relative_to(_documents_root())) if storage_path.is_relative_to(_documents_root()) else str(storage_path)
+    if is_passport:
+        traveler.passport_name = document.passport_full_name or traveler.passport_name
+        traveler.passport_number = document.passport_number or traveler.passport_number
+        traveler.passport_nationality = document.passport_nationality or traveler.passport_nationality
+        traveler.passport_expiry = document.passport_expiry or traveler.passport_expiry
+        traveler.passport_attachment_ref = str(storage_path.relative_to(_documents_root())) if storage_path.is_relative_to(_documents_root()) else str(storage_path)
     db.session.add(document)
     db.session.commit()
 
