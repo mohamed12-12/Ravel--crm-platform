@@ -25,6 +25,7 @@ from services.crm.system_services.phone_normalization import normalize_phone_inp
 from services.crm.system_services.trip_pricing import price_for_room_and_currency
 from services.data_authority import load_data_authority
 from app.security import can_view_all_records, current_user_id, has_permission
+from app.services.traveler_stats import recalculate_traveler_stats
 
 travelers_bp = Blueprint('travelers', __name__, url_prefix='/travelers')
 ARCHIVE_LIKE_STATUSES = {"inactive", "archived", "blacklisted", "blocked"}
@@ -402,7 +403,7 @@ def index():
 @travelers_bp.route('/<traveler_id>')
 def detail(traveler_id):
     try:
-        UnifiedCRMService().recalculate_traveler_stats(traveler_id)
+        recalculate_traveler_stats(traveler_id)
     except Exception:
         pass
     traveler = db.get_or_404(Traveler, traveler_id)

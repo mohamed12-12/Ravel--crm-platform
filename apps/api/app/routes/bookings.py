@@ -29,6 +29,7 @@ from app.security import (
     current_user_id,
     has_permission,
 )
+from app.services.traveler_stats import recalculate_traveler_stats
 
 logger = logging.getLogger(__name__)
 
@@ -462,6 +463,11 @@ def update_status(booking_id):
             booking.customer_response_status = booking.customer_response_status or 'Contacted'
         booking.booking_notes = _append_note(booking.booking_notes, note_for_service, actor)
         db.session.commit()
+        if booking.traveler_id and (status_for_service or payment_for_service):
+            try:
+                recalculate_traveler_stats(booking.traveler_id)
+            except Exception:
+                pass
     except ValueError as e:
         message = 'Invalid status transition' if 'Invalid booking status transition' in str(e) else str(e)
         flash(message, 'error')
@@ -547,7 +553,7 @@ def delete(booking_id):
                 service._reconcile_trip_room_holds(connection, trip_id)
                 connection.commit()
         if traveler_id:
-            service.recalculate_traveler_stats(traveler_id)
+            recalculate_traveler_stats(traveler_id)
     except Exception:
         pass
 

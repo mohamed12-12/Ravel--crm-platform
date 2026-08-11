@@ -14,9 +14,16 @@ The booking flow asks the traveler for the confirmed payment preference every ti
 
 Finding: "preferred payment method" is not the same implemented concept as the current payment-currency question unless the client is using "method" loosely. The code supports currency preference, not method/channel preference.
 
+**Timing re-check against the new client clarification (ask after trip selection/details, not during intake):** traced both live state machines end to end.
+- Deterministic flow (`session_flow.py`): `awaiting_currency` is only entered from `_advance_after_flight_decision` (`services/ai_agent/ai_agent_app/agent/session_flow.py:1383-1400`), which itself only runs after passport handling (`services/ai_agent/ai_agent_app/agent/session_flow.py:766-792`) — i.e. after trip type, trip selection, room type, group size, and flight preference are already collected. The passport-upload branch also routes into `awaiting_currency` only once the passport step is satisfied (`services/ai_agent/ai_agent_app/agent/session_flow.py:776-779`). No code path sets `awaiting_currency` earlier than this.
+- Tool-calling flow (`workflow_policy.py`): `currency_required`/`collect_payment_currency` is returned only after the group-nationality, flight-option, and passport checks all pass (`services/ai_agent/ai_agent_app/agent/workflow_policy.py:404-489`); the new-traveler onboarding decision path (`services/ai_agent/ai_agent_app/agent/workflow_policy.py:557-619`) never returns a currency step, so onboarding cannot reach it either.
+- Conclusion: both implemented flows already ask for currency only after trip and room/group details are collected, immediately before booking-draft creation. The client's new timing clarification is already satisfied by the current code — **no ordering change is required for Phase 1.** The only remaining open item is the terminology question below.
+
 ## Confirmed requirements this phase must satisfy
 
 From the provided task attachment: "Payment preference question (confirmed: ask every time)." The attachment also instructs to first determine whether "preferred payment method" is the same as the existing currency question or a genuinely separate question, and to flag genuine ambiguity instead of guessing.
+
+**New client clarification (received after this document was first drafted):** the payment-method/currency question must be asked after the customer has chosen their trip and its details (room type, headcount, etc.), not during initial intake and not before trip selection. As shown in "Current state" above, this ordering is already how both `session_flow.py` and `workflow_policy.py` behave today, so this clarification requires no code change — it confirms the existing behavior rather than changing it.
 
 ## Working assumptions (for Phases 6 and 7 specifically)
 
@@ -24,10 +31,11 @@ Not applicable.
 
 ## Design approach
 
-- Do not implement until the business wording is confirmed.
-- If the client means currency: remove returning-traveler shortcuts that skip currency, then ensure every booking path reaches the existing currency-required step before booking draft creation.
-- If the client means method: add a separate `payment_method` concept to traveler/booking or booking-only data, define allowed values with the client, and collect it separately from EGP/USD.
-- In either case, update the agent prompt, workflow policy, session serialization, web chat hints, booking create/update paths, and tests around the affected required step.
+- No ordering change is needed: both `session_flow.py` and `workflow_policy.py` already gate the currency question behind trip type, trip selection, room type, group size, and flight/passport collection. Do not touch the state-machine ordering — doing so would be solving an already-solved problem and risks the currency-loop regressions covered by `tests/test_golden_transcript_regressions.py`.
+- Remaining work is purely the terminology decision, still unconfirmed:
+  - If the client means currency (EGP/USD): no schema or state-machine change is needed at all; this phase closes as "confirmed, already correct" once documented.
+  - If the client means a separate payment method (cash, bank transfer, wallet, etc.): add a distinct `payment_method` concept to traveler/booking or booking-only data, define allowed values with the client, and collect it as its own step positioned the same way (after trip/room/group details, immediately before booking-draft creation) — reusing the existing `awaiting_currency`/`currency_required` placement pattern rather than the currency step itself.
+  - In the payment-method case, update the agent prompt, workflow policy, session serialization, web chat hints, booking create/update paths, and tests for the new step; the existing currency step and its tests stay untouched either way.
 
 ## Dependencies on other phases
 
@@ -35,7 +43,7 @@ This phase should be resolved before Phase 2 and Phase 7 because both touch paym
 
 ## Risks specific to this phase
 
-The risk is semantic, not technical: changing the existing currency step when the client meant bank/cash/wallet would ship the wrong workflow. The current code also has regression coverage around currency loops (`tests/test_golden_transcript_regressions.py:58`, `tests/test_golden_transcript_regressions.py:106-124`, `tests/test_golden_transcript_regressions.py:156-185`), so any implementation must avoid reintroducing that loop.
+The risk is semantic, not technical: changing the existing currency step when the client meant bank/cash/wallet would ship the wrong workflow. Now that the timing question is confirmed already-correct, the main remaining risk is scope creep — touching the working currency step/tests while adding a payment-method step. The current code also has regression coverage around currency loops (`tests/test_golden_transcript_regressions.py:58`, `tests/test_golden_transcript_regressions.py:106-124`, `tests/test_golden_transcript_regressions.py:156-185`), so any implementation must avoid reintroducing that loop.
 
 ## Tests
 

@@ -191,6 +191,27 @@ class PassportAttachmentTests(unittest.TestCase):
             self.assertIsNone(traveler[3])
             self.assertEqual(traveler[4], 'TR900/original-passport.pdf')
 
+    def test_uploaded_document_notes_render_on_traveler_profile(self) -> None:
+        client, app, db_path = _make_app(self.tmpdir)
+        resp = client.post(
+            '/travelers/TR900/documents',
+            data={
+                'category': 'payment_screenshot',
+                'notes': 'Deposit receipt from WhatsApp',
+                'file': (io.BytesIO(b'png-payment-screenshot'), 'payment-note.png', 'image/png'),
+            },
+            content_type='multipart/form-data',
+            follow_redirects=False,
+        )
+        self.assertEqual(resp.status_code, 302)
+
+        page = client.get('/travelers/TR900')
+        self.assertEqual(page.status_code, 200)
+        body = page.get_data(as_text=True)
+        self.assertIn('Payment Screenshots', body)
+        self.assertIn('payment-note.png', body)
+        self.assertIn('Deposit receipt from WhatsApp', body)
+
     def test_upload_rejects_invalid_type_and_oversize(self) -> None:
         client, app, db_path = _make_app(self.tmpdir)
         bad = client.post(

@@ -4,6 +4,15 @@ Source note: this plan is based on the provided implementation task attachment. 
 
 Important constraint for this documentation pass: no application code was changed. Tests and live verification are therefore marked "not run" in the phase documents.
 
+**Additional client clarification received (Phase 1):** the payment-method/currency question must be asked after the customer has chosen their trip and its details (room type, headcount, etc.), not during initial intake. Re-checking the live code (see `PHASE_1_payment_preference_question.md`) confirms both the deterministic flow (`session_flow.py`) and the tool-calling flow (`workflow_policy.py`) already gate the currency question behind trip/room/group selection — this clarification requires no ordering change, only closes out the open terminology question (currency vs. a separate payment method).
+
+## Ongoing quality goal: "the agent should be smarter"
+
+The client's general direction — handle a wider range of natural customer questions and phrasing robustly, not just fixed paths — is tracked as a cross-cutting quality thread rather than its own phase:
+- **Phase 6** is the concrete, scoped home for this goal where it maps cleanly to a deliverable: open-ended trip-detail Q&A grounded strictly in CRM data.
+- Outside Phase 6, this goal is not fully solved by any single phase. Every phase's prompt/workflow changes should be written to broaden accepted natural phrasing (as the existing prompts already try to do for confirmations, trip-type intent, and typos) rather than narrowing to a fixed menu, and Phase 8's testing pass should include natural-language robustness checks alongside golden-path tests.
+- This item should be revisited explicitly during Phase 8 planning/close-out to decide if it needs a dedicated follow-up phase once Phases 1-7 are live and real conversation data shows where phrasing still fails.
+
 ## Phase List
 
 1. Phase 1 - Payment preference question
@@ -30,7 +39,7 @@ Important constraint for this documentation pass: no application code was change
 
 | Phase | Complexity | Risk | Reason |
 | --- | --- | --- | --- |
-| 1 | Low | Medium | Small surface area, but the wording is semantically ambiguous because the current system asks currency, not payment method. |
+| 1 | Low | Low | Timing re-check confirms the currency question already fires after trip/room/group selection in both live flows (no ordering change needed); the only open item is the currency-vs-payment-method wording, which is a business decision, not a code risk. |
 | 2 | Medium | High | Touches payment status transitions, booking persistence, RBAC, and agent-visible booking status. |
 | 3 | Medium | Medium | Existing traveler document upload can be reused, but adding a new CRM-facing document type must avoid passport-specific side effects. |
 | 4 | Medium | Medium | Manual assignment already exists; auto round-robin must be additive and deterministic under concurrency. |
@@ -41,7 +50,7 @@ Important constraint for this documentation pass: no application code was change
 
 ## Proposed Safe Implementation Order
 
-1. Resolve Phase 1 ambiguity first.
+1. Confirm Phase 1's remaining terminology question with the client (currency vs. a separate payment method); timing is already correct in code and needs no fix either way.
 2. Implement Phase 3 if a low-risk early win is wanted after Phase 1.
 3. Implement Phase 2 before any broader payment/pricing work.
 4. Implement Phase 4 once assignment behavior and employee data are verified in the target environment.

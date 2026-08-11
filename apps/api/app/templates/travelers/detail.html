@@ -142,19 +142,19 @@
                     Passport is missing. International bookings should stay pending until passport data or a handoff note is added.
                 </div>
                 {% endif %}
-                <form action="{{ url_for('travelers.upload_document', traveler_id=traveler.traveler_id) }}" method="POST" enctype="multipart/form-data" style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;margin-bottom:0.9rem">
+                <form action="{{ url_for('travelers.upload_document', traveler_id=traveler.traveler_id) }}" method="POST" enctype="multipart/form-data" style="display:grid;grid-template-columns:minmax(190px,1fr) minmax(170px,1fr) auto;gap:0.6rem;align-items:center;margin-bottom:0.9rem;padding:0.85rem;border:1px solid var(--border);border-radius:0.65rem;background:rgba(255,255,255,0.02)">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="category" value="passport">
-                    <input type="file" name="file" accept=".jpg,.jpeg,.png,.pdf" required style="flex:1;min-width:220px">
-                    <input type="text" name="notes" placeholder="Upload notes" style="flex:1;min-width:160px;padding:0.6rem 0.8rem;background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
+                    <input type="file" name="file" accept=".jpg,.jpeg,.png,.pdf" required style="min-width:0;width:100%">
+                    <input type="text" name="notes" placeholder="Upload notes" style="min-width:0;width:100%;padding:0.6rem 0.8rem;background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
                     <button type="submit" class="btn btn-primary btn-sm">Upload Passport</button>
                 </form>
                 {% if passport_documents %}
-                <div style="display:flex;flex-direction:column;gap:0.65rem;max-height:180px;overflow-y:auto;padding-right:0.35rem;margin-bottom:0.9rem">
+                <div style="display:flex;flex-direction:column;gap:0.65rem;max-height:240px;overflow-y:auto;padding-right:0.35rem;margin-bottom:0.9rem">
                     <div style="font-size:0.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em">Passport Files</div>
                     {% for item in passport_documents %}
                     {% set doc = item.document %}
-                    <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:0.7rem 0.85rem;display:flex;justify-content:space-between;gap:0.75rem;align-items:center">
+                    <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:0.7rem 0.85rem;display:flex;justify-content:space-between;gap:0.75rem;align-items:flex-start;flex-wrap:wrap">
                         <div>
                             <strong style="font-size:0.88rem;color:var(--text-main)">{{ doc.original_file_name or doc.file_name }}</strong>
                             <div class="mono" style="font-size:0.72rem;color:var(--text-muted)">{{ doc.uploaded_at.strftime('%d %b %Y %H:%M') if doc.uploaded_at else '—' }}</div>
@@ -165,28 +165,34 @@
                             <a href="{{ url_for('travelers.view_document', traveler_id=traveler.traveler_id, document_id=doc.document_id) }}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">Open</a>
                             {% endif %}
                         </div>
+                        {% if doc.notes %}
+                        <div style="width:100%;padding:0.6rem 0.7rem;margin-top:0.65rem;border-radius:0.5rem;background:rgba(255,255,255,0.035);border:1px solid rgba(255,255,255,0.08)">
+                            <div style="font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.2rem">Notes</div>
+                            <div style="font-size:0.82rem;color:var(--text-main);line-height:1.45;white-space:pre-wrap;word-break:break-word">{{ doc.notes }}</div>
+                        </div>
+                        {% endif %}
                     </div>
                     {% endfor %}
                 </div>
                 {% endif %}
 
-                <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
+                <div style="margin-top:1rem;padding:1rem;border:1px solid var(--border);border-radius:0.75rem;background:rgba(255,255,255,0.015)">
                     <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.75rem">
                         <div style="font-size:0.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em">Payment Screenshots</div>
                         <span style="font-size:0.75rem;color:var(--text-muted)">{{ payment_screenshot_documents|length if payment_screenshot_documents is defined else 0 }} file(s)</span>
                     </div>
-                    <form action="{{ url_for('travelers.upload_document', traveler_id=traveler.traveler_id) }}" method="POST" enctype="multipart/form-data" style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;margin-bottom:0.9rem">
+                    <form action="{{ url_for('travelers.upload_document', traveler_id=traveler.traveler_id) }}" method="POST" enctype="multipart/form-data" style="display:grid;grid-template-columns:minmax(190px,1fr) minmax(170px,1fr) auto;gap:0.6rem;align-items:center;margin-bottom:0.9rem;padding:0.85rem;border:1px solid var(--border);border-radius:0.65rem;background:rgba(255,255,255,0.02)">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <input type="hidden" name="category" value="payment_screenshot">
-                        <input type="file" name="file" accept=".jpg,.jpeg,.png,.pdf" required style="flex:1;min-width:220px">
-                        <input type="text" name="notes" placeholder="Payment reference or notes" style="flex:1;min-width:160px;padding:0.6rem 0.8rem;background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
+                        <input type="file" name="file" accept=".jpg,.jpeg,.png,.pdf" required style="min-width:0;width:100%">
+                        <input type="text" name="notes" placeholder="Payment reference or notes" style="min-width:0;width:100%;padding:0.6rem 0.8rem;background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
                         <button type="submit" class="btn btn-primary btn-sm">Upload Screenshot</button>
                     </form>
                     {% if payment_screenshot_documents %}
-                    <div style="display:flex;flex-direction:column;gap:0.65rem;max-height:180px;overflow-y:auto;padding-right:0.35rem;margin-bottom:0.9rem">
+                    <div style="display:flex;flex-direction:column;gap:0.65rem;max-height:260px;overflow-y:auto;padding-right:0.35rem;margin-bottom:0.9rem">
                         {% for item in payment_screenshot_documents %}
                         {% set doc = item.document %}
-                        <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:0.7rem 0.85rem;display:flex;justify-content:space-between;gap:0.75rem;align-items:center">
+                        <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:0.7rem 0.85rem;display:flex;justify-content:space-between;gap:0.75rem;align-items:flex-start;flex-wrap:wrap">
                             <div>
                                 <strong style="font-size:0.88rem;color:var(--text-main)">{{ doc.original_file_name or doc.file_name }}</strong>
                                 <div class="mono" style="font-size:0.72rem;color:var(--text-muted)">{{ doc.uploaded_at.strftime('%d %b %Y %H:%M') if doc.uploaded_at else '—' }}</div>
@@ -197,6 +203,12 @@
                                 <a href="{{ url_for('travelers.view_document', traveler_id=traveler.traveler_id, document_id=doc.document_id) }}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">Open</a>
                                 {% endif %}
                             </div>
+                            {% if doc.notes %}
+                            <div style="width:100%;padding:0.6rem 0.7rem;margin-top:0.65rem;border-radius:0.5rem;background:rgba(255,255,255,0.035);border:1px solid rgba(255,255,255,0.08)">
+                                <div style="font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.2rem">Notes</div>
+                                <div style="font-size:0.82rem;color:var(--text-main);line-height:1.45;white-space:pre-wrap;word-break:break-word">{{ doc.notes }}</div>
+                            </div>
+                            {% endif %}
                         </div>
                         {% endfor %}
                     </div>
@@ -206,7 +218,7 @@
                 </div>
 
                 {% if other_documents %}
-                <div style="display:flex;flex-direction:column;gap:0.65rem;max-height:280px;overflow-y:auto;padding-right:0.35rem">
+                <div style="display:flex;flex-direction:column;gap:0.65rem;max-height:280px;overflow-y:auto;padding:1rem 0.35rem 0 0;margin-top:1rem;border-top:1px solid var(--border)">
                     <div style="font-size:0.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em">Other Documents</div>
                     {% for item in other_documents %}
                     {% set doc = item.document %}
@@ -223,6 +235,12 @@
                             <div>Uploaded: <strong style="color:var(--text-main)">{{ doc.uploaded_at.strftime('%d %b %Y') if doc.uploaded_at else '???' }}</strong></div>
                             <div>Status: <strong style="color:var(--text-main)">{{ doc.verification_status or 'pending' }}</strong></div>
                         </div>
+                        {% if doc.notes %}
+                        <div style="padding:0.6rem 0.7rem;margin-top:0.65rem;border-radius:0.5rem;background:rgba(255,255,255,0.035);border:1px solid rgba(255,255,255,0.08)">
+                            <div style="font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.2rem">Notes</div>
+                            <div style="font-size:0.82rem;color:var(--text-main);line-height:1.45;white-space:pre-wrap;word-break:break-word">{{ doc.notes }}</div>
+                        </div>
+                        {% endif %}
                     </div>
                     {% endfor %}
                 </div>
