@@ -1,7 +1,7 @@
 # app/routes/bookings.py
 import logging
 
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, abort
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, abort, current_app
 from app.models.booking import TripBooking
 from app.models.booking_event import BookingEventTrail
 from app.models.booking_status_history import BookingStatusHistory
@@ -35,11 +35,14 @@ bookings_bp = Blueprint('bookings', __name__, url_prefix='/bookings')
 
 BOOKING_STATUSES = ['Draft', 'Waiting Customer', 'Pending Confirmation', 'Confirmed', 'Payment Pending', 'Paid', 'Completed', 'Cancelled']
 BOOKING_MANUAL_STATUS_OPTIONS = ['Draft', 'Completed', 'Cancelled']
-PAYMENT_STATUSES = ['Pending', 'Deposit Paid', 'Fully Paid', 'Refunded']
+REFUND_PAYMENT_STATUSES = {'Full Refund', 'Partial Refund'}
+PAYMENT_STATUSES = ['Pending', 'Deposit Paid', 'Fully Paid', 'Partial Refund', 'Full Refund', 'Refunded']
 PAYMENT_TRANSITIONS = {
-    'Pending': {'Deposit Paid', 'Fully Paid', 'Refunded'},
-    'Deposit Paid': {'Fully Paid', 'Refunded'},
-    'Fully Paid': {'Refunded'},
+    'Pending': {'Deposit Paid', 'Fully Paid', 'Partial Refund', 'Full Refund', 'Refunded'},
+    'Deposit Paid': {'Fully Paid', 'Partial Refund', 'Full Refund', 'Refunded'},
+    'Fully Paid': {'Partial Refund', 'Full Refund', 'Refunded'},
+    'Partial Refund': {'Full Refund'},
+    'Full Refund': set(),
     'Refunded': set(),
 }
 
@@ -56,6 +59,12 @@ def _allowed_payment_options(current_status: str | None) -> list[str]:
     return list(dict.fromkeys([current, *PAYMENT_STATUSES]))
 
 
+def _can_change_payment_status() -> bool:
+    if not current_app.config.get('CRM_AUTH_ENABLED', False):
+        return True
+    return has_permission('change_payment_status')
+
+
 def _parse_datetime_local(value: str | None):
     raw = (value or '').strip()
     if not raw:
@@ -66,6 +75,19 @@ def _parse_datetime_local(value: str | None):
         except ValueError:
             continue
     return None
+
+
+def _parse_refund_amount(value: str | None) -> float | None:
+    raw = (value or '').strip()
+    if not raw:
+        return None
+    try:
+        amount = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError('Refund amount must be a valid number.')
+    if amount < 0:
+        raise ValueError('Refund amount cannot be negative.')
+    return amount
 
 
 def _validate_payment_transition(
@@ -228,6 +250,7 @@ def detail(booking_id):
                            assigned_history=assigned_history,
                            employees=active_assignees(),
                            can_assign=has_permission('assign_work'),
+                           can_change_payment_status=_can_change_payment_status(),
                            assigned_user=booking.assigned_user,
                            is_overdue=_is_overdue,
                            booking_statuses=_allowed_status_options(booking.booking_status),
@@ -315,6 +338,7 @@ def update_status(booking_id):
     data = request.get_json(silent=True) or request.form.to_dict()
     new_status = data.get('booking_status')
     new_payment = data.get('payment_status')
+    refund_amount_present = 'refund_amount' in data
     note_for_service = (data.get('booking_notes') or '').strip()
     employee_correction = (
         str(data.get('employee_correction') or '').strip().lower() in {'1', 'true', 'yes'}
@@ -338,6 +362,13 @@ def update_status(booking_id):
         flash('Invalid payment status transition', 'error')
         return redirect(url_for('bookings.detail', booking_id=booking_id))
     try:
+        refund_amount = _parse_refund_amount(data.get('refund_amount')) if refund_amount_present else booking.refund_amount
+    except ValueError as e:
+        if request.is_json:
+            return jsonify({'error': str(e)}), 400
+        flash(str(e), 'error')
+        return redirect(url_for('bookings.detail', booking_id=booking_id))
+    try:
         _validate_payment_transition(
             booking.payment_status,
             new_payment,
@@ -348,6 +379,16 @@ def update_status(booking_id):
         if request.is_json:
             return jsonify({'error': str(e)}), 400
         flash(str(e), 'error')
+        return redirect(url_for('bookings.detail', booking_id=booking_id))
+    payment_for_service = new_payment if new_payment and new_payment != (booking.payment_status or '') else None
+    refund_change_requested = (
+        refund_amount_present
+        and refund_amount != booking.refund_amount
+    )
+    if (payment_for_service or refund_change_requested) and not _can_change_payment_status():
+        if request.is_json:
+            return jsonify({'error': 'forbidden'}), 403
+        flash('You do not have permission to change payment status.', 'error')
         return redirect(url_for('bookings.detail', booking_id=booking_id))
     actor = current_actor()
     assignment_requested = 'assigned_to_user_id' in data or 'assigned_to' in data
@@ -372,7 +413,6 @@ def update_status(booking_id):
             flash(str(exc), 'error')
             return redirect(url_for('bookings.detail', booking_id=booking_id))
     status_for_service = new_status if new_status and new_status != (booking.booking_status or '') else None
-    payment_for_service = new_payment if new_payment and new_payment != (booking.payment_status or '') else None
     try:
         if status_for_service:
             UnifiedCRMService._validate_booking_transition(
@@ -394,6 +434,9 @@ def update_status(booking_id):
             booking.booking_status = status_for_service
         if payment_for_service:
             booking.payment_status = payment_for_service
+        effective_payment_status = payment_for_service or booking.payment_status or 'Pending'
+        if refund_amount_present or payment_for_service:
+            booking.refund_amount = refund_amount if effective_payment_status in REFUND_PAYMENT_STATUSES else None
         if assignment_requested:
             apply_assignment(
                 booking,

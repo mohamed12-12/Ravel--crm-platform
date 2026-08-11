@@ -22,8 +22,8 @@ CRM_WRITE_ROLES = {"admin", "manager", "agent", "sales"}
 PROTECTED_BROWSER_BLUEPRINTS = {"admin", "travelers", "leads", "bookings", "trips", "interactions", "handoffs"}
 PUBLIC_BROWSER_ENDPOINTS = {"auth.login", "auth.logout", "static", "trips.public_media", "api_docs.openapi_contract"}
 ROLE_PERMISSIONS = {
-    "admin": {"view_all", "manage_users", "assign_work", "update_followup", "manage_handoffs"},
-    "manager": {"view_all", "assign_work", "update_followup", "manage_handoffs"},
+    "admin": {"view_all", "manage_users", "assign_work", "update_followup", "manage_handoffs", "change_payment_status"},
+    "manager": {"view_all", "assign_work", "update_followup", "manage_handoffs", "change_payment_status"},
     "agent": {"update_followup"},
     "sales": {"update_followup"},
 }

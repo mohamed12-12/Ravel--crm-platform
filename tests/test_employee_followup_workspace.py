@@ -200,6 +200,87 @@ class EmployeeFollowupWorkspaceTests(unittest.TestCase):
             # BookingEventTrail writes were tied to the removed SQLite path and
             # remain a tracked follow-up, not a regression for this route.
 
+    def test_manager_can_set_partial_refund_and_amount(self) -> None:
+        token = self._login(role="manager", username="mona")
+        response = self.client.post(
+            "/bookings/B-FU-1/status",
+            data={
+                "csrf_token": token,
+                "expected_history_count": "0",
+                "booking_status": "Confirmed",
+                "payment_status": "Partial Refund",
+                "refund_amount": "125.50",
+                "booking_notes": "Approved partial refund.",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-FU-1")
+            self.assertEqual(booking.payment_status, "Partial Refund")
+            self.assertEqual(booking.refund_amount, 125.50)
+            self.assertIn("Approved partial refund.", booking.booking_notes)
+
+    def test_admin_can_set_full_refund_and_amount(self) -> None:
+        token = self._login(role="admin", username="admin")
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-FU-1")
+            booking.payment_status = "Fully Paid"
+            self.db.session.commit()
+        response = self.client.post(
+            "/bookings/B-FU-1/status",
+            data={
+                "csrf_token": token,
+                "expected_history_count": "0",
+                "booking_status": "Confirmed",
+                "payment_status": "Full Refund",
+                "refund_amount": "500",
+                "booking_notes": "Approved full refund.",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-FU-1")
+            self.assertEqual(booking.payment_status, "Full Refund")
+            self.assertEqual(booking.refund_amount, 500.0)
+
+    def test_sales_cannot_change_payment_status_or_refund_amount(self) -> None:
+        token = self._login(role="sales", username="sara")
+        response = self.client.post(
+            "/bookings/B-FU-1/status",
+            data={
+                "csrf_token": token,
+                "expected_history_count": "0",
+                "booking_status": "Confirmed",
+                "payment_status": "Deposit Paid",
+                "refund_amount": "50",
+                "booking_notes": "Trying to change payment.",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-FU-1")
+            self.assertEqual(booking.payment_status, "Pending")
+            self.assertIsNone(booking.refund_amount)
+            self.assertIsNone(booking.booking_notes)
+
+    def test_sales_can_add_booking_note_without_payment_change(self) -> None:
+        token = self._login(role="sales", username="sara")
+        response = self.client.post(
+            "/bookings/B-FU-1/status",
+            data={
+                "csrf_token": token,
+                "expected_history_count": "0",
+                "booking_status": "Confirmed",
+                "booking_notes": "Customer asked for a callback.",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-FU-1")
+            self.assertEqual(booking.payment_status, "Pending")
+            self.assertIsNone(booking.refund_amount)
+            self.assertIn("Customer asked for a callback.", booking.booking_notes)
+
     def test_status_update_ignores_broken_system_db_path_and_writes_postgres_models(self) -> None:
         token = self._login(role="manager", username="mona")
         broken_path = self.tmpdir / "missing" / "rahma-system.db"
