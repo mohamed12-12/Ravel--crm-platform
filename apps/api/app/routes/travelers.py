@@ -22,6 +22,7 @@ from app.models.traveler import Traveler
 from app.models.traveler_document import TravelerDocument
 from services.crm.system_services import UnifiedCRMService
 from services.crm.system_services.phone_normalization import normalize_phone_input
+from services.crm.system_services.trip_pricing import price_for_room_and_currency
 from services.data_authority import load_data_authority
 from app.security import can_view_all_records, current_user_id, has_permission
 
@@ -37,6 +38,8 @@ DOCUMENT_CATEGORY_LABELS = {
     "payment_screenshot": "Payment Screenshot",
     "document": "Document",
 }
+_REVENUE_BOOKING_STATUSES = {"confirmed", "paid", "completed"}
+_REVENUE_PAYMENT_STATUSES = {"fully paid", "paid"}
 
 
 def _build_revenue_summary(lifetime_revenue_usd: float | int | None, preferred_currency: str, usd_to_egp_rate: float) -> dict[str, str]:
@@ -57,6 +60,85 @@ def _build_revenue_summary(lifetime_revenue_usd: float | int | None, preferred_c
         "secondary_value": secondary["value"],
         "exchange_note": f"1 USD = {rate:,.2f} EGP" if rate > 0 else "",
     }
+
+
+def _parse_money(value: str | int | float | None) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip()
+    if not text:
+        return 0.0
+    cleaned = "".join(ch for ch in text if ch.isdigit() or ch in ".-")
+    try:
+        return float(cleaned) if cleaned else 0.0
+    except ValueError:
+        return 0.0
+
+
+def _format_revenue_amount(amount: float, currency: str) -> str:
+    return f"${amount:,.2f}" if currency == "USD" else f"{amount:,.2f} EGP"
+
+
+def _revenue_display(usd_total: float, egp_total: float) -> str:
+    parts = []
+    if usd_total:
+        parts.append(_format_revenue_amount(usd_total, "USD"))
+    if egp_total:
+        parts.append(_format_revenue_amount(egp_total, "EGP"))
+    return " / ".join(parts) if parts else "$0.00"
+
+
+def _build_revenue_summary_from_totals(usd_total: float, egp_total: float, preferred_currency: str) -> dict[str, str]:
+    preferred = str(preferred_currency or "USD").strip().upper()
+    if preferred == "EGP":
+        primary = {"label": "Lifetime Revenue (EGP)", "value": _format_revenue_amount(egp_total, "EGP")}
+        secondary = {"label": "Lifetime Revenue (USD)", "value": _format_revenue_amount(usd_total, "USD")}
+    else:
+        primary = {"label": "Lifetime Revenue (USD)", "value": _format_revenue_amount(usd_total, "USD")}
+        secondary = {"label": "Lifetime Revenue (EGP)", "value": _format_revenue_amount(egp_total, "EGP")}
+    return {
+        "primary_label": primary["label"],
+        "primary_value": primary["value"],
+        "secondary_label": secondary["label"],
+        "secondary_value": secondary["value"],
+        "exchange_note": "Aggregated from paid trip bookings by booking currency",
+    }
+
+
+def _attach_booking_revenue_totals(travelers: list[Traveler]) -> dict[str, dict[str, float]]:
+    traveler_ids = [t.traveler_id for t in travelers if t.traveler_id]
+    totals = {traveler_id: {"USD": 0.0, "EGP": 0.0} for traveler_id in traveler_ids}
+    if not traveler_ids:
+        return {}
+
+    from app.models.trip import Trip
+
+    bookings = TripBooking.query.filter(TripBooking.traveler_id.in_(traveler_ids)).all()
+    trip_ids = {booking.trip_id for booking in bookings if booking.trip_id}
+    trips = {trip.trip_id: trip for trip in Trip.query.filter(Trip.trip_id.in_(trip_ids)).all()} if trip_ids else {}
+    for booking in bookings:
+        booking_status = str(booking.booking_status or "").strip().lower()
+        payment_status = str(booking.payment_status or "").strip().lower()
+        if booking_status not in _REVENUE_BOOKING_STATUSES or payment_status not in _REVENUE_PAYMENT_STATUSES:
+            continue
+        currency = str(booking.currency or "").strip().upper()
+        if currency not in {"USD", "EGP"}:
+            continue
+        trip = trips.get(booking.trip_id)
+        price = price_for_room_and_currency(
+            trip.to_dict() if trip else {},
+            room_type=booking.room_type or "",
+            currency=currency,
+        )
+        amount = _parse_money(price) * int(booking.group_size or 1)
+        totals.setdefault(booking.traveler_id, {"USD": 0.0, "EGP": 0.0})[currency] += amount
+
+    for traveler in travelers:
+        revenue = totals.get(traveler.traveler_id, {"USD": 0.0, "EGP": 0.0})
+        traveler.total_revenue_usd = revenue["USD"]
+        traveler.total_revenue_egp = revenue["EGP"]
+        traveler.revenue_display = _revenue_display(revenue["USD"], revenue["EGP"])
+    return totals
 
 
 def _allowed_document(filename: str, mimetype: str = "") -> bool:
@@ -302,6 +384,7 @@ def index():
 
     pagination = query.order_by(Traveler.created_at.desc()).paginate(page=page, per_page=per_page, error_out=False)
     travelers = pagination.items
+    _attach_booking_revenue_totals(travelers)
     # Filter options for the UI
     statuses = db.session.query(Traveler.status).distinct().all()
     nationalities = db.session.query(Traveler.nationality).distinct().all()
@@ -378,10 +461,11 @@ def detail(traveler_id):
     if trip_ids:
         trips = Trip.query.filter(Trip.trip_id.in_(trip_ids)).all()
         trip_type_map = {t.trip_id: t.type for t in trips}
-    revenue_summary = _build_revenue_summary(
-        traveler.lifetime_revenue,
+    revenue_totals = _attach_booking_revenue_totals([traveler]).get(traveler.traveler_id, {"USD": 0.0, "EGP": 0.0})
+    revenue_summary = _build_revenue_summary_from_totals(
+        revenue_totals["USD"],
+        revenue_totals["EGP"],
         traveler.preferred_currency or "",
-        current_app.config.get("USD_TO_EGP_RATE", 50.0),
     )
 
     return render_template(
@@ -736,6 +820,7 @@ def export():
     query = _restrict_travelers_to_viewable(query)
 
     travelers = query.all()
+    _attach_booking_revenue_totals(travelers)
 
     def csv_safe(value):
         text = "" if value is None else str(value)
@@ -755,7 +840,7 @@ def export():
             t.residence,
             t.lead_source,
             t.total_trips,
-            t.lifetime_revenue,
+            getattr(t, "revenue_display", _revenue_display(0.0, 0.0)),
             t.rating,
         ]])
 

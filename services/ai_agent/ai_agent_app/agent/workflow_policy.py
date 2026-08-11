@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from services.ai_agent.ai_agent_app.agent.date_parsing import compute_age
+from services.crm.system_services.trip_pricing import price_for_room_and_currency
 
 
 ARCHIVE_LIKE_STATUSES = {"inactive", "archived", "blacklisted", "blacklist", "blocked"}
@@ -199,8 +200,11 @@ class ConversationWorkflowPolicy:
         if room_group == "mixed":
             room_type_collected = bool(mixed_room_requirements)
         group_size_collected = bool(collection_state.get("group_size"))
+        group_nationality_type = str(session_context.get("group_nationality_type") or "").strip().lower()
+        group_nationality_counts = session_context.get("group_nationality_counts") if isinstance(session_context.get("group_nationality_counts"), dict) else {}
         flights_supported = self._trip_supports_flights(selected_trip)
         flight_option_collected = bool(collection_state.get("flight_option")) or not flights_supported
+        currency = str(session_context.get("currency") or collection_state.get("currency_value") or "").strip()
         has_trip_results = bool(list(trip_result.get("open_trips") or []) or list(trip_result.get("date_tbd_trips") or []))
         arabic = self._is_arabic(session_context)
 
@@ -333,6 +337,7 @@ class ConversationWorkflowPolicy:
                 **common,
             )
 
+        requested_group_size = self._as_int(session_context.get("group_size")) or 1
         mixed_capacity_issue = self._mixed_room_capacity_issue(selected_trip, mixed_room_requirements)
         if mixed_capacity_issue:
             return WorkflowDecision(
@@ -348,7 +353,6 @@ class ConversationWorkflowPolicy:
 
         room_type = str(session_context.get("room_type") or "")
         capacity = self._room_capacity(selected_trip, room_type, room_group)
-        requested_group_size = self._as_int(session_context.get("group_size")) or 1
         requested_rooms = self._rooms_needed(room_type, requested_group_size)
         if capacity is not None and requested_rooms > capacity:
             return WorkflowDecision(
@@ -372,6 +376,28 @@ class ConversationWorkflowPolicy:
                     )
                 ),
                 handoff_required=True,
+                **common,
+            )
+
+        if requested_group_size > 1 and group_nationality_type not in {"single", "mixed"}:
+            return WorkflowDecision(
+                state="group_nationality_type_required",
+                customer_status="Waiting for customer response",
+                allowed_tools=SELECTED_TRIP_TOOLS,
+                required_step="collect_group_nationality_type",
+                customer_message_key="group_nationality_type_required",
+                assistant_message=self._group_nationality_type_prompt(arabic=arabic),
+                **common,
+            )
+
+        if requested_group_size > 1 and group_nationality_type == "mixed" and not self._group_nationality_counts_complete(group_nationality_counts, requested_group_size):
+            return WorkflowDecision(
+                state="group_nationality_counts_required",
+                customer_status="Waiting for customer response",
+                allowed_tools=SELECTED_TRIP_TOOLS,
+                required_step="collect_group_nationality_counts",
+                customer_message_key="group_nationality_counts_required",
+                assistant_message=self._group_nationality_counts_prompt(requested_group_size, arabic=arabic),
                 **common,
             )
 
@@ -447,6 +473,21 @@ class ConversationWorkflowPolicy:
                     **common,
                 )
 
+        if not currency:
+            return WorkflowDecision(
+                state="currency_required",
+                customer_status="Waiting for customer response",
+                allowed_tools=SELECTED_TRIP_TOOLS,
+                required_step="collect_payment_currency",
+                customer_message_key="currency_required",
+                assistant_message=self._final_currency_prompt(
+                    session_context,
+                    selected_trip=selected_trip,
+                    arabic=arabic,
+                ),
+                **common,
+            )
+
         return WorkflowDecision(
             state="booking_ready",
             customer_status="Ready",
@@ -519,7 +560,6 @@ class ConversationWorkflowPolicy:
         customer_name = str(session_context.get("customer_name") or "").strip()
         nationality = str(session_context.get("nationality") or collection_state.get("nationality_value") or "").strip()
         birthday = str(session_context.get("birthday") or collection_state.get("birthday_value") or "").strip()
-        currency = str(session_context.get("currency") or collection_state.get("currency_value") or "").strip()
 
         common = {
             "allowed_tools": IDENTITY_TOOLS | LEAD_SAVE_TOOLS,
@@ -565,16 +605,6 @@ class ConversationWorkflowPolicy:
         if guardian_decision is not None:
             return guardian_decision
 
-        if not currency:
-            return WorkflowDecision(
-                state="currency_required",
-                customer_status="Waiting for customer response",
-                required_step="collect_payment_currency",
-                customer_message_key="currency_required",
-                assistant_message=self._currency_prompt(arabic=arabic),
-                **common,
-            )
-
         return WorkflowDecision(
             state="traveler_not_found",
             customer_status="New traveler details ready",
@@ -616,6 +646,93 @@ class ConversationWorkflowPolicy:
             if arabic
             else "Which payment currency do you prefer?\n\n1. Egyptian Pound (EGP)\n2. US Dollar (USD)"
         )
+
+    @staticmethod
+    def _group_nationality_type_prompt(*, arabic: bool = False) -> str:
+        return (
+            "هل كل المسافرين نفس الجنسية/نفس فئة السعر، أم المجموعة مختلطة بين مصريين وأجانب؟\n\n1. نفس الفئة\n2. مختلطة"
+            if arabic
+            else "Is everyone in the group the same nationality/pricing group, or is it mixed between Egyptians and foreigners?\n\n1. Same group\n2. Mixed group"
+        )
+
+    @staticmethod
+    def _group_nationality_counts_prompt(group_size: int, *, arabic: bool = False) -> str:
+        return (
+            f"من فضلك اكتب عدد المصريين وعدد الأجانب من إجمالي {group_size} مسافرين، مثل: 2 مصري و1 أجنبي."
+            if arabic
+            else f"Please send how many Egyptians and how many foreigners are in the {group_size}-traveler group, for example: 2 Egyptians and 1 foreigner."
+        )
+
+    @staticmethod
+    def _group_nationality_counts_complete(counts: dict[str, Any], group_size: int) -> bool:
+        try:
+            egyptians = int(counts.get("egyptian") or 0)
+            foreigners = int(counts.get("foreigner") or 0)
+        except (TypeError, ValueError):
+            return False
+        return egyptians >= 0 and foreigners >= 0 and (egyptians + foreigners) == int(group_size or 0)
+
+    @staticmethod
+    def _parse_money(value: str) -> float:
+        text = str(value or "").strip()
+        if not text:
+            return 0.0
+        cleaned = "".join(ch for ch in text if ch.isdigit() or ch in ".-")
+        try:
+            return float(cleaned) if cleaned else 0.0
+        except ValueError:
+            return 0.0
+
+    @staticmethod
+    def _format_money(amount: float, currency: str) -> str:
+        prefix = "$" if currency == "USD" else ""
+        suffix = "" if currency == "USD" else f" {currency}"
+        return f"{prefix}{amount:,.0f}{suffix}"
+
+    def _pricing_counts_for_context(self, session_context: dict[str, Any]) -> dict[str, int]:
+        group_size = self._as_int(session_context.get("group_size")) or 1
+        group_type = str(session_context.get("group_nationality_type") or "").strip().lower()
+        raw_counts = session_context.get("group_nationality_counts") if isinstance(session_context.get("group_nationality_counts"), dict) else {}
+        if group_type == "mixed" and self._group_nationality_counts_complete(raw_counts, group_size):
+            return {
+                "egyptian": int(raw_counts.get("egyptian") or 0),
+                "foreigner": int(raw_counts.get("foreigner") or 0),
+            }
+        nationality = str(session_context.get("nationality") or "").strip().lower()
+        traveler = session_context.get("known_traveler") if isinstance(session_context.get("known_traveler"), dict) else {}
+        if not nationality:
+            nationality = str(traveler.get("nationality") or "").strip().lower()
+        is_egyptian = any(token in nationality for token in ("egypt", "مصر"))
+        return {"egyptian": group_size if is_egyptian else 0, "foreigner": 0 if is_egyptian else group_size}
+
+    def _pricing_breakdown_text(self, session_context: dict[str, Any], selected_trip: dict[str, Any], *, arabic: bool = False) -> str:
+        room_type = str(session_context.get("room_type") or "").strip()
+        if not selected_trip or not room_type:
+            return ""
+        counts = self._pricing_counts_for_context(session_context)
+        egp_price = price_for_room_and_currency(selected_trip, room_type=room_type, currency="EGP", fallback_public_price=False)
+        usd_price = price_for_room_and_currency(selected_trip, room_type=room_type, currency="USD", fallback_public_price=False)
+        egp_total = self._parse_money(egp_price) * counts["egyptian"]
+        usd_total = self._parse_money(usd_price) * counts["foreigner"]
+        lines: list[str] = []
+        if arabic:
+            lines.append("تفصيل السعر المؤكد من CRM قبل اختيار عملة الدفع:")
+            if counts["egyptian"]:
+                lines.append(f"- المصريون: {counts['egyptian']} x {egp_price or 'غير مسجل'} EGP = {self._format_money(egp_total, 'EGP') if egp_price else 'غير مسجل'}")
+            if counts["foreigner"]:
+                lines.append(f"- الأجانب: {counts['foreigner']} x {usd_price or 'unlisted'} USD = {self._format_money(usd_total, 'USD') if usd_price else 'unlisted'}")
+        else:
+            lines.append("Verified CRM price breakdown before payment currency selection:")
+            if counts["egyptian"]:
+                lines.append(f"- Egyptians: {counts['egyptian']} x {egp_price or 'unlisted'} EGP = {self._format_money(egp_total, 'EGP') if egp_price else 'unlisted'}")
+            if counts["foreigner"]:
+                lines.append(f"- Foreigners: {counts['foreigner']} x {usd_price or 'unlisted'} USD = {self._format_money(usd_total, 'USD') if usd_price else 'unlisted'}")
+        return "\n".join(lines)
+
+    def _final_currency_prompt(self, session_context: dict[str, Any], *, selected_trip: dict[str, Any], arabic: bool = False) -> str:
+        breakdown = self._pricing_breakdown_text(session_context, selected_trip, arabic=arabic)
+        prompt = self._currency_prompt(arabic=arabic)
+        return f"{breakdown}\n\n{prompt}" if breakdown else prompt
 
     @staticmethod
     def _is_minor_from_context(session_context: dict[str, Any]) -> bool:

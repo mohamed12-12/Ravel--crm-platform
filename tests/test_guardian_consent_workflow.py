@@ -94,7 +94,7 @@ NEW_MINOR_LEAD_WRITE = {
 }
 
 
-def test_minor_new_traveler_triggers_guardian_branch_before_currency(runtime: ToolCallingSessionRuntime) -> None:
+def test_minor_new_traveler_triggers_guardian_branch_before_lead_save(runtime: ToolCallingSessionRuntime) -> None:
     session = runtime.create_session()
     for text in ("01270482380", "Ahmed Sami Youssef", "Egyptian", _birthday_for_age(17)):
         session = _send(runtime, text, session)
@@ -102,10 +102,14 @@ def test_minor_new_traveler_triggers_guardian_branch_before_currency(runtime: To
 
 
 def test_adult_new_traveler_at_exactly_18_skips_guardian_branch(runtime: ToolCallingSessionRuntime) -> None:
+    runtime._write_executor.execute.side_effect = _write_results_by_action(
+        create_traveler=NEW_MINOR_TRAVELER_WRITE,
+        create_lead=NEW_MINOR_LEAD_WRITE,
+    )
     session = runtime.create_session()
     for text in ("01270482380", "Ahmed Sami Youssef", "Egyptian", _birthday_for_age(18)):
         session = _send(runtime, text, session)
-    assert session.stage == "currency_required"
+    assert session.stage == "trip_type_required"
 
 
 def test_new_minor_traveler_guardian_consent_persists_after_lead_save(runtime: ToolCallingSessionRuntime) -> None:
@@ -127,10 +131,7 @@ def test_new_minor_traveler_guardian_consent_persists_after_lead_save(runtime: T
 
     session = _send(runtime, "01009998877", session)
     assert session.guardian_phone == "01009998877"
-    assert session.stage == "currency_required"
-
-    session = _send(runtime, "1", session)
-    assert session.currency == "EGP"
+    assert session.stage == "trip_type_required"
     assert session.new_traveler_lead_saved is True
     runtime._write_executor.record_guardian_consent.assert_called_once_with(
         traveler_id="TR00777",
@@ -180,13 +181,12 @@ def test_booking_is_blocked_when_guardian_consent_write_never_verifies(runtime: 
         session = _send(runtime, text, session)
     session = _send(runtime, "Sami Youssef Ahmed", session)
     session = _send(runtime, "01009998877", session)
-    session = _send(runtime, "1", session)
 
     assert session.new_traveler_lead_saved is True
     assert session.guardian_consent_saved is False
     runtime._write_executor.record_guardian_consent.assert_called_once()
 
-    for text in ("local", "1", "boys", "single", "2"):
+    for text in ("local", "1", "boys", "single", "2", "same", "1"):
         session = _send(runtime, text, session)
     assert session.stage == "booking_confirmation_required"
 

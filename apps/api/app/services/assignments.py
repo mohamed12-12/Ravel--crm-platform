@@ -139,7 +139,7 @@ def next_round_robin_sales_assignee() -> User | None:
         db.session.query(AssignmentHistory.new_user_id)
         .join(User, User.id == AssignmentHistory.new_user_id)
         .filter(
-            AssignmentHistory.resource_type == 'lead',
+            AssignmentHistory.resource_type.in_(('lead', 'booking')),
             AssignmentHistory.new_user_id.in_(sales_ids),
             User.is_active.is_(True),
             User.role == 'sales',
@@ -156,17 +156,44 @@ def next_round_robin_sales_assignee() -> User | None:
     return sales_users[next_index]
 
 
-def auto_assign_lead(resource, *, actor: User | None, reason: str = '') -> bool:
+def auto_assign_resource(
+    resource,
+    *,
+    resource_type: str,
+    resource_id: str,
+    actor: User | None,
+    reason: str = '',
+) -> bool:
     next_user = next_round_robin_sales_assignee()
     if next_user is None:
         return False
     return apply_assignment(
         resource,
-        resource_type='lead',
-        resource_id=resource.lead_id,
+        resource_type=resource_type,
+        resource_id=resource_id,
         new_user_id=next_user.id,
         actor=actor,
         reason=reason or 'Automatic round-robin sales assignment',
+    )
+
+
+def auto_assign_lead(resource, *, actor: User | None, reason: str = '') -> bool:
+    return auto_assign_resource(
+        resource,
+        resource_type='lead',
+        resource_id=resource.lead_id,
+        actor=actor,
+        reason=reason,
+    )
+
+
+def auto_assign_booking(resource, *, actor: User | None, reason: str = '') -> bool:
+    return auto_assign_resource(
+        resource,
+        resource_type='booking',
+        resource_id=resource.booking_id,
+        actor=actor,
+        reason=reason,
     )
 
 

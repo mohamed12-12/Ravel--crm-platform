@@ -182,7 +182,7 @@
                     <th style="text-align: center;" title="International Trips">Int'l</th>
                     <th style="text-align: center;" title="Total Trips">Total</th>
                     <th style="text-align: center;" title="Community Events">CE</th>
-                    <th style="text-align: right;">Revenue (USD)</th>
+                    <th style="text-align: right;">REVENUE</th>
                     <th style="text-align: center;">Rating</th>
                     <th style="text-align: center;">Actions</th>
                 </tr>
@@ -238,7 +238,7 @@
                     <td style="text-align: center;">
                         <span class="table-value-plain">{{ traveler.community_events_count or 0 }}</span>
                     </td>
-                    <td style="text-align: right;" class="mono">${{ "{:,.2f}".format(traveler.lifetime_revenue or 0) }}</td>
+                    <td style="text-align: right;" class="mono">{{ traveler.revenue_display or '$0.00' }}</td>
                     <td style="text-align: center;">
                         <div class="stat-stars">
                             {% if traveler.rating %}

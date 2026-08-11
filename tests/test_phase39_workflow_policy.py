@@ -375,12 +375,23 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
         })
         self.assertEqual(passport_country_step.state, "passport_country_required")
 
+        currency_step = policy.evaluate({
+            **base_context,
+            **passport_fields_common,
+            "passport_number": "A1234567",
+            "passport_expiry": "2030-05-01",
+            "passport_nationality": "Egyptian",
+        })
+        self.assertEqual(currency_step.state, "currency_required")
+        self.assertEqual(currency_step.required_step, "collect_payment_currency")
+
         booking_step = policy.evaluate({
             **base_context,
             **passport_fields_common,
             "passport_number": "A1234567",
             "passport_expiry": "2030-05-01",
             "passport_nationality": "Egyptian",
+            "currency": "USD",
         })
         self.assertEqual(booking_step.state, "booking_ready")
         self.assertIn("create_booking_draft", booking_step.allowed_tools)
@@ -415,25 +426,80 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
         self.assertIn("any clear format", birthday_step.assistant_message)
         self.assertNotIn("YYYY-MM-DD format", birthday_step.assistant_message)
 
-        currency_step = policy.evaluate({
-            **base_context,
-            "customer_name": "Test(no22)",
-            "nationality": "Egyptian",
-            "birthday": "1998-02-20",
-        })
-        self.assertEqual(currency_step.state, "currency_required")
-        self.assertEqual(currency_step.required_step, "collect_payment_currency")
-
         ready_step = policy.evaluate({
             **base_context,
             "customer_name": "Test(no22)",
             "nationality": "Egyptian",
             "birthday": "1998-02-20",
-            "currency": "USD",
         })
         self.assertEqual(ready_step.state, "traveler_not_found")
         self.assertEqual(ready_step.required_step, "save_new_traveler_lead")
         self.assertIn("create_lead", ready_step.allowed_tools)
+
+    def test_booking_currency_is_final_step_with_mixed_group_breakdown(self) -> None:
+        policy = ConversationWorkflowPolicy()
+        base_context = {
+            "workflow": {
+                "identity_verified": True,
+                "verified_traveler": {
+                    "traveler_id": "TR00999",
+                    "status": "Active",
+                    "full_name": "Mona Ali",
+                    "nationality": "Egyptian",
+                },
+            },
+            "known_traveler": {
+                "traveler_id": "TR00999",
+                "status": "Active",
+                "full_name": "Mona Ali",
+                "nationality": "Egyptian",
+            },
+            "trip_type": "local",
+            "selected_trip_id": "RT-LOC-26-MIX",
+            "selected_trip": {
+                "trip_id": "RT-LOC-26-MIX",
+                "type": "Local",
+                "room_prices": {
+                    "Double": {"EGP": "5000", "USD": "120"},
+                },
+                "available_double": 10,
+            },
+            "room_group": "boys",
+            "room_type": "Double",
+            "group_size": 3,
+            "flight_option": "Not Applicable",
+            "collection_state": {
+                "room_group": True,
+                "room_type": True,
+                "group_size": True,
+                "flight_option": True,
+            },
+        }
+
+        nationality_type_step = policy.evaluate(base_context)
+        self.assertEqual(nationality_type_step.state, "group_nationality_type_required")
+        self.assertEqual(nationality_type_step.required_step, "collect_group_nationality_type")
+
+        count_step = policy.evaluate({**base_context, "group_nationality_type": "mixed"})
+        self.assertEqual(count_step.state, "group_nationality_counts_required")
+        self.assertEqual(count_step.required_step, "collect_group_nationality_counts")
+
+        currency_step = policy.evaluate({
+            **base_context,
+            "group_nationality_type": "mixed",
+            "group_nationality_counts": {"egyptian": 2, "foreigner": 1},
+        })
+        self.assertEqual(currency_step.state, "currency_required")
+        self.assertIn("10,000 EGP", currency_step.assistant_message)
+        self.assertIn("$120", currency_step.assistant_message)
+
+        booking_step = policy.evaluate({
+            **base_context,
+            "group_nationality_type": "mixed",
+            "group_nationality_counts": {"egyptian": 2, "foreigner": 1},
+            "currency": "USD",
+        })
+        self.assertEqual(booking_step.state, "booking_ready")
 
     def test_created_new_traveler_continues_to_trip_flow_after_lead_save(self) -> None:
         _client, app = self._tool_calling_app()
@@ -783,8 +849,7 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
         for text, expected_stage in (
             ("Amina Hassan Salem", "nationality_required"),
             ("Egyptian", "birthday_required"),
-            ("26/05/2003", "currency_required"),
-            ("USD", "trip_type_required"),
+            ("26/05/2003", "trip_type_required"),
         ):
             session = client.post(f"/api/session/{session['id']}/message", json={"text": text}).get_json()["session"]
             self.assertEqual(session["stage"], expected_stage)

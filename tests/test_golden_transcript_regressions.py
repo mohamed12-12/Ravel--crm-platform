@@ -103,12 +103,10 @@ def test_new_traveler_intake_saves_lead_instead_of_looping(runtime: ToolCallingS
     session = runtime.create_session()
     for text in ("01270482380", "Maged Samir Adly", "Egyptian", "28/4/2006"):
         session = _send(runtime, text, session)
-    assert session.stage == "currency_required"
-
-    session = _send(runtime, "1", session)
 
     reply = session.messages[-1]["text"]
-    assert session.currency == "EGP"
+    assert session.stage == "trip_type_required"
+    assert session.currency == ""
     assert session.new_traveler_lead_saved is True
     assert "LD00003" in reply
     assert "I need one more detail" not in reply
@@ -118,8 +116,8 @@ def test_new_traveler_intake_saves_lead_instead_of_looping(runtime: ToolCallingS
     assert actions == ["create_traveler", "create_lead"]
 
     # The loop must not resurface on the following turn either: the runtime
-    # should have moved on to the next step (trip type) rather than re-asking
-    # for a currency it already has.
+    # should have moved on to the next step (trip type) rather than asking for
+    # payment currency during identity onboarding.
     session = _send(runtime, "1", session)
     assert "Which payment currency" not in session.messages[-1]["text"]
     # Guard against double-saving the same lead / traveler.
@@ -182,12 +180,10 @@ def test_new_traveler_intake_completes_when_lead_already_exists_for_this_travele
     session = runtime.create_session()
     for text in ("01270482380", "Maged Samir Adly", "Egyptian", "28/4/2006"):
         session = _send(runtime, text, session)
-    assert session.stage == "currency_required"
-
-    session = _send(runtime, "1", session)
 
     reply = session.messages[-1]["text"]
     assert session.new_traveler_lead_saved is True
+    assert session.stage == "trip_type_required"
     assert "LD00004" in reply
     assert "I need one more detail" not in reply
     assert [call.kwargs["action"] for call in runtime._write_executor.execute.call_args_list] == [
@@ -593,7 +589,7 @@ def test_saved_new_traveler_lead_continues_into_the_trip_workflow(
         },
     )
     session = runtime.create_session()
-    for text in ("01554158741", "Mohamed Ashraf Safwat.", "Egyptian", "28/4/2003", "1"):
+    for text in ("01554158741", "Mohamed Ashraf Safwat.", "Egyptian", "28/4/2003"):
         session = _send(runtime, text, session)
     assert session.new_traveler_lead_saved is True
     # The traveler is now a verified CRM identity, not a "new traveler" any more.
@@ -774,7 +770,7 @@ def _answer_booking_questions(runtime: ToolCallingSessionRuntime) -> SessionStat
 
     _verified_runtime(runtime)
     session = runtime.create_session()
-    for text in ("01554158741", "local", "1", "boys", "single", "2"):
+    for text in ("01554158741", "local", "1", "boys", "single", "2", "same", "1"):
         session = _send(runtime, text, session)
     return session
 
@@ -803,6 +799,10 @@ def test_full_booking_flow_asks_every_step_in_order_then_confirms(
     session = _send(runtime, "single", session)
     assert session.stage == "group_size_required"
     session = _send(runtime, "2", session)
+    assert session.stage == "group_nationality_type_required"
+    session = _send(runtime, "same", session)
+    assert session.stage == "currency_required"
+    session = _send(runtime, "1", session)
     assert session.stage == "booking_confirmation_required"
     summary = session.messages[-1]["text"]
     assert "Siwa Discovery Demo" in summary
@@ -993,6 +993,8 @@ def test_international_trip_requires_a_passport_attachment_before_the_draft(
 
     # International trips add two steps a local trip does not have: the flight
     # question and the passport attachment.
+    assert session.stage == "group_nationality_type_required"
+    session = _send(runtime, "same", session)
     assert session.stage == "flight_option_required"
     session = _send(runtime, "2", session)
     assert session.flight_option == "Without Flight"
@@ -1015,6 +1017,8 @@ def test_international_trip_requires_a_passport_attachment_before_the_draft(
     assert session.stage == "passport_country_required"
     session = _send(runtime, "Egyptian", session)
 
+    assert session.stage == "currency_required"
+    session = _send(runtime, "1", session)
     assert session.stage == "booking_confirmation_required"
     session = _send(runtime, "yes", session)
     payload = runtime._write_executor.execute.call_args_list[-1].kwargs["payload"]
