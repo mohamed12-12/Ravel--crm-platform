@@ -22,6 +22,8 @@ from .field_mapping import (
     TRIPS_SHEET_NAME,
 )
 from .phone_normalization import normalize_phone_input
+from .trip_program import build_trip_program
+from .trip_pricing import parse_room_prices
 
 
 BLOCKED_STATUSES = {"blacklisted", "blacklist"}
@@ -2108,6 +2110,7 @@ class UnifiedCRMService:
             "currency": str(self._row_value(row, "currency") or ""),
             "booking_status": str(self._row_value(row, "booking_status") or "Draft"),
             "payment_status": str(self._row_value(row, "payment_status") or "Pending"),
+            "refund_amount": self._row_value(row, "refund_amount"),
             "passport_required": bool(self._as_int(self._row_value(row, "passport_required"), default=0) or 0),
             "passport_status": str(self._row_value(row, "passport_status") or ""),
             "interaction": {"interaction_id": str(self._row_value(row, "interaction_id") or "")},
@@ -2445,6 +2448,7 @@ class UnifiedCRMService:
             "currency": currency,
             "booking_status": booking_status,
             "payment_status": payment_status or "Pending",
+            "refund_amount": None,
             "passport_required": bool(passport_required),
             "passport_status": passport_status or ("pending" if passport_required else ""),
             "available_before_draft": available,
@@ -3268,6 +3272,10 @@ class UnifiedCRMService:
             ("draft_holds_girls_double", "INTEGER DEFAULT 0"),
             ("draft_holds_boys_triple", "INTEGER DEFAULT 0"),
             ("draft_holds_girls_triple", "INTEGER DEFAULT 0"),
+            ("itinerary", "TEXT"),
+            ("inclusions", "TEXT"),
+            ("exclusions", "TEXT"),
+            ("room_prices_json", "TEXT"),
         ]
         for col_name, col_type in room_columns:
             if col_name not in existing_cols:
@@ -3309,6 +3317,10 @@ class UnifiedCRMService:
             "sales_notes",
         ]
         optional_columns = [
+            "itinerary",
+            "inclusions",
+            "exclusions",
+            "room_prices_json",
             "boys_double",
             "girls_double",
             "boys_triple",
@@ -3433,6 +3445,8 @@ class UnifiedCRMService:
             connection.execute("ALTER TABLE trip_bookings ADD COLUMN girls_rooms_requested INTEGER DEFAULT 0")
         if 'room_requirements_json' not in existing_cols:
             connection.execute("ALTER TABLE trip_bookings ADD COLUMN room_requirements_json TEXT")
+        if 'refund_amount' not in existing_cols:
+            connection.execute("ALTER TABLE trip_bookings ADD COLUMN refund_amount REAL")
 
     @staticmethod
     def _migrate_lead_columns(connection: sqlite3.Connection) -> None:
@@ -4144,7 +4158,7 @@ class UnifiedCRMService:
             availability_status = "manual_follow_up"
         else:
             availability_status = "full"
-        return {
+        result = {
             "row": 0,
             "trip_id": str(value("trip_id") or "").strip(),
             "trip_name": str(value("trip_name") or "").strip(),
@@ -4181,9 +4195,16 @@ class UnifiedCRMService:
             "remaining_places": remaining_places,
             "availability_status": availability_status,
             "public_price": str(value("public_price") or "").strip(),
+            "room_prices_json": str(value("room_prices_json") or "").strip(),
+            "room_prices": parse_room_prices(value("room_prices_json")),
             "public_description": str(value("public_description") or "").strip(),
+            "itinerary": str(value("itinerary") or "").strip(),
+            "inclusions": str(value("inclusions") or "").strip(),
+            "exclusions": str(value("exclusions") or "").strip(),
             "sales_notes": str(value("sales_notes") or "").strip(),
         }
+        result["program"] = build_trip_program(result)
+        return result
 
     def _trip_is_candidate(self, trip: dict[str, Any], *, today: date) -> bool:
         status = (trip.get("sales_status") or "").strip().lower()

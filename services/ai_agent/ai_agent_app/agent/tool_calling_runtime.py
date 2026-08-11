@@ -47,6 +47,7 @@ from services.ai_agent.ai_agent_app.config import Settings
 from services.ai_agent.ai_agent_app.logger import agent_logger
 from services.ai_agent.validation.validation_rules import CLOSED_LEAD_STAGES, normalize_flight_option, normalize_trip_type
 from services.ai_agent.llm import build_llm_provider
+from services.crm.system_services.trip_pricing import price_for_room_and_currency
 from services.crm.system_services.phone_normalization import normalize_phone_input
 
 
@@ -1862,6 +1863,10 @@ class ToolCallingSessionRuntime:
                     "city",
                     "location",
                     "public_description",
+                    "itinerary",
+                    "day_program",
+                    "inclusions",
+                    "exclusions",
                     "description",
                     "program",
                     "notes",
@@ -1900,13 +1905,23 @@ class ToolCallingSessionRuntime:
         return "I don't have a confirmed Ravel trip matching that request right now. If you mean a trip from an Instagram post or story, send the trip name or the ad image and I'll match it against Ravel's available trips."
 
     @staticmethod
-    def _trip_detail_summary(trip: dict[str, Any], language: str) -> str:
+    def _trip_detail_summary(
+        trip: dict[str, Any],
+        language: str,
+        *,
+        room_type: str = "",
+        currency: str = "",
+    ) -> str:
         trip_name = str(trip.get("trip_name") or "this trip").strip()
         trip_type = str(trip.get("trip_type") or trip.get("type") or "").strip().lower()
         start_date = str(trip.get("start_date") or "").strip()
         end_date = str(trip.get("end_date") or "").strip()
-        price = str(trip.get("public_price") or "").strip()
+        price = price_for_room_and_currency(trip, room_type=room_type, currency=currency)
         description = str(trip.get("public_description") or "").strip()
+        program = trip.get("program") if isinstance(trip.get("program"), dict) else {}
+        itinerary = list(program.get("itinerary") or []) if isinstance(program, dict) else []
+        inclusions = list(program.get("inclusions") or []) if isinstance(program, dict) else []
+        exclusions = list(program.get("exclusions") or []) if isinstance(program, dict) else []
         if language.startswith("ar"):
             type_label = "\u0645\u062d\u0644\u064a\u0629" if trip_type == "local" else "\u062f\u0648\u0644\u064a\u0629" if trip_type == "international" else trip_type
             lines = [f"\u0623\u0643\u064a\u062f. \u062f\u064a \u062a\u0641\u0627\u0635\u064a\u0644 \u0631\u062d\u0644\u0629 {trip_name} \u0627\u0644\u0645\u0624\u0643\u062f\u0629 \u0641\u064a CRM:"]
@@ -1920,6 +1935,18 @@ class ToolCallingSessionRuntime:
                 lines.append(f"\u0627\u0644\u0633\u0639\u0631: {price}")
             if description:
                 lines.append(f"\u0627\u0644\u0648\u0635\u0641: {description}")
+            if itinerary:
+                lines.append("\u0627\u0644\u0628\u0631\u0646\u0627\u0645\u062c:")
+                for item in itinerary:
+                    if isinstance(item, dict):
+                        day = item.get("day")
+                        details = str(item.get("details") or item.get("title") or "").strip()
+                        if details:
+                            lines.append(f"- \u0627\u0644\u064a\u0648\u0645 {day}: {details}" if day else f"- {details}")
+            if inclusions:
+                lines.append("\u064a\u0634\u0645\u0644: " + "، ".join(str(item) for item in inclusions))
+            if exclusions:
+                lines.append("\u0644\u0627 \u064a\u0634\u0645\u0644: " + "، ".join(str(item) for item in exclusions))
             return "\n".join(lines)
         type_label = trip_type.title() if trip_type else ""
         lines = [f"Sure. Here are the trip details for {trip_name}:"]
@@ -1933,6 +1960,18 @@ class ToolCallingSessionRuntime:
             lines.append(f"Price: {price}")
         if description:
             lines.append(f"Description: {description}")
+        if itinerary:
+            lines.append("Itinerary:")
+            for item in itinerary:
+                if isinstance(item, dict):
+                    day = item.get("day")
+                    details = str(item.get("details") or item.get("title") or "").strip()
+                    if details:
+                        lines.append(f"- Day {day}: {details}" if day else f"- {details}")
+        if inclusions:
+            lines.append("Inclusions: " + ", ".join(str(item) for item in inclusions))
+        if exclusions:
+            lines.append("Exclusions: " + ", ".join(str(item) for item in exclusions))
         return "\n".join(lines)
 
     @staticmethod
@@ -2094,12 +2133,22 @@ class ToolCallingSessionRuntime:
         session.messages.append({"role": "user", "text": clean_text})
         session_context = self._build_context(session, clean_text)
         decision = self._workflow_policy.evaluate(session_context)
-        details = self._trip_detail_summary(trip, session.language)
+        details = self._trip_detail_summary(
+            trip,
+            session.language,
+            room_type=session.room_type,
+            currency=session.currency,
+        )
         if decision.required_step in _BACKEND_OWNED_COLLECTION_STEPS:
             reply = f"{details}\n\n{self._backend_required_step_reply(session, decision, clean_text)}"
             session.stage = decision.state
         else:
-            reply = self._public_trip_reply(trip, session.language)
+            reply = self._public_trip_reply(
+                trip,
+                session.language,
+                room_type=session.room_type,
+                currency=session.currency,
+            )
             session.stage = "public_trip_details"
         self._append_agent_reply(
             session,
@@ -2543,7 +2592,12 @@ class ToolCallingSessionRuntime:
             self._append_agent_reply(
                 session,
                 message_key="trip.reference.single_match",
-                base_text=self._public_trip_reply(trip, session.language),
+                base_text=self._public_trip_reply(
+                    trip,
+                    session.language,
+                    room_type=session.room_type,
+                    currency=session.currency,
+                ),
                 user_text=clean_text,
                 required_action="Present this single verified trip match and ask whether the traveler wants to continue.",
             )
@@ -2591,12 +2645,18 @@ class ToolCallingSessionRuntime:
         return False
 
     @staticmethod
-    def _public_trip_reply(trip: dict[str, Any], language: str) -> str:
+    def _public_trip_reply(
+        trip: dict[str, Any],
+        language: str,
+        *,
+        room_type: str = "",
+        currency: str = "",
+    ) -> str:
         trip_name = str(trip.get("trip_name") or "this trip").strip()
         trip_type = str(trip.get("trip_type") or trip.get("type") or "").strip().lower()
         start_date = str(trip.get("start_date") or "").strip()
         end_date = str(trip.get("end_date") or "").strip()
-        price = str(trip.get("public_price") or "").strip()
+        price = price_for_room_and_currency(trip, room_type=room_type, currency=currency)
         description = str(trip.get("public_description") or "").strip()
         if language.startswith("ar"):
             type_label = "محلية" if trip_type == "local" else "دولية" if trip_type == "international" else trip_type

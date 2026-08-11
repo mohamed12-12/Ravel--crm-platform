@@ -22,6 +22,7 @@ from app.services.trip_media import (
     save_trip_media_uploads,
     verified_trip_media,
 )
+from services.crm.system_services.trip_pricing import has_room_price_inputs, room_prices_from_form, serialize_room_prices
 
 trips_bp = Blueprint('trips', __name__, url_prefix='/trips')
 
@@ -268,6 +269,7 @@ def create():
         boys_triple=to_int(data.get('boys_triple')),
         girls_triple=to_int(data.get('girls_triple')),
         public_price=data.get('public_price', ''),
+        room_prices_json=serialize_room_prices(room_prices_from_form(data)),
         public_description=data.get('public_description', ''),
         itinerary=data.get('itinerary', ''),
         inclusions=data.get('inclusions', ''),
@@ -332,6 +334,8 @@ def update(trip_id):
     trip.boys_triple = to_int(data.get('boys_triple'))
     trip.girls_triple = to_int(data.get('girls_triple'))
     trip.public_price = data.get('public_price', trip.public_price)
+    if has_room_price_inputs(data):
+        trip.room_prices_json = serialize_room_prices(room_prices_from_form(data))
     trip.public_description = data.get('public_description', trip.public_description)
     trip.itinerary = data.get('itinerary', trip.itinerary)
     trip.inclusions = data.get('inclusions', trip.inclusions)

@@ -932,6 +932,7 @@ class PostgresAgentCRMTools:
                 str(trip.get("itinerary") or ""),
                 str(trip.get("inclusions") or ""),
                 str(trip.get("exclusions") or ""),
+                str(trip.get("room_prices") or trip.get("room_prices_json") or ""),
                 str(trip.get("program") or ""),
             ]
         ).casefold()
