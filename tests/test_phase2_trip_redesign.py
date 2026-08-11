@@ -139,6 +139,108 @@ class Phase2TripRedesignTests(unittest.TestCase):
             self.assertEqual(trip.boys_triple, 3)
             self.assertEqual(trip.girls_triple, 2)
 
+    def test_trip_program_fields_survive_create_and_update(self) -> None:
+        response = self.client.post(
+            "/trips/",
+            data={
+                "trip_name": "Program Trip",
+                "trip_id": "RT-LOC-26-PROG",
+                "type": "Local",
+                "year": "2026",
+                "sales_status": "Open",
+                "itinerary": "Day 1: Arrival and welcome dinner\nDay 2: Mountain hike",
+                "inclusions": "Hotel stay\nLocal transport",
+                "exclusions": "Personal expenses\nOptional activities",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            trip = db.session.get(Trip, "RT-LOC-26-PROG")
+            self.assertEqual(trip.itinerary, "Day 1: Arrival and welcome dinner\nDay 2: Mountain hike")
+            self.assertEqual(trip.inclusions, "Hotel stay\nLocal transport")
+            self.assertEqual(trip.exclusions, "Personal expenses\nOptional activities")
+            self.assertEqual(trip.to_dict()["program"]["itinerary"][0]["details"], "Arrival and welcome dinner")
+
+        update = self.client.post(
+            "/trips/RT-LOC-26-PROG",
+            data={
+                "trip_name": "Program Trip Updated",
+                "type": "Local",
+                "sales_status": "Open",
+                "itinerary": "Day 1: Museum visit",
+                "inclusions": "Guide",
+                "exclusions": "Flights",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(update.status_code, 302)
+        with self.app.app_context():
+            trip = db.session.get(Trip, "RT-LOC-26-PROG")
+            self.assertEqual(trip.trip_name, "Program Trip Updated")
+            self.assertEqual(trip.itinerary, "Day 1: Museum visit")
+            self.assertEqual(trip.inclusions, "Guide")
+            self.assertEqual(trip.exclusions, "Flights")
+
+    def test_trip_room_prices_survive_create_and_update(self) -> None:
+        response = self.client.post(
+            "/trips/",
+            data={
+                "trip_name": "Room Price Trip",
+                "trip_id": "RT-LOC-26-PRICE",
+                "type": "Local",
+                "year": "2026",
+                "sales_status": "Open",
+                "public_price": "2000 EGP",
+                "single_price_egp": "3000",
+                "single_price_usd": "90",
+                "double_price_egp": "2000",
+                "double_price_usd": "60",
+                "triple_price_egp": "1500",
+                "triple_price_usd": "45",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            trip = db.session.get(Trip, "RT-LOC-26-PRICE")
+            self.assertEqual(trip.room_prices["Single"]["EGP"], "3000")
+            self.assertEqual(trip.room_prices["Double"]["USD"], "60")
+            self.assertEqual(trip.to_dict()["room_prices"]["Triple"]["USD"], "45")
+
+        update = self.client.post(
+            "/trips/RT-LOC-26-PRICE",
+            data={
+                "trip_name": "Room Price Trip Updated",
+                "type": "Local",
+                "sales_status": "Open",
+                "public_price": "2100 EGP",
+                "single_total": "0",
+                "double_total": "0",
+                "triple_total": "0",
+                "single_remaining": "0",
+                "double_remaining": "0",
+                "triple_remaining": "0",
+                "boys_double": "0",
+                "girls_double": "0",
+                "boys_triple": "0",
+                "girls_triple": "0",
+                "single_price_egp": "3200",
+                "single_price_usd": "95",
+                "double_price_egp": "2200",
+                "double_price_usd": "65",
+                "triple_price_egp": "1700",
+                "triple_price_usd": "50",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(update.status_code, 302)
+        with self.app.app_context():
+            trip = db.session.get(Trip, "RT-LOC-26-PRICE")
+            self.assertEqual(trip.trip_name, "Room Price Trip Updated")
+            self.assertEqual(trip.room_prices["Single"]["USD"], "95")
+            self.assertEqual(trip.room_prices["Double"]["EGP"], "2200")
+
 
 if __name__ == "__main__":
     unittest.main()

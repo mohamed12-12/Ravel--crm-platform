@@ -115,7 +115,7 @@ def build_read_only_tool_registry() -> dict[str, ToolSpec]:
         ),
         "get_trip_details": ToolSpec(
             name="get_trip_details",
-            description="Return the CRM details for one trip.",
+            description="Return the CRM details for one trip, including stored itinerary/day program, inclusions, exclusions, and missing program fields. If a program detail is absent, say it is unlisted in CRM instead of inventing it.",
             input_schema={
                 "type": "object",
                 "properties": {"trip_id": {"type": "string"}},

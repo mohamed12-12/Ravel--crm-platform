@@ -237,6 +237,40 @@ class TestPhase1GeminiReadOnlyAgent(unittest.TestCase):
         self.assertEqual(passport["traveler"]["passport_number"], "A1234567")
         self.assertEqual(len(passport["documents"]), 1)
 
+    def test_get_trip_details_returns_structured_program_fields(self) -> None:
+        self.conn.execute("ALTER TABLE trips ADD COLUMN itinerary TEXT")
+        self.conn.execute("ALTER TABLE trips ADD COLUMN inclusions TEXT")
+        self.conn.execute("ALTER TABLE trips ADD COLUMN exclusions TEXT")
+        self.conn.execute("ALTER TABLE trips ADD COLUMN room_prices_json TEXT")
+        self.conn.execute(
+            """
+            UPDATE trips
+            SET itinerary = ?, inclusions = ?, exclusions = ?, room_prices_json = ?
+            WHERE trip_id = ?
+            """,
+            (
+                "Day 1: Oasis arrival\nDay 2: Salt lake visit",
+                "Hotel\nTransport",
+                "",
+                '{"Double":{"USD":"60","EGP":"2000"},"Single":{"USD":"90"}}',
+                "RT-LOC-26-001",
+            ),
+        )
+        self.conn.commit()
+
+        with patch("services.ai_agent.ai_agent_app.agent.read_only_tools.get_system_service", return_value=self.fake_service):
+            tools = ReadOnlyCRMTools(self.settings)
+            result = tools.get_trip_details(trip_id="RT-LOC-26-001")
+
+        self.assertEqual(result["status"], "found")
+        program = result["trip"]["program"]
+        self.assertEqual(program["itinerary"][0]["details"], "Oasis arrival")
+        self.assertEqual(program["inclusions"], ["Hotel", "Transport"])
+        self.assertEqual(program["exclusions"], [])
+        self.assertEqual(result["trip"]["room_prices"]["Double"]["EGP"], "2000")
+        self.assertIn("exclusions", program["missing_fields"])
+        self.assertIn("unlisted in CRM", program["missing_policy"])
+
     def test_gemini_agent_uses_prompt_and_keeps_read_only_context(self) -> None:
         provider = StubProvider("Please share your WhatsApp number so I can check your profile safely.")
         with patch("services.ai_agent.ai_agent_app.agent.read_only_tools.get_system_service", return_value=self.fake_service):
@@ -268,6 +302,8 @@ class TestPhase1GeminiReadOnlyAgent(unittest.TestCase):
         self.assertEqual(payload["session_context"]["raw_phone"], "1112223333")
         self.assertIn("search_traveler", payload["available_tools"])
         self.assertIn("traveler_lookup", payload["crm_context"])
+        self.assertTrue(payload["grounding_policy"]["only_quote_itinerary_inclusions_exclusions_from_trip_program_fields"])
+        self.assertTrue(payload["grounding_policy"]["if_program_detail_missing_say_unlisted_in_crm"])
 
     def test_gemini_agent_handles_arabic_and_write_refusal(self) -> None:
         provider = StubProvider("أرسل رقم الواتساب من فضلك.")

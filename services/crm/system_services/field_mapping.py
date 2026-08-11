@@ -27,6 +27,10 @@ TRIPS_SHEET_COLUMNS = {
     "girls_triple": 17,
     "sales_status": 26,
     "data_audit": 27,
+    "itinerary": 28,
+    "inclusions": 29,
+    "exclusions": 30,
+    "room_prices_json": 31,
 }
 
 BOOKING_EVENT_TRAIL_SHEET_NAME = "Booking Event Trail"
@@ -170,6 +174,7 @@ SHEET_TABLE_MAPPINGS = {
             "interaction_id": "Interaction ID",
             "alert_id": "Alert ID",
             "payment_status": "Payment Status",
+            "refund_amount": "Refund Amount",
             "booking_notes": "Booking Notes",
         },
     },
