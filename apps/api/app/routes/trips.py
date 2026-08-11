@@ -269,6 +269,9 @@ def create():
         girls_triple=to_int(data.get('girls_triple')),
         public_price=data.get('public_price', ''),
         public_description=data.get('public_description', ''),
+        itinerary=data.get('itinerary', ''),
+        inclusions=data.get('inclusions', ''),
+        exclusions=data.get('exclusions', ''),
         sales_notes=_compose_trip_sales_notes(data),
     )
     try:
@@ -330,6 +333,9 @@ def update(trip_id):
     trip.girls_triple = to_int(data.get('girls_triple'))
     trip.public_price = data.get('public_price', trip.public_price)
     trip.public_description = data.get('public_description', trip.public_description)
+    trip.itinerary = data.get('itinerary', trip.itinerary)
+    trip.inclusions = data.get('inclusions', trip.inclusions)
+    trip.exclusions = data.get('exclusions', trip.exclusions)
     trip.sales_notes = _compose_trip_sales_notes(data, trip)
 
     try:

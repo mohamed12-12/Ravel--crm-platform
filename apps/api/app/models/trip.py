@@ -2,6 +2,7 @@
 from app.extensions import db
 from datetime import datetime, date
 import pandas as pd
+from services.crm.system_services.trip_program import build_trip_program
 
 class Trip(db.Model):
     __tablename__ = 'trips'
@@ -48,6 +49,9 @@ class Trip(db.Model):
     # Content Fields
     public_price = db.Column(db.String(200))
     public_description = db.Column(db.Text)
+    itinerary = db.Column(db.Text)
+    inclusions = db.Column(db.Text)
+    exclusions = db.Column(db.Text)
     sales_notes = db.Column(db.Text)
 
     # Relationships
@@ -119,6 +123,9 @@ class Trip(db.Model):
             girls_triple=to_int(row.get("Girls Triple")),
             public_price=clean(row.get("Public Price")),
             public_description=clean(row.get("Public Description")),
+            itinerary=clean(row.get("Itinerary")) or clean(row.get("Day Program")),
+            inclusions=clean(row.get("Inclusions")),
+            exclusions=clean(row.get("Exclusions")),
             sales_notes=clean(row.get("Sales Notes"))
         )
 
@@ -156,5 +163,13 @@ class Trip(db.Model):
             "draft_holds_girls_triple": self.draft_holds_girls_triple,
             "public_price": self.public_price,
             "public_description": self.public_description,
+            "itinerary": self.itinerary,
+            "inclusions": self.inclusions,
+            "exclusions": self.exclusions,
+            "program": build_trip_program({
+                "itinerary": self.itinerary,
+                "inclusions": self.inclusions,
+                "exclusions": self.exclusions,
+            }),
             "sales_notes": self.sales_notes
         }

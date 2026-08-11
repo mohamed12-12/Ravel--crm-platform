@@ -929,6 +929,10 @@ class PostgresAgentCRMTools:
                 str(trip.get("type") or ""),
                 str(trip.get("trip_leader") or ""),
                 str(trip.get("public_description") or ""),
+                str(trip.get("itinerary") or ""),
+                str(trip.get("inclusions") or ""),
+                str(trip.get("exclusions") or ""),
+                str(trip.get("program") or ""),
             ]
         ).casefold()
         return query.casefold() in haystack
