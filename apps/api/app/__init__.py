@@ -176,10 +176,18 @@ def _ensure_lead_and_booking_group_columns(app: Flask) -> None:
                 ("boys_rooms_requested", "INTEGER DEFAULT 0"),
                 ("girls_rooms_requested", "INTEGER DEFAULT 0"),
                 ("room_requirements_json", "TEXT"),
+                ("refund_amount", "FLOAT"),
             ):
                 if column_name not in booking_columns:
                     with db.engine.begin() as connection:
                         connection.execute(text(f"ALTER TABLE trip_bookings ADD COLUMN {column_name} {column_type}"))
+
+        if "trips" in inspector.get_table_names():
+            trip_columns = {column["name"] for column in inspector.get_columns("trips")}
+            for column_name in ("itinerary", "inclusions", "exclusions", "room_prices_json"):
+                if column_name not in trip_columns:
+                    with db.engine.begin() as connection:
+                        connection.execute(text(f"ALTER TABLE trips ADD COLUMN {column_name} TEXT"))
 
 
 def _ensure_employee_followup_columns(app: Flask) -> None:

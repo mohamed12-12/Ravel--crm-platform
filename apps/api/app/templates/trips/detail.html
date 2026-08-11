@@ -83,7 +83,7 @@
                 </div>
                 <div style="text-align:right;flex-shrink:0">
                     <div style="font-size:1.4rem;font-weight:800;color:var(--text-main)">{{ trip.public_price or '—' }}</div>
-                    <div style="font-size:0.72rem;color:var(--text-muted)">per person</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted)">legacy fallback price</div>
                 </div>
             </div>
 
@@ -142,6 +142,48 @@
         <div class="card">
             <div class="card-title" style="margin-bottom:0.75rem">Description</div>
             <div style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;white-space:pre-wrap">{{ trip.public_description }}</div>
+        </div>
+        {% endif %}
+
+        {% if trip.itinerary or trip.inclusions or trip.exclusions %}
+        <div class="card">
+            <div class="card-title" style="margin-bottom:0.75rem">Program Details</div>
+            {% if trip.itinerary %}
+            <div style="margin-bottom:0.9rem">
+                <div class="form-label">Itinerary</div>
+                <div style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;white-space:pre-wrap">{{ trip.itinerary }}</div>
+            </div>
+            {% endif %}
+            {% if trip.inclusions %}
+            <div style="margin-bottom:0.9rem">
+                <div class="form-label">Inclusions</div>
+                <div style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;white-space:pre-wrap">{{ trip.inclusions }}</div>
+            </div>
+            {% endif %}
+            {% if trip.exclusions %}
+            <div>
+                <div class="form-label">Exclusions</div>
+                <div style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;white-space:pre-wrap">{{ trip.exclusions }}</div>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% if trip.room_prices %}
+        <div class="card">
+            <div class="card-title" style="margin-bottom:0.75rem">Room Pricing</div>
+            <table class="data-table">
+                <thead><tr><th>Room Type</th><th>EGP</th><th>USD</th></tr></thead>
+                <tbody>
+                {% for room_type in ['Single', 'Double', 'Triple'] %}
+                <tr>
+                    <td class="primary">{{ room_type }}</td>
+                    <td>{{ trip.room_prices_grid[room_type]['EGP'] or '—' }}</td>
+                    <td>{{ trip.room_prices_grid[room_type]['USD'] or '—' }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
         </div>
         {% endif %}
 
@@ -318,6 +360,20 @@
                     <input class="form-input" type="text" name="public_price" value="{{ trip.public_price or '' }}">
                 </div>
                 <div class="form-group col-span-2">
+                    <label class="form-label">Room Prices by Type and Currency</label>
+                    <div style="display:grid;grid-template-columns:120px 1fr 1fr;gap:0.5rem;align-items:center">
+                        <div></div>
+                        <div class="form-label" style="margin:0">EGP</div>
+                        <div class="form-label" style="margin:0">USD</div>
+                        {% for room_type in ['Single', 'Double', 'Triple'] %}
+                        <div style="font-size:0.8rem;font-weight:700;color:var(--text-main)">{{ room_type }}</div>
+                        <input class="form-input" type="text" name="{{ room_type.lower() }}_price_egp" value="{{ trip.room_prices_grid[room_type]['EGP'] }}">
+                        <input class="form-input" type="text" name="{{ room_type.lower() }}_price_usd" value="{{ trip.room_prices_grid[room_type]['USD'] }}">
+                        {% endfor %}
+                    </div>
+                    <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.35rem">Used for exact room and currency quotes. The public price stays as a fallback for older flows.</div>
+                </div>
+                <div class="form-group col-span-2">
                     <label class="form-label">Single / Double / Triple Total</label>
                     <div style="display:flex;gap:0.5rem">
                         <input class="form-input" type="number" name="single_total" value="{{ trip.single_total }}" placeholder="Single" min="0">
@@ -354,6 +410,18 @@
                 <div class="form-group col-span-2">
                     <label class="form-label">Description</label>
                     <textarea class="form-textarea" name="public_description">{{ trip.public_description or '' }}</textarea>
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Itinerary / Day Program</label>
+                    <textarea class="form-textarea" name="itinerary" placeholder="Day 1: Arrival and orientation&#10;Day 2: Main activity">{{ trip.itinerary or '' }}</textarea>
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Inclusions</label>
+                    <textarea class="form-textarea" name="inclusions" placeholder="Accommodation&#10;Transportation">{{ trip.inclusions or '' }}</textarea>
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Exclusions</label>
+                    <textarea class="form-textarea" name="exclusions" placeholder="Personal expenses&#10;Optional activities">{{ trip.exclusions or '' }}</textarea>
                 </div>
                 <div class="form-group col-span-2">
                     <label class="form-label">Replace Main Trip Image</label>

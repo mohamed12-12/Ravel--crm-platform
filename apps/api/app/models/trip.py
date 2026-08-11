@@ -2,6 +2,8 @@
 from app.extensions import db
 from datetime import datetime, date
 import pandas as pd
+from services.crm.system_services.trip_program import build_trip_program
+from services.crm.system_services.trip_pricing import parse_room_prices, room_prices_grid
 
 class Trip(db.Model):
     __tablename__ = 'trips'
@@ -47,7 +49,11 @@ class Trip(db.Model):
     
     # Content Fields
     public_price = db.Column(db.String(200))
+    room_prices_json = db.Column(db.Text)
     public_description = db.Column(db.Text)
+    itinerary = db.Column(db.Text)
+    inclusions = db.Column(db.Text)
+    exclusions = db.Column(db.Text)
     sales_notes = db.Column(db.Text)
 
     # Relationships
@@ -118,7 +124,11 @@ class Trip(db.Model):
             boys_triple=to_int(row.get("Boys Triple")),
             girls_triple=to_int(row.get("Girls Triple")),
             public_price=clean(row.get("Public Price")),
+            room_prices_json=clean(row.get("Room Prices JSON")),
             public_description=clean(row.get("Public Description")),
+            itinerary=clean(row.get("Itinerary")) or clean(row.get("Day Program")),
+            inclusions=clean(row.get("Inclusions")),
+            exclusions=clean(row.get("Exclusions")),
             sales_notes=clean(row.get("Sales Notes"))
         )
 
@@ -155,6 +165,24 @@ class Trip(db.Model):
             "draft_holds_boys_triple": self.draft_holds_boys_triple,
             "draft_holds_girls_triple": self.draft_holds_girls_triple,
             "public_price": self.public_price,
+            "room_prices_json": self.room_prices_json,
+            "room_prices": self.room_prices,
             "public_description": self.public_description,
+            "itinerary": self.itinerary,
+            "inclusions": self.inclusions,
+            "exclusions": self.exclusions,
+            "program": build_trip_program({
+                "itinerary": self.itinerary,
+                "inclusions": self.inclusions,
+                "exclusions": self.exclusions,
+            }),
             "sales_notes": self.sales_notes
         }
+
+    @property
+    def room_prices(self) -> dict[str, dict[str, str]]:
+        return parse_room_prices(self.room_prices_json)
+
+    @property
+    def room_prices_grid(self) -> dict[str, dict[str, str]]:
+        return room_prices_grid(self.room_prices_json)

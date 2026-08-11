@@ -33,6 +33,7 @@ class EmployeeFollowupWorkspaceTests(unittest.TestCase):
         self.app.config.update(TESTING=True, CRM_AUTH_ENABLED=True, SECRET_KEY="test-secret")
         from app.extensions import db
         from app.models.booking import TripBooking
+        from app.models.assignment_history import AssignmentHistory
         from app.models.booking_event import BookingEventTrail
         from app.models.booking_status_history import BookingStatusHistory
         from app.models.lead import Lead
@@ -42,6 +43,7 @@ class EmployeeFollowupWorkspaceTests(unittest.TestCase):
 
         self.db = db
         self.TripBooking = TripBooking
+        self.AssignmentHistory = AssignmentHistory
         self.BookingStatusHistory = BookingStatusHistory
         self.BookingEventTrail = BookingEventTrail
         self.Lead = Lead
@@ -137,6 +139,24 @@ class EmployeeFollowupWorkspaceTests(unittest.TestCase):
         with self.app.app_context():
             return self.User.query.filter_by(username=username).one().id
 
+    def _ensure_user(self, *, username: str, role: str) -> int:
+        with self.app.app_context():
+            user = self.User.query.filter_by(username=username).one_or_none()
+            if user is None:
+                user = self.User(
+                    username=username,
+                    full_name=username.title(),
+                    password_hash="test-hash",
+                    role=role,
+                    is_active=True,
+                )
+                self.db.session.add(user)
+            else:
+                user.role = role
+                user.is_active = True
+            self.db.session.commit()
+            return user.id
+
     def test_unauthenticated_browser_status_update_redirects_to_login_not_raw_json(self) -> None:
         response = self.client.post(
             "/bookings/B-FU-1/status",
@@ -199,6 +219,87 @@ class EmployeeFollowupWorkspaceTests(unittest.TestCase):
             self.assertEqual(history.change_source, "crm-ui")
             # BookingEventTrail writes were tied to the removed SQLite path and
             # remain a tracked follow-up, not a regression for this route.
+
+    def test_manager_can_set_partial_refund_and_amount(self) -> None:
+        token = self._login(role="manager", username="mona")
+        response = self.client.post(
+            "/bookings/B-FU-1/status",
+            data={
+                "csrf_token": token,
+                "expected_history_count": "0",
+                "booking_status": "Confirmed",
+                "payment_status": "Partial Refund",
+                "refund_amount": "125.50",
+                "booking_notes": "Approved partial refund.",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-FU-1")
+            self.assertEqual(booking.payment_status, "Partial Refund")
+            self.assertEqual(booking.refund_amount, 125.50)
+            self.assertIn("Approved partial refund.", booking.booking_notes)
+
+    def test_admin_can_set_full_refund_and_amount(self) -> None:
+        token = self._login(role="admin", username="admin")
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-FU-1")
+            booking.payment_status = "Fully Paid"
+            self.db.session.commit()
+        response = self.client.post(
+            "/bookings/B-FU-1/status",
+            data={
+                "csrf_token": token,
+                "expected_history_count": "0",
+                "booking_status": "Confirmed",
+                "payment_status": "Full Refund",
+                "refund_amount": "500",
+                "booking_notes": "Approved full refund.",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-FU-1")
+            self.assertEqual(booking.payment_status, "Full Refund")
+            self.assertEqual(booking.refund_amount, 500.0)
+
+    def test_sales_cannot_change_payment_status_or_refund_amount(self) -> None:
+        token = self._login(role="sales", username="sara")
+        response = self.client.post(
+            "/bookings/B-FU-1/status",
+            data={
+                "csrf_token": token,
+                "expected_history_count": "0",
+                "booking_status": "Confirmed",
+                "payment_status": "Deposit Paid",
+                "refund_amount": "50",
+                "booking_notes": "Trying to change payment.",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-FU-1")
+            self.assertEqual(booking.payment_status, "Pending")
+            self.assertIsNone(booking.refund_amount)
+            self.assertIsNone(booking.booking_notes)
+
+    def test_sales_can_add_booking_note_without_payment_change(self) -> None:
+        token = self._login(role="sales", username="sara")
+        response = self.client.post(
+            "/bookings/B-FU-1/status",
+            data={
+                "csrf_token": token,
+                "expected_history_count": "0",
+                "booking_status": "Confirmed",
+                "booking_notes": "Customer asked for a callback.",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-FU-1")
+            self.assertEqual(booking.payment_status, "Pending")
+            self.assertIsNone(booking.refund_amount)
+            self.assertIn("Customer asked for a callback.", booking.booking_notes)
 
     def test_status_update_ignores_broken_system_db_path_and_writes_postgres_models(self) -> None:
         token = self._login(role="manager", username="mona")
@@ -334,6 +435,127 @@ class EmployeeFollowupWorkspaceTests(unittest.TestCase):
             event = self.BookingEventTrail.query.filter_by(lead_id="L-FU-LOST").one()
             self.assertIn("Lost -> Won", event.notes)
             self.assertIn("Customer confirmed", event.notes)
+
+    def test_new_leads_without_assignee_auto_assign_round_robin_sales_only(self) -> None:
+        token = self._login(role="manager", username="mona")
+        first_sales_id = self._ensure_user(username="aya", role="sales")
+        second_sales_id = self._ensure_user(username="zain", role="sales")
+        self._ensure_user(username="omar", role="agent")
+
+        for name, phone in (
+            ("Round Robin One", "201011111111"),
+            ("Round Robin Two", "201022222222"),
+            ("Round Robin Three", "201033333333"),
+        ):
+            response = self.client.post(
+                "/leads/",
+                data={
+                    "csrf_token": token,
+                    "customer_name": name,
+                    "raw_phone": phone,
+                    "lead_stage": "Contacted",
+                    "priority": "Medium",
+                    "lead_source": "WhatsApp",
+                },
+            )
+            self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            leads_by_name = {
+                lead.customer_name: lead
+                for lead in self.Lead.query.filter(
+                    self.Lead.customer_name.in_(["Round Robin One", "Round Robin Two", "Round Robin Three"])
+                ).all()
+            }
+            self.assertEqual(leads_by_name["Round Robin One"].assigned_to_user_id, first_sales_id)
+            self.assertEqual(leads_by_name["Round Robin Two"].assigned_to_user_id, second_sales_id)
+            self.assertEqual(leads_by_name["Round Robin Three"].assigned_to_user_id, first_sales_id)
+            leads = list(leads_by_name.values())
+            history = (
+                self.AssignmentHistory.query
+                .filter_by(resource_type="lead")
+                .filter(self.AssignmentHistory.resource_id.in_([lead.lead_id for lead in leads]))
+                .order_by(self.AssignmentHistory.id.asc())
+                .all()
+            )
+            self.assertEqual([item.new_user_id for item in history], [first_sales_id, second_sales_id, first_sales_id])
+
+    def test_explicit_manual_assignment_overrides_auto_assignment(self) -> None:
+        token = self._login(role="manager", username="mona")
+        self._ensure_user(username="aya", role="sales")
+        manual_sales_id = self._ensure_user(username="zain", role="sales")
+
+        response = self.client.post(
+            "/leads/",
+            data={
+                "csrf_token": token,
+                "customer_name": "Manual Override Lead",
+                "raw_phone": "201044444444",
+                "lead_stage": "Contacted",
+                "priority": "High",
+                "lead_source": "WhatsApp",
+                "assigned_to_user_id": str(manual_sales_id),
+                "assignment_reason": "VIP handoff",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            lead = self.Lead.query.filter_by(customer_name="Manual Override Lead").one()
+            self.assertEqual(lead.assigned_to_user_id, manual_sales_id)
+            history = self.AssignmentHistory.query.filter_by(resource_type="lead", resource_id=lead.lead_id).all()
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0].new_user_id, manual_sales_id)
+            self.assertEqual(history[0].reason, "VIP handoff")
+
+    def test_manager_can_manually_reassign_auto_assigned_lead(self) -> None:
+        token = self._login(role="manager", username="mona")
+        first_sales_id = self._ensure_user(username="aya", role="sales")
+        second_sales_id = self._ensure_user(username="zain", role="sales")
+
+        create_response = self.client.post(
+            "/leads/",
+            data={
+                "csrf_token": token,
+                "customer_name": "Reassign Me",
+                "raw_phone": "201055555555",
+                "lead_stage": "Contacted",
+                "priority": "Medium",
+                "lead_source": "WhatsApp",
+            },
+        )
+        self.assertEqual(create_response.status_code, 302)
+
+        with self.app.app_context():
+            lead = self.Lead.query.filter_by(customer_name="Reassign Me").one()
+            self.assertEqual(lead.assigned_to_user_id, first_sales_id)
+            lead_id = lead.lead_id
+            expected_updated_at = lead.updated_at.isoformat() if lead.updated_at else ""
+
+        update_response = self.client.post(
+            f"/leads/{lead_id}",
+            data={
+                "csrf_token": token,
+                "expected_updated_at": expected_updated_at,
+                "assigned_to_user_id": str(second_sales_id),
+                "assignment_reason": "Coverage rebalance",
+            },
+        )
+        self.assertEqual(update_response.status_code, 302)
+
+        with self.app.app_context():
+            lead = self.db.session.get(self.Lead, lead_id)
+            self.assertEqual(lead.assigned_to_user_id, second_sales_id)
+            history = (
+                self.AssignmentHistory.query
+                .filter_by(resource_type="lead", resource_id=lead_id)
+                .order_by(self.AssignmentHistory.id.asc())
+                .all()
+            )
+            self.assertEqual(len(history), 2)
+            self.assertEqual(history[0].new_user_id, first_sales_id)
+            self.assertEqual(history[1].previous_user_id, first_sales_id)
+            self.assertEqual(history[1].new_user_id, second_sales_id)
 
     def test_unauthorized_assignment_change_is_rejected(self) -> None:
         token = self._login(role="agent", username="agent")

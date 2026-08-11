@@ -8,6 +8,8 @@ from urllib.parse import urljoin
 from services.ai_agent.ai_agent_app.config import Settings
 from services.ai_agent.ai_agent_app.agent.crm_api_client import CRMApiClient
 from services.ai_agent.ai_agent_app.system_bridge import get_system_service
+from services.crm.system_services.trip_program import build_trip_program
+from services.crm.system_services.trip_pricing import parse_room_prices
 
 
 class ReadOnlyCRMTools:
@@ -60,8 +62,14 @@ class ReadOnlyCRMTools:
                 "city",
                 "location",
                 "public_description",
+                "itinerary",
+                "day_program",
+                "inclusions",
+                "exclusions",
                 "description",
                 "program",
+                "room_prices",
+                "room_prices_json",
                 "notes",
             )
         ).casefold()
@@ -413,6 +421,8 @@ class ReadOnlyCRMTools:
         trip = self._row_to_dict(row)
         if not trip:
             return {"trip": None, "status": "not_found"}
+        trip["room_prices"] = parse_room_prices(trip.get("room_prices") or trip.get("room_prices_json"))
+        trip["program"] = build_trip_program(trip)
         return {"trip": trip, "status": "found"}
 
     def get_trip_media(self, *, trip_id: str) -> dict[str, Any]:

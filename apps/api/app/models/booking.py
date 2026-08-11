@@ -38,6 +38,7 @@ class TripBooking(db.Model):
     interaction_id = db.Column(db.String(50))
     alert_id = db.Column(db.String(50))
     payment_status = db.Column(db.String(100))
+    refund_amount = db.Column(db.Float)
     passport_required = db.Column(db.Boolean, default=False)
     passport_status = db.Column(db.String(50))
     booking_notes = db.Column(db.Text)
@@ -101,6 +102,7 @@ class TripBooking(db.Model):
             interaction_id=clean(row.get("Interaction ID")),
             alert_id=clean(row.get("Alert ID")),
             payment_status=clean(row.get("Payment Status")),
+            refund_amount=clean(row.get("Refund Amount")),
             passport_required=bool(clean(row.get("Passport Required"))) if clean(row.get("Passport Required")) is not None else False,
             passport_status=clean(row.get("Passport Status")),
             booking_notes=clean(row.get("Booking Notes")),
@@ -139,6 +141,7 @@ class TripBooking(db.Model):
             "interaction_id": self.interaction_id,
             "alert_id": self.alert_id,
             "payment_status": self.payment_status,
+            "refund_amount": self.refund_amount,
             "passport_required": bool(self.passport_required),
             "passport_status": self.passport_status,
             "booking_notes": self.booking_notes,

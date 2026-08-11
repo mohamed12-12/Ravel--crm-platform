@@ -841,6 +841,23 @@ def test_trip_search_reply_hides_internal_terms_and_room_quantities(runtime: Too
     assert "Here are the international trips currently available" in reply
 
 
+def test_trip_public_reply_uses_selected_room_price_and_currency() -> None:
+    trip = {
+        **TRIPS[0],
+        "room_prices": {
+            "Single": {"EGP": "3000", "USD": "90"},
+            "Double": {"EGP": "2000", "USD": "60"},
+            "Triple": {"EGP": "1500", "USD": "45"},
+        },
+    }
+
+    reply = ToolCallingSessionRuntime._public_trip_reply(trip, "en", room_type="Double", currency="USD")
+
+    assert "Price: 60" in reply
+    assert "2500 USD" not in reply
+    assert "90" not in reply
+
+
 def test_model_context_converts_room_inventory_to_availability_status(runtime: ToolCallingSessionRuntime) -> None:
     trip = {
         **TRIPS[0],

@@ -33,6 +33,17 @@ def active_assignees() -> list[User]:
     )
 
 
+def active_sales_assignees(*, for_update: bool = False) -> list[User]:
+    query = (
+        User.query
+        .filter(User.is_active.is_(True), User.role == 'sales')
+        .order_by(User.full_name.asc(), User.username.asc(), User.id.asc())
+    )
+    if for_update:
+        query = query.with_for_update()
+    return query.all()
+
+
 def resolve_user_id(raw_value: Any, *, allow_blank: bool = True) -> int | None:
     raw = '' if raw_value is None else str(raw_value).strip()
     if not raw:
@@ -115,6 +126,47 @@ def assignment_history(resource_type: str, resource_id: str) -> list[AssignmentH
         .filter_by(resource_type=resource_type, resource_id=resource_id)
         .order_by(AssignmentHistory.created_at.asc(), AssignmentHistory.id.asc())
         .all()
+    )
+
+
+def next_round_robin_sales_assignee() -> User | None:
+    sales_users = active_sales_assignees(for_update=True)
+    if not sales_users:
+        return None
+
+    sales_ids = [user.id for user in sales_users]
+    last_assigned_id = (
+        db.session.query(AssignmentHistory.new_user_id)
+        .join(User, User.id == AssignmentHistory.new_user_id)
+        .filter(
+            AssignmentHistory.resource_type == 'lead',
+            AssignmentHistory.new_user_id.in_(sales_ids),
+            User.is_active.is_(True),
+            User.role == 'sales',
+        )
+        .order_by(AssignmentHistory.created_at.desc(), AssignmentHistory.id.desc())
+        .with_for_update()
+        .limit(1)
+        .scalar()
+    )
+    if last_assigned_id not in sales_ids:
+        return sales_users[0]
+
+    next_index = (sales_ids.index(last_assigned_id) + 1) % len(sales_users)
+    return sales_users[next_index]
+
+
+def auto_assign_lead(resource, *, actor: User | None, reason: str = '') -> bool:
+    next_user = next_round_robin_sales_assignee()
+    if next_user is None:
+        return False
+    return apply_assignment(
+        resource,
+        resource_type='lead',
+        resource_id=resource.lead_id,
+        new_user_id=next_user.id,
+        actor=actor,
+        reason=reason or 'Automatic round-robin sales assignment',
     )
 
 
