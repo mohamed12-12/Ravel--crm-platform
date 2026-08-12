@@ -10,6 +10,7 @@ from sqlalchemy import func, or_, text
 
 from app.extensions import db
 from app.models import BookingStatusHistory, HandoffQueue, Interaction, Lead, Traveler, TravelerDocument, Trip, TripBooking, TripMedia
+from app.services.assignments import auto_assign_booking, auto_assign_lead
 from services.crm.system_services.unified_service import UnifiedCRMService
 
 
@@ -422,6 +423,11 @@ class PostgresAgentBridgeService:
         traveler = db.session.get(Traveler, traveler_id) if traveler_id else None
         if traveler is not None:
             traveler.last_lead_id = lead_id
+        auto_assign_lead(
+            lead,
+            actor=None,
+            reason="Automatic round-robin sales assignment on lead creation",
+        )
         db.session.commit()
         payload = lead.to_dict()
         payload["idempotency_key"] = resolved_idempotency_key
@@ -737,6 +743,11 @@ class PostgresAgentBridgeService:
             notes="Created through PostgreSQL-backed agent bridge.",
         )
         db.session.add(history)
+        auto_assign_booking(
+            booking,
+            actor=None,
+            reason="Automatic round-robin sales assignment on booking creation",
+        )
         db.session.commit()
         return self._booking_result(booking, "created", True, False, resolved_idempotency_key)
 

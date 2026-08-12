@@ -467,7 +467,8 @@ def update_status(booking_id):
             try:
                 recalculate_traveler_stats(booking.traveler_id)
             except Exception:
-                pass
+                logger.error("Traveler stats recalculation failed booking_id=%s traveler_id=%s", booking_id, booking.traveler_id, exc_info=True)
+                db.session.rollback()
     except ValueError as e:
         message = 'Invalid status transition' if 'Invalid booking status transition' in str(e) else str(e)
         flash(message, 'error')

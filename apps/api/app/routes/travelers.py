@@ -1,4 +1,5 @@
 # app/routes/travelers.py
+import logging
 import re
 from pathlib import Path
 from datetime import datetime, timezone
@@ -26,6 +27,8 @@ from services.crm.system_services.trip_pricing import price_for_room_and_currenc
 from services.data_authority import load_data_authority
 from app.security import can_view_all_records, current_user_id, has_permission
 from app.services.traveler_stats import recalculate_traveler_stats
+
+logger = logging.getLogger(__name__)
 
 travelers_bp = Blueprint('travelers', __name__, url_prefix='/travelers')
 ARCHIVE_LIKE_STATUSES = {"inactive", "archived", "blacklisted", "blocked"}
@@ -405,7 +408,8 @@ def detail(traveler_id):
     try:
         recalculate_traveler_stats(traveler_id)
     except Exception:
-        pass
+        logger.error("Traveler stats recalculation failed traveler_id=%s", traveler_id, exc_info=True)
+        db.session.rollback()
     traveler = db.get_or_404(Traveler, traveler_id)
     try:
         UnifiedCRMService().ensure_operational_schema()

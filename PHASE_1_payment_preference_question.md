@@ -47,9 +47,13 @@ The risk is semantic, not technical: changing the existing currency step when th
 
 ## Tests
 
-Not run. No code was changed in this documentation-only pass.
+**Stage B, 2026-08-11:** ran the full `workflow_policy`/`session_flow`-adjacent suite (18 test files). Result: 424 passed, 24 subtests passed, 1 failed. The one failure (`test_tier2_field_validation.py::test_passport_country_mismatch_with_stated_nationality_does_not_block`) was confirmed via `git stash` to already fail identically before this session's changes, and is unrelated (this pass only touched the two `.md` prompt files, which have no Python import path into that test). Full detail in `ravel_agent_master_discovery_report.md`'s 2026-08-11 entry.
 
 ## Live verification
 
-Not run. No deployed app behavior was changed or verified in this documentation-only pass.
+Not yet performed for the prompt polish itself (persona/wording changes, low technical risk). Held pending approval per Stage B's "report and pause" instruction, alongside the still-open live re-check for the unrelated Travel Summary trip-count fix (see the discovery report).
+
+## Implementation status
+
+**Stage B complete for the terminology/scope this execution round specified.** Changed `gemini_agent_system.md` and `agent_conversation.md` only: natural, varied wording for the currency question, EGP/USD dialect-variation recognition, and mid-flow "why do you need this" handling — no `workflow_policy.py`/`session_flow.py` changes, since the timing ordering was already correct (see "Current state" above) and this round's instructions scoped the work to prompt/persona polish. Holding for approval before Phase 2.
 

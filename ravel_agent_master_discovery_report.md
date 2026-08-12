@@ -796,3 +796,122 @@ real HTTP CSRF+auth+FK-enforced live check rather than re-added.
 a foreign-key-*enforced* test, not just a SQLite-default test, or a broken
 cascade (or a non-existent one that was never actually broken) is
 indistinguishable from a correct one locally.
+
+---
+
+## 2026-08-11 -- Traveler Travel Summary trip-count split-brain, and Phase 1 (payment preference) Stage B
+
+### Issue 1 -- Travel Summary widget (local/international/total trips, lifetime revenue) stuck at 0 despite a Completed/Fully Paid booking
+
+**Confirmed root cause:** `apps/api/app/routes/travelers.py`'s traveler-detail
+route and `bookings.py`'s delete route both refreshed these counters via
+`UnifiedCRMService.recalculate_traveler_stats`, which always opens a raw
+`sqlite3` connection against `services/crm/system_services`'s configured
+`db_path` -- regardless of what `SQLALCHEMY_DATABASE_URI` actually points
+at. In production that's Postgres, so the recalculation silently read/wrote
+an unrelated, effectively-empty SQLite file every time, leaving the real
+(Postgres) `Traveler` row's counters frozen at their creation-time value.
+Same class of split-brain already guarded against elsewhere in this repo
+(`app/routes/crm.py`'s `_agent_runtime()`, `app/routes/admin.py`'s
+`db_health()`), just not at this call site. Confirmed the underlying data
+was clean (no whitespace/trip_id mismatch) via a **read-only** query
+against the real production RDS before concluding this.
+
+**Fixed:**
+- Added `apps/api/app/services/traveler_stats.py`: a
+  `recalculate_traveler_stats()` dispatcher that checks the live
+  `SQLALCHEMY_DATABASE_URI` and either delegates to the existing SQLite
+  service (dev/test, unchanged, now with its `db_path` aligned to the app's
+  actual URI the same way `_agent_runtime()` already does) or recomputes
+  local/international/total trip counts, community events, and lifetime
+  revenue directly via SQLAlchemy against Postgres.
+- Wired it into `travelers.py` (detail-page load) and `bookings.py`
+  (booking delete, and newly, right after a status/payment update commits
+  -- that path previously never refreshed these counters at all).
+- Replaced the silent `except Exception: pass` around both call sites with
+  `logger.error(..., exc_info=True)` plus `db.session.rollback()`, so a
+  future failure leaves a traceback in the app log instead of disappearing.
+
+**Verified:** `tests/test_phase3_booking_lifecycle.py` (14/14 passed). A
+broader sweep (`test_dual_backend_write_parity.py`,
+`test_operational_db_protection.py`, `test_phase4_traveler_management.py`)
+turned up one failure
+(`test_detail_shows_related_records_and_update_syncs_back`) -- confirmed
+via `git stash` to already fail identically on `main` before this fix
+(template renders "0.00 EGP", test expects "EGP 0.00"), unrelated to this
+change and left untouched.
+
+**Not yet confirmed live:** after this fix was pushed (`a1eeb27`), the user
+reported the demo (`demos.nanovate.io/rahma-crm/travelers/TR00587`) still
+showed 0 trips after pulling and restarting. A read-only diagnostic query
+against the real production RDS confirmed the booking data itself is clean
+(`BK000001`, `trip_id='RT-LOC-26-SAD'`, status `Completed`, payment `Fully
+Paid`, matching `Trip.type='Local'`) and that this fix's join/filter logic
+would correctly compute `local_trips_count=1, total_trips=1` for this
+traveler if it actually ran -- so the deployed process most likely was not
+actually running the new code at the time it was checked, rather than the
+fix being wrong. Needs a live re-check (confirm the deployed directory is
+actually on commit `a1eeb27` or later, and that the process serving
+`demos.nanovate.io` was the one actually restarted) before this is closed
+out.
+
+**Incident note:** while writing the read-only diagnostic above, an early
+mistake let the production Postgres password
+(`rahma_app@clinic-isac...rds.amazonaws.com`) briefly appear in plaintext
+in a psycopg2 connection error inside the session transcript. Caught and
+fixed immediately (the DSN is no longer echoed on failure), but the
+password should be rotated as a precaution since it did appear once.
+
+### Issue 2 -- Phase 1 (payment preference question) Stage B: currency-collection prompt polish
+
+Per `PHASE_1_payment_preference_question.md`, the timing question was
+already resolved as "no code change needed" (both `session_flow.py` and
+`workflow_policy.py` already gate `collect_payment_currency` behind trip
+type, trip selection, room type, group size, and flight/passport
+collection). Stage B's scope, confirmed by the client's execution steps and
+implicitly resolving Phase 1's terminology question in favor of "currency,
+not a separate payment method": persona/prompt-only polish, no
+`workflow_policy.py`/`session_flow.py` logic changes.
+
+**Changed (prompts only):**
+- `services/ai_agent/ai_agent_app/prompts/gemini_agent_system.md`:
+  expanded the `collect_payment_currency` step description to ask for
+  currency as one natural, varied line rather than a recited form field;
+  added explicit dialect-variation recognition ("جنيه"/"جنيه
+  مصري"/"بالجنيه"/"EGP"/"1" => EGP, "دولار"/"دولارات"/"بالدولار"/"USD"/"2"
+  => USD) to both the step description and the natural-intent-examples
+  list; added a conversation rule for the "why do you need my currency /
+  which is cheaper" mid-flow question, mirroring the existing WhatsApp-why
+  pattern -- answer briefly from the backend pricing breakdown, then re-ask
+  the same required step in fresh wording rather than repeating the exact
+  previous sentence or advancing without a clear answer.
+- `services/ai_agent/ai_agent_app/prompts/agent_conversation.md`: extended
+  the existing customer-phrasing list with the same EGP/USD dialect
+  variations, and added a rule to vary the currency-question wording each
+  time it's rewritten rather than reusing the same sentence or a
+  form-style "1) EGP 2) USD" recitation.
+
+**Verified -- zero regressions:** ran the full `workflow_policy`/
+`session_flow`-adjacent suite (`test_agent_conversation_reliability.py`,
+`test_golden_transcript_regressions.py`, `test_guardian_consent_workflow.py`,
+`test_phase11_demo_features.py`, `test_phase1_agent_runtime.py`,
+`test_phase2_gemini_tool_loop.py`, `test_phase39_workflow_policy.py`,
+`test_phase3_gemini_live_session.py`, `test_phase5_agent_flow.py`,
+`test_phase5_gemini_write_tools.py`, `test_pipeline_integrity_regressions.py`,
+`test_port3_response_guard.py`, `test_port4_7_write_enforcement_simulation.py`,
+`test_port4_8_write_only_enforcement_flag.py`,
+`test_port4_state_tool_routing_audit.py`, `test_tier2_field_validation.py`,
+`test_tier3_workflow_hardening.py`, `test_tool_hallucination_completion.py`):
+**424 passed, 24 subtests passed, 1 failed.** The one failure
+(`test_tier2_field_validation.py::test_passport_country_mismatch_with_stated_nationality_does_not_block`)
+was confirmed via `git stash` to already fail identically before this
+session's prompt edits -- expected, since these are Markdown prompt files
+with no Python import path into any of these tests, so they could not have
+caused a behavior change either way. Worth noting as a real, separate
+finding: that test still expects the pre-Phase-1-confirmation ordering
+(`booking_confirmation_required` right after passport country), while the
+actual (correct, client-confirmed) behavior now asks
+`collect_payment_currency` first -- the test is stale relative to the
+already-correct workflow ordering, not a sign of a live regression.
+
+**Holding for approval before Phase 2**, per Stage B's instructions.
