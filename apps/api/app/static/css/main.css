@@ -381,7 +381,6 @@ body {
 
 .card,
 .kpi-card,
-.modal-box,
 .data-panel,
 .glass-card,
 .premium-card,
@@ -397,6 +396,18 @@ body {
     border-radius: 8px !important;
     box-shadow: none !important;
     max-width: 100%;
+}
+
+/* .modal-box is deliberately NOT in the selector list above: that rule's
+   `max-width: 100%` is an overflow guard for full-width cards, but main.css
+   loads after base.html's inline <style>, so including .modal-box there
+   silently overrode its intended `max-width: 560px` and stretched every
+   modal edge-to-edge across the viewport. */
+.modal-box {
+    background: var(--olive-card) !important;
+    border: 1px solid var(--olive-border) !important;
+    border-radius: 8px !important;
+    box-shadow: none !important;
 }
 
 .card:hover,

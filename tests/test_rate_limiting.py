@@ -76,6 +76,22 @@ class AgentApiRateLimitTests(unittest.TestCase):
     in-memory counters never leak between tests.
     """
 
+    def setUp(self) -> None:
+        self._original_env = dict(os.environ)
+        # These limits are per MINUTE, so the requests below have to be fast.
+        # Without pinning the provider off, an ambient GEMINI_API_KEY (from
+        # .env, or left behind by an earlier test file) made every /api/session
+        # attempt a real Gemini rewrite of the opening message, time out after
+        # ~3s, and the 21 requests then spanned over a minute -- the rate-limit
+        # window rolled over mid-test and the final request came back 200
+        # instead of 429. Passed alone, failed in full-suite order.
+        os.environ["AI_PROVIDER"] = "none"
+        os.environ["GEMINI_API_KEY"] = ""
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._original_env)
+
     def test_session_creation_is_rate_limited(self) -> None:
         from services.ai_agent.ai_agent_app.server import create_app
 

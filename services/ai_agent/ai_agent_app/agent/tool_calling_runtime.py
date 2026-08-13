@@ -55,6 +55,7 @@ from services.ai_agent.validation.lexicon import (
     EXPLANATION_REQUEST_SUBSTRING_TERMS,
     GENERIC_TRIP_CHANGE_TERMS,
     HUMAN_HANDOFF_TERMS,
+    SELF_SERVICE_HELP_TERMS,
     RESTART_SIGNAL_TERMS,
     TRIP_DISCOVERY_TERMS,
     TRIP_QUALITY_TERMS,
@@ -750,6 +751,87 @@ class ToolCallingSessionRuntime:
         if arabic:
             return f"معلش، حصل عندي لخبطة في الرد. هحولك لـ{responsible} من فريق Ravel يتابع معاك فورا."
         return f"Sorry, I ran into trouble preparing a correct reply. I'm connecting you with {responsible} from the Ravel team right now."
+
+    def _reworded_unclear_retry(self, session: SessionState, base_text: str) -> str:
+        """Vary the wording on a SECOND consecutive unparsed answer to a step.
+
+        _natural_interruption_fallback is a pure function of (step,
+        rejection_reason) with no attempt counter, so without this the agent
+        re-sent a byte-identical sentence every turn -- the customer had no
+        signal that anything was different and no way forward. Takes the blame
+        for the misunderstanding rather than implying the customer answered
+        wrong, and offers the cheapest possible reply (the option number).
+        """
+        if session.language.startswith("ar"):
+            return (
+                "معلش، يمكن سؤالي ما كان واضح. هوضحه بشكل أبسط:\n"
+                f"{base_text}\n"
+                "ولو أسهل ليك، ابعت رقم الخيار بس."
+            )
+        return (
+            "Sorry, that's probably my wording. Let me put it more simply:\n"
+            f"{base_text}\n"
+            "If it's easier, just reply with the option number."
+        )
+
+    def _escalate_after_repeated_unclear_step(self, session: SessionState, clean_text: str = "") -> str:
+        """Hand off to a human after 3 consecutive unparsed answers to the same
+        required step (see session.unclear_step_strikes).
+
+        Mirrors _escalate_after_repeated_contradiction: the strict per-step
+        capture only accepts a narrow set of answers, so a customer phrasing
+        something the parser does not know would otherwise be asked the same
+        question forever with no exit. Best-effort -- a failed handoff write
+        must not stop us telling the customer honestly that we're stuck.
+        """
+        arabic = session.language.startswith("ar")
+        step_key = str(session.unclear_step_key or session.stage or "")
+        try:
+            session_context = self._build_context(session, clean_text)
+            payload = {
+                "traveler_id": session_context.get("traveler_id") or "",
+                "raw_phone": session.raw_phone or session.pending_raw_phone,
+                "country_code": session.country_code or self.settings.default_country_code,
+                "lead_id": session_context.get("lead_id") or "",
+                "trip_id": session.selected_trip_id,
+                "flow_key": f"tool_calling:{session.id}",
+                "reason_code": "repeated_unclear_answer",
+                "reason_text": (
+                    f"The customer answered the '{step_key}' step 3 times without the assistant "
+                    "being able to parse it. Needs a human to continue the booking."
+                ),
+                "priority": "High",
+                "channel": "web",
+                "customer_name": session.customer_name,
+                "agent_summary": (
+                    f"Automatic escalation: 3 consecutive unparsed answers at step '{step_key}'. "
+                    "Check whether the customer's phrasing should be supported."
+                ),
+                "customer_summary": clean_text,
+                "notes": f"Session {session.id}: 3 consecutive unparsed answers at step '{step_key}'.",
+                "update_lead": True,
+                "deduplicate_open": True,
+            }
+            self._write_executor.execute(action="create_handoff", payload=payload, session_context=session_context)
+        except Exception as exc:
+            agent_logger.warning(
+                "Unclear-step escalation handoff could not be created session=%s error=%s", session.id, exc
+            )
+        agent_logger.error(
+            "Auto-escalated to human handoff after repeated unclear answers session=%s step=%s",
+            session.id,
+            step_key,
+        )
+        responsible = self.settings.post_trip_handoff_responsible_employee
+        if arabic:
+            return (
+                "معلش، مش عارف أفهم إجابتك صح ومش عايز أضيع وقتك. "
+                f"هحولك لـ{responsible} من فريق Ravel يكمل معاك من هنا."
+            )
+        return (
+            "Sorry, I'm not managing to understand that and I don't want to waste your time. "
+            f"I'm connecting you with {responsible} from the Ravel team to take it from here."
+        )
 
     def _finalize_assistant_reply(
         self,
@@ -1727,6 +1809,14 @@ class ToolCallingSessionRuntime:
     @classmethod
     def _is_human_agent_request(cls, text: str) -> bool:
         normalized = cls._normalize_trip_reference(text)
+        # "can you help me choose?" / "عايز مساعدة في الاختيار" is a request for
+        # THIS agent's help with the sale, not for a human. HUMAN_HANDOFF_TERMS
+        # keeps the generic "help"/"support"/"مساعده" markers (a customer really
+        # can mean a human by them), so exclude the self-service phrasings here
+        # instead -- otherwise the most natural opener in the flow escalated the
+        # conversation out of the bot before it could sell anything.
+        if any(phrase in normalized for phrase in SELF_SERVICE_HELP_TERMS):
+            return False
         return any(phrase in normalized for phrase in HUMAN_HANDOFF_TERMS)
 
     @staticmethod
@@ -3880,6 +3970,11 @@ class ToolCallingSessionRuntime:
 
         capture_stage = session.stage
         step_value_captured = self._apply_required_step_capture(session, clean_text)
+        if step_value_captured:
+            # The customer got through, so the "3 unparsed answers in a row"
+            # streak that would otherwise escalate to a human starts over.
+            session.unclear_step_strikes = 0
+            session.unclear_step_key = ""
         if not step_value_captured:
             privacy_context = self._build_context(session, clean_text)
             privacy_response = self._privacy_policy.evaluate_user_message(clean_text, privacy_context)
@@ -4055,12 +4150,15 @@ class ToolCallingSessionRuntime:
                         else self._natural_interruption_fallback(session, workflow_decision, clean_text)
                     )
                 )
+                step_key = str(workflow_decision.required_step or "")
                 if step_just_started:
                     # This step only became current on this turn (for example the
                     # CRM lookup just verified the traveler), so the customer never
                     # gave an unclear answer to it. Let the agent voice the question
                     # instead of firing the re-ask copy at someone who did nothing
                     # wrong.
+                    session.unclear_step_strikes = 0
+                    session.unclear_step_key = step_key
                     self._append_agent_reply(
                         session,
                         message_key=f"workflow.required_step.{workflow_decision.required_step}",
@@ -4073,6 +4171,27 @@ class ToolCallingSessionRuntime:
                         session_context=session_context,
                     )
                 else:
+                    # Count consecutive unparsed answers to THIS step so the agent
+                    # stops re-sending an identical sentence forever: strike 2
+                    # re-words the ask, strike 3 escalates to a human.
+                    if session.unclear_step_key != step_key:
+                        session.unclear_step_key = step_key
+                        session.unclear_step_strikes = 0
+                    session.unclear_step_strikes += 1
+                    if session.unclear_step_strikes >= 3:
+                        session.unclear_step_strikes = 0
+                        session.unclear_step_key = ""
+                        self._append_authoritative_reply(
+                            session,
+                            message_key="workflow.unclear_input.escalated",
+                            base_text=self._escalate_after_repeated_unclear_step(session, clean_text),
+                        )
+                        session.stage = workflow_decision.state
+                        session.tools_used = [str(preloaded_tool_event["name"])] if preloaded_tool_event else []
+                        session.fallback_used = False
+                        return session
+                    if session.unclear_step_strikes >= 2:
+                        pending_base_text = self._reworded_unclear_retry(session, pending_base_text)
                     self._append_authoritative_reply(
                         session,
                         message_key=f"workflow.unclear_input.{workflow_decision.required_step}",
@@ -5095,6 +5214,25 @@ class ToolCallingSessionRuntime:
             "\u0627\u062b\u0646\u064a\u0646": 2,
             "\u062a\u0644\u0627\u062a\u0629": 3,
             "\u062b\u0644\u0627\u062b\u0629": 3,
+            # 4-9 were missing entirely, so "\u0627\u0631\u0628\u0639\u0629"/"\u062e\u0645\u0633\u0629" at
+            # collect_group_size parsed as 0 and the question just repeated,
+            # while the English "four"/"five" above worked fine.
+            "\u0627\u0631\u0628\u0639\u0629": 4,
+            "\u0623\u0631\u0628\u0639\u0629": 4,
+            "\u0627\u0631\u0628\u0639": 4,
+            "\u062e\u0645\u0633\u0629": 5,
+            "\u062e\u0645\u0633": 5,
+            "\u0633\u062a\u0629": 6,
+            "\u0633\u062a": 6,
+            "\u0633\u0628\u0639\u0629": 7,
+            "\u0633\u0628\u0639": 7,
+            "\u062a\u0645\u0627\u0646\u064a\u0629": 8,
+            "\u062b\u0645\u0627\u0646\u064a\u0629": 8,
+            "\u062a\u0645\u0627\u0646": 8,
+            "\u062a\u0633\u0639\u0629": 9,
+            "\u062a\u0633\u0639": 9,
+            "\u0639\u0634\u0631\u0629": 10,
+            "\u0639\u0634\u0631": 10,
         }
         if normalized in words:
             return words[normalized]
@@ -5174,6 +5312,16 @@ class ToolCallingSessionRuntime:
         lowered = " ".join(str(text or "").strip().casefold().split())
         if not lowered:
             return False
+        # Every Arabic term below spells the connector glued to the next word
+        # ("شباب وبنات"), but customers write the spaced form ("شباب و بنات")
+        # just as often. Collapse a standalone connector waw into the following
+        # Arabic word so both spellings match. Without this the spaced form fell
+        # through to _extract_hints' unconditional "بنات" check and a mixed
+        # group was silently stored as girls-only -- half the group would have
+        # been booked into the wrong room gender with nothing flagged.
+        # Guarded to Arabic letters so glued digits ("و2") are left alone for
+        # _split_glued_arabic_connector to handle.
+        lowered = re.sub(r"(^|\s)و\s+(?=[؀-ۿ])", r"\1و", lowered)
         english_patterns = (
             r"\bmix(?:ed)?(?:\s+group)?\b",
             r"\bboys?\s+(?:and|&|\+|with)\s+girls?\b",
@@ -5932,8 +6080,38 @@ class ToolCallingSessionRuntime:
             else:
                 # Whole-answer match only -- "double" must be the entire reply, not
                 # a word found inside an unrelated longer sentence (Task 3.1).
-                aliases = {"single": "Single", "double": "Double", "triple": "Triple"}
-                room_type = aliases.get(lowered, "")
+                # The Arabic entries matter because this step's own prompt renders
+                # the options as "Single (فردية) / Double (ثنائية) / Triple
+                # (ثلاثية)", and "دبل"/"تربل" are the ordinary Egyptian words --
+                # with an English-only map the agent rejected customers for
+                # echoing the exact wording it had just printed.
+                aliases = {
+                    "single": "Single",
+                    "double": "Double",
+                    "triple": "Triple",
+                    "فردي": "Single",
+                    "فردية": "Single",
+                    "سنجل": "Single",
+                    "منفرد": "Single",
+                    "منفردة": "Single",
+                    "دبل": "Double",
+                    "دابل": "Double",
+                    "دوبل": "Double",
+                    "ثنائي": "Double",
+                    "ثنائية": "Double",
+                    "مزدوج": "Double",
+                    "مزدوجة": "Double",
+                    "تربل": "Triple",
+                    "تريبل": "Triple",
+                    "ثلاثي": "Triple",
+                    "ثلاثية": "Triple",
+                    "تلاتي": "Triple",
+                }
+                lookup = lowered
+                if lookup not in aliases and lookup.startswith("ال"):
+                    # "الثنائية"/"الدبل" -- strip the definite article.
+                    lookup = lookup[2:]
+                room_type = aliases.get(lookup, "")
                 if room_type not in available_types:
                     room_type = ""
             if room_type:
@@ -6034,13 +6212,29 @@ class ToolCallingSessionRuntime:
             # more specific signal than a bare digit) but now require a word
             # boundary, so a token can't be a fragment of an unrelated word.
             lowered = " ".join(str(text or "").strip().lower().split())
-            usd_terms = ("usd", "dollar", "dollars")
-            egp_terms = ("egp", "egyptian pound", "egyptian pounds", "pound", "pounds", "\u062c\u0646\u064a\u0647", "\u0645\u0635\u0631\u064a")
-            if option_number == 2 or any(re.search(rf"\b{re.escape(term)}\b", lowered) for term in usd_terms):
+            # Latin tokens keep the word-boundary guard so they cannot match a
+            # fragment of an unrelated word. Arabic tokens must NOT use \b:
+            # Python treats Arabic letters as word characters, so a prefixed
+            # clitic has no boundary before its stem and "\u0628\u0627\u0644\u062f\u0648\u0644\u0627\u0631" (bi+al+dollar)
+            # or "\u0628\u0627\u0644\u062c\u0646\u064a\u0647" never matched -- this step printed "\u062c\u0646\u064a\u0647 \u0645\u0635\u0631\u064a / \u062f\u0648\u0644\u0627\u0631
+            # \u0623\u0645\u0631\u064a\u0643\u064a" and then rejected the customer for echoing those very
+            # words. There was also no Arabic USD term at all. Arabic currency
+            # stems are specific enough for plain substring matching.
+            usd_latin = ("usd", "dollar", "dollars")
+            usd_arabic = ("\u062f\u0648\u0644\u0627\u0631",)
+            egp_latin = ("egp", "egyptian pound", "egyptian pounds", "pound", "pounds")
+            egp_arabic = ("\u062c\u0646\u064a\u0647", "\u062c\u0646\u064a\u0629", "\u0645\u0635\u0631\u064a")
+
+            def _currency_matches(latin: tuple[str, ...], arabic: tuple[str, ...]) -> bool:
+                if any(re.search(rf"\b{re.escape(term)}\b", lowered) for term in latin):
+                    return True
+                return any(term in lowered for term in arabic)
+
+            if option_number == 2 or _currency_matches(usd_latin, usd_arabic):
                 session.currency = "USD"
                 self._update_collection_state(session, currency=True)
                 return True
-            elif option_number == 1 or any(re.search(rf"\b{re.escape(term)}\b", lowered) for term in egp_terms):
+            elif option_number == 1 or _currency_matches(egp_latin, egp_arabic):
                 session.currency = "EGP"
                 self._update_collection_state(session, currency=True)
                 return True

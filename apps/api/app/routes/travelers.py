@@ -46,26 +46,6 @@ _REVENUE_BOOKING_STATUSES = {"confirmed", "paid", "completed"}
 _REVENUE_PAYMENT_STATUSES = {"fully paid", "paid"}
 
 
-def _build_revenue_summary(lifetime_revenue_usd: float | int | None, preferred_currency: str, usd_to_egp_rate: float) -> dict[str, str]:
-    usd_value = float(lifetime_revenue_usd or 0.0)
-    rate = float(usd_to_egp_rate or 0.0)
-    egp_value = usd_value * rate if rate > 0 else 0.0
-    preferred = str(preferred_currency or "USD").strip().upper()
-    if preferred == "EGP":
-        primary = {"label": "Lifetime Revenue (EGP)", "value": f"EGP {egp_value:,.2f}"}
-        secondary = {"label": "Lifetime Revenue (USD)", "value": f"${usd_value:,.2f}"}
-    else:
-        primary = {"label": "Lifetime Revenue (USD)", "value": f"${usd_value:,.2f}"}
-        secondary = {"label": "Lifetime Revenue (EGP)", "value": f"EGP {egp_value:,.2f}"}
-    return {
-        "primary_label": primary["label"],
-        "primary_value": primary["value"],
-        "secondary_label": secondary["label"],
-        "secondary_value": secondary["value"],
-        "exchange_note": f"1 USD = {rate:,.2f} EGP" if rate > 0 else "",
-    }
-
-
 def _parse_money(value: str | int | float | None) -> float:
     if isinstance(value, (int, float)):
         return float(value)

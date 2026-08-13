@@ -255,6 +255,12 @@ def test_phase8_duplicate_instagram_webhook_delivery_is_deduplicated(tmp_path: P
     original_env = dict(os.environ)
     os.environ["META_APP_SECRET"] = "phase8-meta-secret"
     os.environ["META_VERIFY_TOKEN"] = "phase8-verify"
+    # This test's payload carries no page id, so any configured META_PAGE_ID
+    # makes the webhook drop the entry as "unexpected_page_id" and persist
+    # nothing. Clear it rather than inheriting a value from .env or from an
+    # earlier test file -- page-id filtering has its own dedicated tests, and
+    # leaving it set made this one pass alone but fail in full-suite order.
+    os.environ.pop("META_PAGE_ID", None)
     try:
         client, _app = _make_app_with_db(tmp_path / uuid.uuid4().hex)
         payload = {

@@ -13,10 +13,20 @@ ROOT = Path(__file__).resolve().parents[1] / "apps" / "api"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.models.booking import TripBooking
-from app.models.traveler import Traveler
-from app.models.traveler_document import TravelerDocument
-from app.models.trip import Trip
+def _models():
+    """Resolve model classes from the currently-loaded `app` package.
+
+    These must NOT be imported at module scope. Other test files pop
+    `app`/`app.*` out of sys.modules and re-import to get a fresh
+    Flask-SQLAlchemy instance; a module-level class object would stay bound to
+    the *previous* instance, so once this file ran after one of them every
+    query raised "The current Flask app is not registered with this
+    'SQLAlchemy' instance" -- these tests passed alone and failed in suite order.
+    """
+    from app.models.traveler import Traveler
+    from app.models.trip import Trip
+
+    return Traveler, Trip
 
 
 def _make_app(tmpdir: Path):
@@ -24,8 +34,13 @@ def _make_app(tmpdir: Path):
     os.environ["DATABASE_URL"] = f"sqlite:///{db_path.resolve().as_posix()}"
     os.environ["RAHMA_SYSTEM_DB_PATH"] = str(db_path)
     os.environ["TRAVELER_UPLOAD_ROOT"] = str(tmpdir / "uploads")
+    # Pin auth off: app/__init__.py defaults CRM_AUTH_ENABLED to "true" when
+    # unset, so inheriting it from the ambient environment made these
+    # unauthenticated route tests 302-redirect in full-suite order.
+    os.environ["CRM_AUTH_ENABLED"] = "false"
     from app import create_app
     from app.extensions import db as local_db
+    Traveler, Trip = _models()
     app = create_app("development")
     app.config["TESTING"] = True
     app.config["TRAVELER_UPLOAD_ROOT"] = str(tmpdir / "uploads")
@@ -139,6 +154,7 @@ class PassportAttachmentTests(unittest.TestCase):
         with app.app_context():
             from app.extensions import db as local_db
 
+            Traveler, _Trip = _models()
             traveler = Traveler.query.filter_by(traveler_id="TR900").one()
             traveler.passport_name = "Original Passport Name"
             traveler.passport_number = "ORIGINAL123"

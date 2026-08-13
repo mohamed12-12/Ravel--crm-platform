@@ -48,6 +48,26 @@ TRIP_TYPE_TERMS: dict[str, str] = {
     "خارجيه": "international",
     "عمره": "international",
     "حج": "international",
+    # How customers actually phrase it in Egyptian Arabic -- "outside/inside
+    # Egypt" rather than the formal محلي/دولي. The prompt already promises
+    # "بره" works, but collect_trip_type is a backend-owned step so only this
+    # map is ever consulted.
+    "بره": "international",
+    "برة": "international",
+    "برا": "international",
+    "خارج مصر": "international",
+    "بره مصر": "international",
+    "برة مصر": "international",
+    "outside egypt": "international",
+    "جوه": "local",
+    "جوة": "local",
+    "جوا": "local",
+    "داخل مصر": "local",
+    "جوه مصر": "local",
+    "جوة مصر": "local",
+    "في مصر": "local",
+    "inside egypt": "local",
+    "in egypt": "local",
 }
 
 # A plain "yes"/confirm signal. Canonical source for
@@ -87,9 +107,19 @@ NEGATIVE_TERMS: set[str] = {
 
 # "Let me talk to a human" -- canonical source for
 # tool_calling_runtime.py's _is_human_agent_request.
+# NOTE: _is_human_agent_request matches these as plain SUBSTRINGS. Generic
+# words like "help"/"support"/"مساعده" are intentionally kept, because a
+# customer saying "I need support with my booking" or "محتاج مساعدة" really
+# does want a human. The cost is that they also fire on the most natural
+# sales question in the language ("can you help me choose?"), so that case is
+# excluded separately via SELF_SERVICE_HELP_TERMS below rather than by
+# weakening this set.
 HUMAN_HANDOFF_TERMS: set[str] = {
     "human",
     "real agent",
+    "real person",
+    "human agent",
+    "live agent",
     "person",
     "employee",
     "call me",
@@ -98,6 +128,10 @@ HUMAN_HANDOFF_TERMS: set[str] = {
     "escalate",
     "speak to someone",
     "speak to a person",
+    "speak to a human",
+    "talk to someone",
+    "talk to a human",
+    "talk to a person",
     "transfer me",
     "connect me",
     # common misspellings of "escalate" seen live -- kept as an explicit
@@ -116,6 +150,35 @@ HUMAN_HANDOFF_TERMS: set[str] = {
     "تصعيد",
     "حول لموظف",
     "عايز حد يرد",
+    "حد حقيقي",
+}
+
+# Asking the AGENT ITSELF for help with a sales task. These override
+# HUMAN_HANDOFF_TERMS in _is_human_agent_request: "can you help me choose?"
+# and "عايز مساعدة في الاختيار" are the most common openers in this flow, and
+# escalating them to a human ended the conversation before the agent ever got
+# to sell anything. A genuine handoff request names a human ("موظف", "real
+# agent", "talk to someone"), none of which appear here, so those still
+# escalate normally.
+SELF_SERVICE_HELP_TERMS: set[str] = {
+    "can you help",
+    "could you help",
+    "would you help",
+    "can u help",
+    "you help me",
+    "help me choose",
+    "help me pick",
+    "help me decide",
+    "help me select",
+    "help me find",
+    "help me compare",
+    "help me plan",
+    "help me book",
+    "تساعدني",
+    "ساعدني",
+    "مساعده في الاختيار",
+    "مساعده فى الاختيار",
+    "مساعده في اختيار",
 }
 
 # "Is this trip any good / worth it / would you recommend it." Canonical

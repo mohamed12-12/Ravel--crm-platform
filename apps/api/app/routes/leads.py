@@ -342,6 +342,14 @@ def detail(lead_id):
         )
     ).order_by(BookingEventTrail.occurred_at.asc()).all()
     assigned_history = assignment_history('lead', lead.lead_id)
+    # Lets the edit form offer trips by NAME instead of making the employee
+    # type a raw trip_id into a free-text box.
+    available_trips = (
+        Trip.query
+        .filter(Trip.sales_status == 'Open')
+        .order_by(Trip.type.asc(), Trip.start_date.asc(), Trip.trip_name.asc())
+        .all()
+    )
     return render_template('leads/detail.html',
                            lead=lead,
                            traveler=traveler,
@@ -354,6 +362,7 @@ def detail(lead_id):
                            can_assign=has_permission('assign_work'),
                            assigned_user=lead.assigned_user,
                            stages=PIPELINE_STAGES,
+                           available_trips=available_trips,
                            today=date.today())
 
 

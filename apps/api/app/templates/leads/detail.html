@@ -326,92 +326,133 @@
 
 <!-- EDIT LEAD MODAL -->
 <div id="editLead" class="modal-overlay">
-    <div class="modal-box">
+    <div class="modal-box modal-flush modal-lg">
         <div class="modal-header">
             <span class="modal-title">Edit Lead</span>
             <button class="modal-close" onclick="closeModal('editLead')">Close</button>
         </div>
-        <form action="{{ url_for('leads.update', lead_id=lead.lead_id) }}" method="POST">
+        <form class="modal-form" action="{{ url_for('leads.update', lead_id=lead.lead_id) }}" method="POST">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="expected_updated_at" value="{{ lead.updated_at.isoformat() if lead.updated_at else '' }}">
             <input type="hidden" name="employee_correction" value="1">
-            <div class="grid-2">
-                <div class="form-group col-span-2">
-                    <label class="form-label">Customer Name</label>
-                    <input class="form-input" type="text" name="customer_name" value="{{ lead.customer_name or '' }}">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Phone</label>
-                    <input class="form-input" type="text" name="raw_phone" value="{{ lead.raw_phone or '' }}">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Stage</label>
-                    <select class="form-select" name="lead_stage">
-                        {% for s in stages %}
-                        <option value="{{ s }}" {% if lead.lead_stage == s %}selected{% endif %}>{{ s }}</option>
-                        {% endfor %}
-                    </select>
-                    <div style="color:var(--text-muted);font-size:0.72rem;margin-top:0.35rem">You can reopen or correct a closed lead. Add a reason below when changing a non-standard stage.</div>
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Priority</label>
-                    <select class="form-select" name="priority">
-                        {% for p in ['High','Medium','Low'] %}
-                        <option value="{{ p }}" {% if lead.priority == p %}selected{% endif %}>{{ p }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                {% if can_assign %}
-                <div class="form-group">
-                    <label class="form-label">Assigned Employee</label>
-                    <select class="form-select" name="assigned_to_user_id">
-                        <option value="">Unassigned</option>
-                        {% for employee in employees %}
-                        <option value="{{ employee.id }}" {% if lead.assigned_to_user_id == employee.id %}selected{% endif %}>{{ employee.display_name }} · {{ employee.role }}</option>
-                        {% endfor %}
-                    </select>
-                    {% if lead.assigned_to and not assigned_user %}<div style="color:var(--text-muted);font-size:0.72rem;margin-top:0.35rem">Legacy owner text: {{ lead.assigned_to }}. Choose an employee to link it.</div>{% endif %}
-                    <input class="form-input" type="text" name="assignment_reason" placeholder="Optional reassignment reason" style="margin-top:0.5rem">
-                </div>
-                {% endif %}
-                <div class="form-group">
-                    <label class="form-label">Follow-Up Status</label>
-                    <select class="form-select" name="follow_up_status">
-                        {% for fs in ['Pending','Contacted','Done','No Answer'] %}
-                        <option value="{{ fs }}" {% if lead.follow_up_status == fs %}selected{% endif %}>{{ fs }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Follow-Up Date</label>
-                    <input class="form-input" type="date" name="follow_up_due_date" value="{{ lead.follow_up_due_date.strftime('%Y-%m-%d') if lead.follow_up_due_date else '' }}">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Customer Response</label>
-                    <select class="form-select" name="customer_response_status">
-                        {% for s in ['Open','Contacted','Waiting Customer','No Answer','Resolved'] %}
-                        <option value="{{ s }}" {% if (lead.customer_response_status or 'Open') == s %}selected{% endif %}>{{ s }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Interested Trip IDs</label>
-                    <input class="form-input" type="text" name="interested_trip_ids" value="{{ lead.interested_trip_ids or '' }}">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Group Size</label>
-                    <input class="form-input" type="number" name="group_size" min="1" value="{{ lead.group_size or 1 }}" placeholder="1">
-                </div>
-                <div class="form-group col-span-2">
-                    <label class="form-label">Stage Change Reason</label>
-                    <input class="form-input" type="text" name="stage_change_reason" placeholder="Required when reopening or correcting the pipeline stage">
-                </div>
-                <div class="form-group col-span-2">
-                    <label class="form-label">Notes</label>
-                    <textarea class="form-textarea" name="notes">{{ lead.notes or '' }}</textarea>
-                </div>
+            <div class="modal-body">
+
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">1</span> Customer</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Customer Name</label>
+                            <input class="form-input" type="text" name="customer_name" value="{{ lead.customer_name or '' }}">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Phone</label>
+                            <input class="form-input" type="text" name="raw_phone" value="{{ lead.raw_phone or '' }}">
+                        </div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">2</span> Trip interest</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Interested Trip</label>
+                            {% set current_trip_ids = (lead.interested_trip_ids or '')|trim %}
+                            {% set open_trip_ids = available_trips|map(attribute='trip_id')|list %}
+                            <select class="form-select" name="interested_trip_ids">
+                                <option value="">— None —</option>
+                                {% if current_trip_ids and current_trip_ids not in open_trip_ids %}
+                                <option value="{{ current_trip_ids }}" selected>{{ current_trip_ids }} (current)</option>
+                                {% endif %}
+                                {% for trip in available_trips %}
+                                <option value="{{ trip.trip_id }}" {% if current_trip_ids == trip.trip_id %}selected{% endif %}>
+                                    {{ trip.trip_name }}{% if trip.start_date %} — {{ trip.start_date.strftime('%d %b %Y') }}{% endif %}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            <div class="form-hint">Pick by trip name — no need to type a trip ID.</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Group Size</label>
+                            <input class="form-input" type="number" name="group_size" min="1" value="{{ lead.group_size or 1 }}" placeholder="1">
+                        </div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">3</span> Pipeline &amp; ownership</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Stage</label>
+                            <select class="form-select" name="lead_stage">
+                                {% for s in stages %}
+                                <option value="{{ s }}" {% if lead.lead_stage == s %}selected{% endif %}>{{ s }}</option>
+                                {% endfor %}
+                            </select>
+                            <div class="form-hint">You can reopen or correct a closed lead — add a reason below when changing to a non-standard stage.</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Priority</label>
+                            <select class="form-select" name="priority">
+                                {% for p in ['High','Medium','Low'] %}
+                                <option value="{{ p }}" {% if lead.priority == p %}selected{% endif %}>{{ p }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group col-span-2">
+                            <label class="form-label">Stage Change Reason</label>
+                            <input class="form-input" type="text" name="stage_change_reason" placeholder="Required when reopening or correcting the pipeline stage">
+                        </div>
+                        {% if can_assign %}
+                        <div class="form-group col-span-2">
+                            <label class="form-label">Assigned Employee</label>
+                            <select class="form-select" name="assigned_to_user_id">
+                                <option value="">Unassigned</option>
+                                {% for employee in employees %}
+                                <option value="{{ employee.id }}" {% if lead.assigned_to_user_id == employee.id %}selected{% endif %}>{{ employee.display_name }} · {{ employee.role }}</option>
+                                {% endfor %}
+                            </select>
+                            {% if lead.assigned_to and not assigned_user %}<div class="form-hint">Legacy owner text: {{ lead.assigned_to }}. Choose an employee to link it.</div>{% endif %}
+                            <input class="form-input" type="text" name="assignment_reason" placeholder="Optional reassignment reason" style="margin-top:0.5rem">
+                        </div>
+                        {% endif %}
+                    </div>
+                </fieldset>
+
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">4</span> Follow-up</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Follow-Up Status</label>
+                            <select class="form-select" name="follow_up_status">
+                                {% for fs in ['Pending','Contacted','Done','No Answer'] %}
+                                <option value="{{ fs }}" {% if lead.follow_up_status == fs %}selected{% endif %}>{{ fs }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Follow-Up Date</label>
+                            <input class="form-input" type="date" name="follow_up_due_date" value="{{ lead.follow_up_due_date.strftime('%Y-%m-%d') if lead.follow_up_due_date else '' }}">
+                        </div>
+                        <div class="form-group col-span-2">
+                            <label class="form-label">Customer Response</label>
+                            <select class="form-select" name="customer_response_status">
+                                {% for s in ['Open','Contacted','Waiting Customer','No Answer','Resolved'] %}
+                                <option value="{{ s }}" {% if (lead.customer_response_status or 'Open') == s %}selected{% endif %}>{{ s }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">5</span> Notes</div>
+                    <div class="form-group">
+                        <textarea class="form-textarea" name="notes" style="min-height:80px">{{ lead.notes or '' }}</textarea>
+                    </div>
+                </fieldset>
+
             </div>
-            <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1rem">
+            <div class="modal-footer">
                 <button type="button" class="btn btn-ghost" onclick="closeModal('editLead')">Cancel</button>
                 <button type="submit" class="btn btn-primary">Save Changes</button>
             </div>

@@ -210,6 +210,14 @@ def test_passport_country_mismatch_with_stated_nationality_does_not_block(runtim
 
     session = _send(runtime, "Saudi", session)
     assert session.passport_nationality == "Saudi"
+    # The point of this test is that a passport country differing from the
+    # stated nationality must not BLOCK the booking. The workflow legitimately
+    # collects payment currency before booking confirmation, so assert it moved
+    # on to that remaining step rather than getting stuck re-asking passport
+    # country, then finish the flow to prove confirmation is still reachable.
+    assert session.stage == "currency_required"
+
+    session = _send(runtime, "EGP", session)
     assert session.stage == "booking_confirmation_required"
 
 

@@ -423,6 +423,91 @@
         .modal-close { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.25rem; line-height: 1; }
         .modal-close:hover { color: var(--text-main); }
 
+        /* Sectioned form modal (opt-in via .modal-flush, so existing modals
+           across the app keep their current single-block layout untouched).
+           Header and action footer stay pinned while only the field area
+           scrolls -- a long form previously pushed Save/Cancel off-screen. */
+        .modal-box.modal-flush {
+            padding: 0;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .modal-box.modal-lg { max-width: 760px; }
+        .modal-flush .modal-header {
+            margin: 0;
+            padding: 1.15rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .modal-flush .modal-form {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            flex: 1;
+        }
+        .modal-flush .modal-body {
+            padding: 1.25rem 1.5rem;
+            overflow-y: auto;
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 1.35rem;
+        }
+        .modal-flush .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.75rem;
+            padding: 1rem 1.5rem;
+            border-top: 1px solid var(--border);
+            background: var(--bg-surface);
+            flex-shrink: 0;
+        }
+        .modal-flush .modal-body::-webkit-scrollbar { width: 7px; }
+        .modal-flush .modal-body::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.13);
+            border-radius: 999px;
+        }
+        .modal-flush .modal-body::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.24); }
+
+        /* Field grouping: turns a flat wall of inputs into labelled sections */
+        .form-section { border: 0; padding: 0; margin: 0; min-width: 0; }
+        .form-section-title {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.68rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.09em;
+            color: var(--accent-2);
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.4rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .form-section-title .step-num {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 1.15rem;
+            height: 1.15rem;
+            border-radius: 999px;
+            background: rgba(0,208,146,0.14);
+            border: 1px solid rgba(0,208,146,0.32);
+            font-size: 0.62rem;
+            color: var(--accent);
+            flex-shrink: 0;
+        }
+        .form-section .form-group:last-child { margin-bottom: 0; }
+        .form-hint { color: var(--text-muted); font-size: 0.72rem; margin-top: 0.35rem; line-height: 1.4; }
+        .req { color: var(--accent); margin-left: 0.15rem; }
+
+        @media (max-width: 720px) {
+            .modal-flush .grid-2 { grid-template-columns: 1fr; }
+            .modal-flush .col-span-2 { grid-column: span 1; }
+        }
+
         /* Grid helpers */
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
         .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }

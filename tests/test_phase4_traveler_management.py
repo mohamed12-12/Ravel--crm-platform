@@ -62,6 +62,10 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         os.environ["EXCEL_SOURCE_WORKBOOK"] = str(workbook_path)
         os.environ["CRM_SHEET_MIRROR_ENABLED"] = "true"
         os.environ["EXCEL_EXPORT_ENABLED"] = "true"
+        # Pin auth off: app/__init__.py defaults CRM_AUTH_ENABLED to "true" when
+        # unset, so inheriting it from the ambient environment made these
+        # unauthenticated route tests 302-redirect in full-suite order.
+        os.environ["CRM_AUTH_ENABLED"] = "false"
 
         for module_name in list(sys.modules):
             if module_name == "app" or module_name.startswith("app."):
@@ -270,10 +274,14 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         self.assertIn("B20001", body)
         self.assertIn("INT20001", body)
         self.assertIn("Needs manager review", body)
+        # Lifetime revenue is aggregated per actual booking currency
+        # (_build_revenue_summary_from_totals) rather than converted from USD at
+        # a fixed USD_TO_EGP_RATE, so there is deliberately no "1 USD = X EGP"
+        # conversion line any more -- these assertions track that current design.
         self.assertIn("Lifetime Revenue (EGP)", body)
-        self.assertIn("EGP 0.00", body)
+        self.assertIn("0.00 EGP", body)
         self.assertIn("Lifetime Revenue (USD): $0.00", body)
-        self.assertIn("1 USD = 50.00 EGP", body)
+        self.assertIn("Aggregated from paid trip bookings by booking currency", body)
         self.assertIn("Preferred Payment Currency", body)
 
         update_response = client.put(

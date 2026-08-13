@@ -50,6 +50,10 @@ class Phase2TripRedesignTests(unittest.TestCase):
         self.db_path = self.tmpdir / "app.db"
         os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path.resolve().as_posix()}"
         os.environ["RAHMA_SYSTEM_DB_PATH"] = str(self.db_path)
+        # Pin auth off: app/__init__.py defaults CRM_AUTH_ENABLED to "true" when
+        # unset, so inheriting it from the ambient environment made these
+        # unauthenticated route tests 302-redirect in full-suite order.
+        os.environ["CRM_AUTH_ENABLED"] = "false"
         with closing(sqlite3.connect(str(self.db_path))) as conn:
             create_operational_tables(conn)
         self.app = _create_temp_app(self.db_path)

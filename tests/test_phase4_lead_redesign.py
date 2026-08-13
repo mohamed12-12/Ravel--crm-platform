@@ -40,6 +40,13 @@ class Phase4LeadRedesignTests(unittest.TestCase):
         self.db_path = self.tmpdir / "app.db"
         os.environ["DATABASE_URL"] = f"sqlite:///{self.db_path.resolve().as_posix()}"
         os.environ["RAHMA_SYSTEM_DB_PATH"] = str(self.db_path)
+        # apps/api/app/__init__.py defaults CRM_AUTH_ENABLED to "true" when the
+        # env var is absent, and these route tests hit CRM pages without logging
+        # in. Pin it rather than inheriting whatever an earlier test file left in
+        # the ambient environment -- when the full suite ran in collection order
+        # that leaked "true" here and turned every request into a 302 login
+        # redirect, so these tests passed alone and failed in the suite.
+        os.environ["CRM_AUTH_ENABLED"] = "false"
         self.app = _create_temp_app()
         self.db, self.Lead, self.Trip, self.Traveler, self.TripBooking, self.HandoffQueue, self.BookingEventTrail = _load_app_objects()
         self.app.config["TESTING"] = True
@@ -85,6 +92,7 @@ class Phase4LeadRedesignTests(unittest.TestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
         os.environ.pop("DATABASE_URL", None)
         os.environ.pop("RAHMA_SYSTEM_DB_PATH", None)
+        os.environ.pop("CRM_AUTH_ENABLED", None)
 
     def test_lead_status_transition_validation(self) -> None:
         response = self.client.post(

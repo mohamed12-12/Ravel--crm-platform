@@ -939,7 +939,7 @@ class ConversationWorkflowPolicy:
             rooms = self._as_int(item.get("rooms")) or 0
             if room_type not in {"double", "triple"} or group not in {"boys", "girls"} or rooms <= 0:
                 continue
-            capacity = self._as_int(selected_trip.get(f"{group}_{room_type}")) or 0
+            capacity = self._gendered_room_capacity(selected_trip, room_type, group) or 0
             label = f"{group} {room_type} room"
             if rooms != 1:
                 label += "s"
@@ -960,6 +960,33 @@ class ConversationWorkflowPolicy:
             "I will send this request to the Ravel Traveler team to check suitable alternatives."
         )
 
+    def _gender_split_tracked(self, selected_trip: dict[str, Any], room_type: str) -> bool:
+        """True when this trip actually maintains boys/girls sub-inventory for room_type.
+
+        UnifiedCRMService's trip projection always emits boys_double /
+        girls_double / boys_triple / girls_triple, defaulting to 0 -- so a trip
+        that simply does not split its doubles by gender was indistinguishable
+        from one whose boys doubles are sold out. Reading the gendered key
+        blindly therefore reported zero capacity and escalated to a human for
+        bookings the trip could actually take (e.g. available_double = 6 while
+        both gender keys are 0). Treat "both sides zero" as "not split" and let
+        callers fall back to the ungendered pool.
+        """
+        room = str(room_type or "").strip().lower()
+        boys = self._as_int(selected_trip.get(f"boys_{room}")) or 0
+        girls = self._as_int(selected_trip.get(f"girls_{room}")) or 0
+        return bool(boys or girls)
+
+    def _gendered_room_capacity(self, selected_trip: dict[str, Any], room_type: str, room_group: str) -> int | None:
+        room = str(room_type or "").strip().lower()
+        group = str(room_group or "").strip().lower()
+        if group in {"boys", "girls"} and self._gender_split_tracked(selected_trip, room):
+            return self._as_int(selected_trip.get(f"{group}_{room}"))
+        pool_key = f"available_{room}"
+        if pool_key not in selected_trip or selected_trip.get(pool_key) is None:
+            return None
+        return self._as_int(selected_trip.get(pool_key))
+
     def _room_capacity(self, selected_trip: dict[str, Any], room_type: str, room_group: str) -> int | None:
         room_key = str(room_type or "").strip().lower()
         group_key = str(room_group or "").strip().lower()
@@ -970,14 +997,8 @@ class ConversationWorkflowPolicy:
 
         if room_key == "single":
             return available("available_single")
-        if room_key == "double" and group_key in {"boys", "girls"}:
-            return available(f"{group_key}_double")
-        if room_key == "triple" and group_key in {"boys", "girls"}:
-            return available(f"{group_key}_triple")
-        if room_key == "double":
-            return available("available_double")
-        if room_key == "triple":
-            return available("available_triple")
+        if room_key in {"double", "triple"}:
+            return self._gendered_room_capacity(selected_trip, room_key, group_key)
         return None
 
     @staticmethod

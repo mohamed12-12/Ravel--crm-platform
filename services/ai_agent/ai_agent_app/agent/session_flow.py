@@ -154,6 +154,15 @@ class SessionState:
     # human handoff instead of continuing to loop on a customer.
     contradiction_strikes: int = field(default=0, repr=False)
 
+    # Consecutive turns the customer's answer to the SAME required workflow
+    # step could not be parsed (see ToolCallingSessionRuntime.handle_message's
+    # unclear-input branch). Reset the moment any step captures, or when the
+    # pending step changes. Without this the agent re-sent a byte-identical
+    # question forever and the customer's only exit was to leave: strike 2
+    # re-words the ask, strike 3 hands off to a human.
+    unclear_step_strikes: int = field(default=0, repr=False)
+    unclear_step_key: str = field(default="", repr=False)
+
 
 # ---------------------------------------------------------------------------
 # Manager

@@ -502,101 +502,128 @@
 
 <!-- CREATE LEAD MODAL -->
 <div id="createLead" class="modal-overlay">
-    <div class="modal-box">
+    <div class="modal-box modal-flush modal-lg">
         <div class="modal-header">
-            <span class="modal-title" style="font-size: 1.25rem; font-weight: 800; background: linear-gradient(100deg, #38b98d, #fff); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Create New Lead</span>
+            <span class="modal-title">Create New Lead</span>
             <button class="modal-close" onclick="closeModal('createLead')">Close</button>
         </div>
-        <form action="{{ url_for('leads.create') }}" method="POST">
+        <form class="modal-form" action="{{ url_for('leads.create') }}" method="POST">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <div class="grid-2">
-                <div class="form-group col-span-2">
-                    <label class="form-label">Customer Name *</label>
-                    <input class="form-input" type="text" name="customer_name" required placeholder="Full name of customer">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">WhatsApp / Phone</label>
-                    <input class="form-input" type="text" name="raw_phone" placeholder="e.g. 201012345678">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Stage</label>
-                    <select class="form-select" name="lead_stage">
-                        {% for s in stages %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Priority</label>
-                    <select class="form-select" name="priority">
-                        <option value="Medium">Medium</option>
-                        <option value="High">High</option>
-                        <option value="Low">Low</option>
-                    </select>
-                </div>
-                {% if can_assign %}
-                <div class="form-group">
-                    <label class="form-label">Assigned Employee</label>
-                    <select class="form-select" name="assigned_to_user_id">
-                        <option value="">Unassigned</option>
-                        {% for employee in employees %}
-                        <option value="{{ employee.id }}">{{ employee.display_name }} - {{ employee.role }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                {% endif %}
-                <div class="form-group">
-                    <label class="form-label">Source</label>
-                    <input class="form-input" type="text" name="lead_source" placeholder="e.g. Instagram, WhatsApp">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Trip Type Interest</label>
-                    <select class="form-select" name="preferred_trip_type" id="create-lead-trip-type">
-                        <option value="">Unknown</option>
-                        <option value="Local">Local</option>
-                        <option value="International">International</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Group Size</label>
-                    <input class="form-input" type="number" name="group_size" min="1" value="1" placeholder="1">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Interested Trip Name</label>
-                    <select class="form-select" name="interested_trip_ids" id="create-lead-trip-select" disabled>
-                        <option value="">Select trip type first</option>
-                        {% for trip in available_trips %}
-                        <option
-                            value="{{ trip.trip_id }}"
-                            data-trip-type="{{ trip.type or '' }}"
-                            data-empty-label="{{ trip.trip_name }}"
-                        >
-                            {{ trip.trip_name }}{% if trip.start_date %} - {{ trip.start_date.strftime('%d %b %Y') }}{% endif %}
-                        </option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Follow-up Date</label>
-                    <input class="form-input" type="date" name="follow_up_due_date">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Language</label>
-                    <select class="form-select" name="language">
-                        <option value="ar">Arabic</option>
-                        <option value="en">English</option>
-                    </select>
-                </div>
-                <div class="form-group col-span-2">
-                    <label class="form-label">Notes</label>
-                    <textarea class="form-textarea" name="notes" placeholder="Any relevant inquiry context or notes" style="min-height: 90px;"></textarea>
-                </div>
-                <div class="form-group col-span-2">
-                    <label class="form-label">Next Action</label>
-                    <input class="form-input" type="text" name="current_step" placeholder="e.g. Send proposal, call back tomorrow">
-                </div>
+            <div class="modal-body">
+
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">1</span> Who is the customer?</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Customer Name <span class="req">*</span></label>
+                            <input class="form-input" type="text" name="customer_name" required placeholder="Full name of customer">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">WhatsApp / Phone</label>
+                            <input class="form-input" type="text" name="raw_phone" placeholder="e.g. 201012345678">
+                            <div class="form-hint">Used to match an existing traveler profile.</div>
+                        </div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">2</span> What are they interested in?</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Trip Type Interest</label>
+                            <select class="form-select" name="preferred_trip_type" id="create-lead-trip-type">
+                                <option value="">Unknown</option>
+                                <option value="Local">Local</option>
+                                <option value="International">International</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Interested Trip Name</label>
+                            <select class="form-select" name="interested_trip_ids" id="create-lead-trip-select" disabled>
+                                <option value="">Select trip type first</option>
+                                {% for trip in available_trips %}
+                                <option
+                                    value="{{ trip.trip_id }}"
+                                    data-trip-type="{{ trip.type or '' }}"
+                                    data-empty-label="{{ trip.trip_name }}"
+                                >
+                                    {{ trip.trip_name }}{% if trip.start_date %} - {{ trip.start_date.strftime('%d %b %Y') }}{% endif %}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Group Size</label>
+                            <input class="form-input" type="number" name="group_size" min="1" value="1" placeholder="1">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Language</label>
+                            <select class="form-select" name="language">
+                                <option value="ar">Arabic</option>
+                                <option value="en">English</option>
+                            </select>
+                        </div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">3</span> Pipeline &amp; ownership</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Stage</label>
+                            <select class="form-select" name="lead_stage">
+                                {% for s in stages %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Priority</label>
+                            <select class="form-select" name="priority">
+                                <option value="Medium">Medium</option>
+                                <option value="High">High</option>
+                                <option value="Low">Low</option>
+                            </select>
+                        </div>
+                        {% if can_assign %}
+                        <div class="form-group">
+                            <label class="form-label">Assigned Employee</label>
+                            <select class="form-select" name="assigned_to_user_id">
+                                <option value="">Unassigned</option>
+                                {% for employee in employees %}
+                                <option value="{{ employee.id }}">{{ employee.display_name }} - {{ employee.role }}</option>
+                                {% endfor %}
+                            </select>
+                            <div class="form-hint">Leave unassigned to auto-assign by round-robin.</div>
+                        </div>
+                        {% endif %}
+                        <div class="form-group">
+                            <label class="form-label">Follow-up Date</label>
+                            <input class="form-input" type="date" name="follow_up_due_date">
+                        </div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">4</span> Context <span style="font-weight:600;text-transform:none;letter-spacing:0;color:var(--text-muted)">— optional</span></div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Source</label>
+                            <input class="form-input" type="text" name="lead_source" placeholder="e.g. Instagram, WhatsApp">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Next Action</label>
+                            <input class="form-input" type="text" name="current_step" placeholder="e.g. Send proposal, call back tomorrow">
+                        </div>
+                        <div class="form-group col-span-2">
+                            <label class="form-label">Notes</label>
+                            <textarea class="form-textarea" name="notes" placeholder="Any relevant inquiry context or notes" style="min-height: 80px;"></textarea>
+                        </div>
+                    </div>
+                </fieldset>
+
             </div>
-            <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1.5rem">
-                <button type="button" class="btn btn-ghost" onclick="closeModal('createLead')" style="padding: 0.6rem 1.25rem;">Cancel</button>
-                <button type="submit" class="btn btn-primary" style="padding: 0.6rem 1.5rem;">Create Lead</button>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('createLead')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create Lead</button>
             </div>
         </form>
     </div>

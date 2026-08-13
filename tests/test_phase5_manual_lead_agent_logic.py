@@ -73,6 +73,10 @@ class Phase5ManualLeadAgentLogicTests(unittest.TestCase):
         os.environ["SHEET_BACKEND"] = "excel"
         os.environ["EXCEL_RUNTIME_WORKBOOK"] = str(workbook_path)
         os.environ["EXCEL_SOURCE_WORKBOOK"] = str(workbook_path)
+        # Pin auth off: app/__init__.py defaults CRM_AUTH_ENABLED to "true" when
+        # unset, so inheriting it from the ambient environment made these
+        # unauthenticated route tests 302-redirect in full-suite order.
+        os.environ["CRM_AUTH_ENABLED"] = "false"
 
         for module_name in list(sys.modules):
             if module_name == "app" or module_name.startswith("app."):
