@@ -97,6 +97,14 @@ class SessionState:
     booking_result: dict[str, Any] | None = None
     selected_trip_id: str = ""
     selected_trip_name: str = ""
+    # Phase 11: set when the agent has just offered the trip list in
+    # response to a trip-change/browse interruption while a trip was
+    # already selected -- the *next* turn is allowed to select a trip by a
+    # bare name/number, without requiring the explicit correction-signal
+    # wording _apply_trip_switch_from_text normally demands, since that
+    # signal was already given on the turn that set this flag. Cleared as
+    # soon as it's consumed (matched or not) so it never lingers.
+    awaiting_trip_reselection: bool = False
     room_type: str = ""
     room_group: str = ""
     room_requirements: dict[str, Any] = field(default_factory=dict)

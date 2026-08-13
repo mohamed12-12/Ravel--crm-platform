@@ -53,6 +53,7 @@ from services.ai_agent.validation.lexicon import (
     AFFIRMATIVE_TERMS,
     EXPLANATION_REQUEST_EXACT_TERMS,
     EXPLANATION_REQUEST_SUBSTRING_TERMS,
+    GENERIC_TRIP_CHANGE_TERMS,
     HUMAN_HANDOFF_TERMS,
     RESTART_SIGNAL_TERMS,
     TRIP_DISCOVERY_TERMS,
@@ -1161,7 +1162,13 @@ class ToolCallingSessionRuntime:
     @staticmethod
     def _looks_negative_confirmation(text: str) -> bool:
         normalized = ToolCallingSessionRuntime._normalize_trip_reference(text)
-        return normalized in {"no", "n", "cancel", "stop", "not now", "لا", "لاء", "الغاء", "إلغاء"}
+        if normalized in {"no", "n", "cancel", "stop", "not now", "لا", "لاء", "الغاء", "إلغاء"}:
+            return True
+        # Phase 11: a cancel phrase said while a booking confirmation is
+        # pending must decline it the same way "no" does, not fall through
+        # to the generic "please reply yes or no" re-ask -- reuses
+        # _is_cancel_intent's own phrase set rather than a second copy.
+        return ToolCallingSessionRuntime._is_cancel_intent(text)
 
     @classmethod
     def _is_need_clarification_request(cls, text: str) -> bool:
@@ -1310,6 +1317,80 @@ class ToolCallingSessionRuntime:
             return False
         self._select_trip(session, candidate_trip)
         return True
+
+    def _handle_post_selection_trip_browse_or_change(self, session: SessionState, clean_text: str) -> bool:
+        """Phase 11: "I don't want this trip"/"show me other trips" with no
+        specific alternate named, once a trip is already selected.
+
+        _apply_trip_switch_from_text (above) and the classifier's
+        correction_trip_switch category both only ever fire when a specific
+        replacement trip can be resolved from the text -- a target-less
+        "I want a different trip" has nothing to resolve and was previously
+        a dead end that fell through to the generic "unclear input" fallback,
+        which just re-asked whatever field was already pending. This shows
+        the trip list instead, as a preserved-state interruption: nothing
+        about the current selection/room/group/etc. is touched, matching
+        the "temporary interruption" rule (see PHASE_11 report) rather than
+        the destructive reset a real trip change performs. Marks
+        awaiting_trip_reselection so the very next turn can complete the
+        switch from a bare trip name/number -- see
+        _handle_pending_trip_reselection_answer.
+        """
+        if not session.selected_trip_id:
+            return False
+        if not (self._is_trip_discovery_request(clean_text) or self._is_generic_trip_change_signal(clean_text)):
+            return False
+        return self._offer_trip_reselection(session, clean_text)
+
+    def _offer_trip_reselection(self, session: SessionState, clean_text: str) -> bool:
+        """The action half of a browse/change interruption, with no phrase
+        gate of its own -- shared by _handle_post_selection_trip_browse_or_change
+        (gated on the deterministic phrase sets above) and the off-script
+        classifier's correction_trip_switch route once it has already
+        decided, on its own semantic judgment, that the customer wants a
+        different trip but named no resolvable one (see
+        _handle_off_script_classifier). Requires a trip to already be
+        selected; callers are responsible for that check.
+        """
+        session.messages.append({"role": "user", "text": clean_text})
+        trip_type = str(session.trip_type or "").strip().lower()
+        if trip_type not in {"local", "international"}:
+            trip_type = self._effective_trip_type(session)
+        if trip_type in {"local", "international"} and session.trip_type != trip_type:
+            session.trip_type = trip_type
+        self._load_verified_trip_results(session)
+        session.awaiting_trip_reselection = True
+        self._append_authoritative_reply(
+            session,
+            message_key="trip.browse_or_change.offered",
+            base_text=self._canonical_trip_search_reply(session),
+        )
+        session.tools_used = ["search_trips"]
+        session.fallback_used = False
+        agent_logger.info(
+            "Tool-calling session %s offered the trip list for a browse/change interruption previous_trip=%s",
+            session.id,
+            session.selected_trip_id,
+        )
+        return True
+
+    def _handle_pending_trip_reselection_answer(self, session: SessionState, clean_text: str) -> bool:
+        """Consume a pending offer set by
+        _handle_post_selection_trip_browse_or_change. The explicit
+        correction-signal gate _apply_trip_switch_from_text normally
+        requires was already satisfied on the turn that set this flag, so a
+        bare trip name/number is enough here -- reuses
+        _resolve_trip_switch_candidate's own confidence/margin rule
+        unchanged, never a new/looser matching rule. Always clears the flag
+        so it can never linger past the one turn it applies to, whether or
+        not a trip is actually resolved this turn.
+        """
+        session.awaiting_trip_reselection = False
+        candidate_trip = self._resolve_trip_switch_candidate(session, clean_text)
+        if not candidate_trip:
+            return False
+        self._select_trip(session, candidate_trip)
+        return self._reply_for_off_script_state_change(session, clean_text)
 
     def _resolve_trip_switch_candidate(self, session: SessionState, clean_text: str) -> dict[str, Any] | None:
         """The score/margin half of a trip switch, with no correction-signal
@@ -1603,6 +1684,20 @@ class ToolCallingSessionRuntime:
         if not normalized:
             return False
         return any(phrase in normalized for phrase in TRIP_DISCOVERY_TERMS)
+
+    @classmethod
+    def _is_generic_trip_change_signal(cls, text: str) -> bool:
+        """Detect "I don't want this trip, show me something else" with no
+        specific alternate trip named -- distinct from
+        _is_explicit_correction_signal (which is only ever checked together
+        with an actual resolved replacement value/trip) and from
+        _is_trip_discovery_request (a neutral "what do you have" question).
+        See GENERIC_TRIP_CHANGE_TERMS for the exact phrase set.
+        """
+        normalized = cls._normalize_trip_reference(text)
+        if not normalized:
+            return False
+        return any(phrase in normalized for phrase in GENERIC_TRIP_CHANGE_TERMS)
 
     @classmethod
     def _is_trip_quality_question(cls, text: str) -> bool:
@@ -1907,6 +2002,7 @@ class ToolCallingSessionRuntime:
             "confirm that, and it has not happened yet this turn. Keep the field itself an open question."
         )
         candidate = ""
+        candidate_media: list[dict[str, Any]] = []
         if isinstance(self._conversation_ai, GeminiAgent):
             try:
                 result = self._conversation_ai.respond(
@@ -1928,6 +2024,16 @@ class ToolCallingSessionRuntime:
                     known_record_ids=self._session_known_record_ids(session),
                 ):
                     candidate = ""
+                elif isinstance(result, dict):
+                    # Phase 11: this turn can tool-call get_trip_media just
+                    # like the deterministic media handler does -- without
+                    # this, any media it used stayed embedded as a raw
+                    # /trips/media/... path inside the LLM's own reply text.
+                    # _finalize_assistant_reply/_assistant_message already
+                    # strip the raw URL out of the text once `media` is
+                    # non-empty -- the same structured-media convention
+                    # every other media reply already follows.
+                    candidate_media = self._media_from_agent_result(result)
             except Exception:
                 agent_logger.exception("Conversational interruption recovery failed for session=%s", session.id)
 
@@ -1935,13 +2041,16 @@ class ToolCallingSessionRuntime:
             reply = candidate
         else:
             # Clarification is an input-understanding case, not an output failure.
+            candidate_media = []
             reply = self._safe_response_fallback(
                 session,
                 message_key=f"workflow.interruption.{decision.required_step or 'unknown'}",
                 base_text=self._natural_interruption_fallback(session, decision, clean_text),
             )
         session.messages.append(
-            self._finalize_assistant_reply(session, text=reply, language=session.language, user_text=clean_text)
+            self._finalize_assistant_reply(
+                session, text=reply, language=session.language, media=candidate_media, user_text=clean_text
+            )
         )
         session.tools_used = []
         session.fallback_used = False
@@ -2007,6 +2116,7 @@ class ToolCallingSessionRuntime:
             return False
 
         category = str((classification or {}).get("category") or "unclear")
+        target_hint = str((classification or {}).get("target_hint") or "").strip()
         try:
             confidence = float((classification or {}).get("confidence") or 0.0)
         except (TypeError, ValueError):
@@ -2048,7 +2158,17 @@ class ToolCallingSessionRuntime:
         if category == "correction_trip_switch":
             candidate_trip = self._resolve_trip_switch_candidate(session, clean_text)
             if not candidate_trip:
-                return False
+                # target_hint distinguishes two different "no candidate"
+                # cases the pre-Phase-11 tests already pin: a SPECIFIC named
+                # trip that just doesn't resolve (doesn't exist, or is
+                # ambiguous between two catalog entries) must still make no
+                # change at all -- the classifier must never substitute a
+                # guess for the deterministic resolver's own refusal. Only a
+                # genuinely target-less "something else" intent (Phase 11)
+                # offers the list instead of giving up.
+                if target_hint or not session.selected_trip_id:
+                    return False
+                return self._offer_trip_reselection(session, clean_text)
             self._select_trip(session, candidate_trip)
             return self._reply_for_off_script_state_change(session, clean_text)
 
@@ -2914,7 +3034,18 @@ class ToolCallingSessionRuntime:
         return "\n".join(lines)
 
     @staticmethod
-    def _is_trip_media_request(text: str) -> bool:
+    def _is_trip_media_request(text: str, *, has_selected_trip: bool = False) -> bool:
+        """Detect a request for trip photos/media.
+
+        `has_selected_trip` relaxes the trip_terms requirement below: once a
+        trip is already selected, "photos of it?"/"في صور ليها؟" refers
+        unambiguously to that trip by pronoun, with no need to repeat the
+        word "trip"/"hotel"/"room" -- requiring that word was fine
+        pre-selection (there is no "it" to refer to yet, so a bare "any
+        pictures?" is genuinely ambiguous), but post-selection it meant a
+        completely natural, common phrasing was never even recognized as a
+        media request at all (Phase 11).
+        """
         normalized = ToolCallingSessionRuntime._normalize_public_trip_reference(text)
         lowered = str(text or "").casefold()
         passport_terms = ("passport", "جواز", "باسبور", "بطاقة", "id")
@@ -2947,9 +3078,21 @@ class ToolCallingSessionRuntime:
         trip_terms = ("trip", "hotel", "room", "رحلة", "الرحلة", "فندق", "غرفة", "الغرفة")
         if any(term in lowered for term in ("\u063a\u0631\u0641\u0629", "\u0623\u0648\u0636\u0629")) and not any(term in lowered for term in ("\u0635\u0648\u0631", "\u0627\u0634\u0648\u0641", "\u0623\u0634\u0648\u0641", "\u0627\u0631\u0633\u0644")):
             return False
-        return any(term in normalized or term in lowered for term in media_terms) and any(
-            term in normalized or term in lowered for term in trip_terms
-        )
+        if has_selected_trip:
+            # The relaxed, no-trip-terms-required path (see docstring) must
+            # not reuse the generic terms above ("show", "see", "hotel",
+            # "room"/"غرفة" -- ordinary vocabulary in plenty of unrelated
+            # requests, e.g. "show me Thailand instead", only ever safe in
+            # media_terms because trip_terms co-occurrence disambiguated
+            # them below). Restricted to words unambiguous about photos/
+            # images on their own.
+            unambiguous_media_terms = (
+                "photo", "picture", "pic", "image", "photos", "pictures", "pics", "gallery",
+                "صورة", "صور", "اشوف", "أشوف",
+            )
+            return any(term in normalized or term in lowered for term in unambiguous_media_terms)
+        has_media_term = any(term in normalized or term in lowered for term in media_terms)
+        return has_media_term and any(term in normalized or term in lowered for term in trip_terms)
 
     def _selected_or_referenced_trip_for_media(self, session: SessionState, text: str) -> dict[str, Any]:
         selected = self._selected_trip(session)
@@ -3043,7 +3186,6 @@ class ToolCallingSessionRuntime:
             )
             session.tools_used = []
             session.fallback_used = False
-            session.stage = "trip_media_shared"
             return True
         trip_id = str(trip.get("trip_id") or session.selected_trip_id or "").strip()
         media_result = self._read_only_tools.get_trip_media(trip_id=trip_id)
@@ -3059,7 +3201,15 @@ class ToolCallingSessionRuntime:
         )
         session.tools_used = ["get_trip_media"]
         session.fallback_used = False
-        session.stage = "trip_media_shared"
+        # Phase 11: do NOT overwrite session.stage here. It used to be set to
+        # a "trip_media_shared" display marker, but that silently clobbered
+        # whatever backend-owned collection step (gender/room/etc.) was
+        # actually pending -- since _apply_required_step_capture's per-step
+        # branches key off session.stage, the very next turn's answer to
+        # that pending field would stop being captured at all (a real
+        # Category F "resume after interruption" break). Nothing reads this
+        # stage for anything functional (only a cosmetic status label and an
+        # audit-log canonical-state mapping), so leaving it untouched is safe.
         return True
 
     def _handle_navigation_intent(self, session: SessionState, clean_text: str) -> bool:
@@ -3192,7 +3342,23 @@ class ToolCallingSessionRuntime:
 
     @classmethod
     def _is_cancel_intent(cls, text: str) -> bool:
-        return cls._compact_intent(text) in {"cancel", "stop", "end", "nevermind", "الغاء", "إلغاء", "وقف"}
+        # Phase 11: the bare single-word set below only ever matched a
+        # message that compacted down to exactly one of those words -- a
+        # full natural sentence like "مش عايز أكمل" never did. Added as
+        # additional exact (still whole-message, not substring) entries,
+        # same matching discipline as the existing bare words, just also
+        # covering the multi-word phrasing a real customer actually types.
+        # "استني"/"استنى" (wait/pause) is included here too: Category D
+        # groups cancel and pause together, and this handler's existing
+        # stage="waiting" outcome already reads as a pause, not only a
+        # permanent cancellation.
+        return cls._compact_intent(text) in {
+            "cancel", "stop", "end", "nevermind", "الغاء", "إلغاء", "وقف",
+            "مشعايزاكمل", "مشعايزةاكمل", "مشعاوزاكمل", "مايعايزاكمل",
+            "مشعايزاحجز", "مشعايزةاحجز", "مشعاوزاحجز", "مايعايزاحجز",
+            "خلاصسيبها", "سيبها", "خلاصسيبه",
+            "استني", "استنى",
+        }
 
     @classmethod
     def _is_start_over_intent(cls, text: str) -> bool:
@@ -3709,6 +3875,9 @@ class ToolCallingSessionRuntime:
         if self._conversation_ai is None:
             raise RuntimeError("Tool-calling agent runtime is not configured.")
 
+        if session.awaiting_trip_reselection and self._handle_pending_trip_reselection_answer(session, clean_text):
+            return session
+
         capture_stage = session.stage
         step_value_captured = self._apply_required_step_capture(session, clean_text)
         if not step_value_captured:
@@ -3735,12 +3904,12 @@ class ToolCallingSessionRuntime:
                 return session
 
         hints = self._extract_hints(clean_text, stage=capture_stage)
-        self._merge_hints(session, hints)
+        self._merge_hints(session, hints, clean_text)
         self._apply_trip_selection_from_text(session, clean_text)
         self._apply_trip_switch_from_text(session, clean_text)
         self._apply_trip_configuration_defaults(session)
         self._ensure_room_requirements_for_group(session)
-        media_intent = self._is_trip_media_request(clean_text)
+        media_intent = self._is_trip_media_request(clean_text, has_selected_trip=bool(session.selected_trip_id))
         preloaded_tool_event = self._run_identity_lookup_if_ready(session) if media_intent else None
         if media_intent and self._handle_trip_media_request_if_ready(session, clean_text):
             agent_logger.info("Tool-calling session %s returned verified trip media from CRM", session.id)
@@ -3752,6 +3921,8 @@ class ToolCallingSessionRuntime:
             return session
         if not media_intent and self._handle_public_trip_reference_if_present(session, clean_text):
             agent_logger.info("Tool-calling session %s resolved public trip reference from CRM", session.id)
+            return session
+        if not media_intent and self._handle_post_selection_trip_browse_or_change(session, clean_text):
             return session
         if preloaded_tool_event is None:
             preloaded_tool_event = self._run_identity_lookup_if_ready(session)
@@ -4930,15 +5101,37 @@ class ToolCallingSessionRuntime:
         match = re.search(r"\b([1-9][0-9]?)\b", normalized)
         return int(match.group(1)) if match else 0
 
+    @staticmethod
+    def _split_glued_arabic_connector(text: str) -> str:
+        """Insert a space after a bare "و" ("and") immediately glued to a
+        following digit or number word -- "2 بنات و2 رجال" is completely
+        ordinary Arabic, but Python's \\b treats a digit and a preceding
+        Arabic letter as the same "word" character class, so "\\b(2)"
+        never matched inside "و2" at all (no boundary between و and 2).
+        Deliberately narrow: only the specific number-word forms this file
+        already recognizes are split, so a real word that happens to start
+        with و (e.g. "ولد") is never touched.
+        """
+        return re.sub(r"و(?=[0-9]|اتنين|اثنين|تلاتة|ثلاثة)", "و ", str(text or ""))
+
     @classmethod
     def _extract_mixed_people_counts(cls, text: str) -> dict[str, int]:
-        lowered = str(text or "").strip().casefold()
+        lowered = cls._split_glued_arabic_connector(str(text or "").strip().casefold())
         counts = {"boys": 0, "girls": 0}
         group_terms = {
-            "boys": ("boy", "boys", "male", "males", "\u0648\u0644\u062f", "\u0627\u0648\u0644\u0627\u062f", "\u0623\u0648\u0644\u0627\u062f", "\u0634\u0628\u0627\u0628"),
+            # Phase 12: "\u0631\u062c\u0627\u0644"/"\u0631\u062c\u0627\u0644\u0629" (men) was missing -- "\u062c\u0631\u0648\u0628 2 \u0628\u0646\u0627\u062a \u06482
+            # \u0631\u062c\u0627\u0644" previously counted 2 girls and 0 boys.
+            "boys": ("boy", "boys", "male", "males", "\u0648\u0644\u062f", "\u0648\u0644\u0627\u062f", "\u0627\u0648\u0644\u0627\u062f", "\u0623\u0648\u0644\u0627\u062f", "\u0634\u0628\u0627\u0628", "\u0631\u062c\u0627\u0644", "\u0631\u062c\u0627\u0644\u0629"),
             "girls": ("girl", "girls", "female", "females", "\u0628\u0646\u062a", "\u0628\u0646\u0627\u062a"),
         }
-        number_pattern = r"[1-9][0-9]?|one|two|three|four|five|six|seven|eight|nine"
+        # Phase 12: Arabic number WORDS ("\u0627\u062a\u0646\u064a\u0646"/"\u0627\u062b\u0646\u064a\u0646"/...) were not part
+        # of this pattern at all -- only digits and English words -- so
+        # "\u0627\u062a\u0646\u064a\u0646 \u0628\u0646\u0627\u062a \u0648\u0627\u062a\u0646\u064a\u0646 \u0648\u0644\u0627\u062f" matched nothing. _number_from_text already
+        # converts these; they just needed to be capturable here too.
+        number_pattern = (
+            r"[1-9][0-9]?|one|two|three|four|five|six|seven|eight|nine"
+            r"|\u0648\u0627\u062d\u062f|\u0648\u0627\u062d\u062f\u0629|\u0627\u062a\u0646\u064a\u0646|\u0627\u062b\u0646\u064a\u0646|\u062a\u0644\u0627\u062a\u0629|\u062b\u0644\u0627\u062b\u0629"
+        )
         for group, terms in group_terms.items():
             for term in terms:
                 for match in re.finditer(
@@ -5006,23 +5199,136 @@ class ToolCallingSessionRuntime:
         )
         return any(term in lowered for term in arabic_terms)
 
+    @staticmethod
+    def _consolidate_room_requirements(items: list[dict[str, Any]]) -> dict[str, Any]:
+        """Sum "rooms" for identical (room_type, room_group) pairs and
+        recompute the boys/girls totals from the result -- the single
+        place every room-requirements mutation funnels through, so the
+        totals can never drift out of sync with the requirements list
+        itself.
+        """
+        consolidated: dict[tuple[str, str], dict[str, Any]] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            room_type = str(item.get("room_type") or "").strip()
+            room_group = str(item.get("room_group") or "").strip().lower()
+            if not room_group:
+                continue
+            try:
+                rooms = int(item.get("rooms") or 0)
+            except (TypeError, ValueError):
+                rooms = 0
+            key = (room_type, room_group)
+            if key in consolidated:
+                consolidated[key]["rooms"] += rooms
+            else:
+                consolidated[key] = {"room_type": room_type, "room_group": room_group, "rooms": rooms}
+        requirements = [item for item in consolidated.values() if item["rooms"] > 0]
+        return {
+            "requirements": requirements,
+            "boys_rooms_requested": sum(item["rooms"] for item in requirements if item["room_group"] == "boys"),
+            "girls_rooms_requested": sum(item["rooms"] for item in requirements if item["room_group"] == "girls"),
+        }
+
+    @classmethod
+    def _is_room_correction_signal(cls, text: str) -> bool:
+        """An explicit "no, change it" signal for an already-stated room
+        requirement -- reuses _is_explicit_correction_signal's marker set
+        (the same bar every other override in this file already requires),
+        plus a bare leading "لا" ("no"), which that shared check does not
+        cover on its own but is the natural way this specific correction is
+        phrased ("لا خليها غرفة تريبل بنات"). Scoped to room-requirement
+        merging only -- does not change _is_explicit_correction_signal's own
+        behavior anywhere else (trip/trip-type switching).
+        """
+        if cls._is_explicit_correction_signal(text):
+            return True
+        stripped = str(text or "").strip()
+        return bool(re.match(r"^لا[\s,،]", stripped)) or stripped == "لا"
+
+    @classmethod
+    def _global_room_gender_correction(cls, text: str) -> str:
+        """"لا، الغرفتين شباب" ("no, both rooms [are] boys") -- a single
+        gender stated as applying to ALL rooms at once, not one more
+        addition. Returns "boys"/"girls", or "" if this pattern isn't
+        present.
+        """
+        lowered = str(text or "").strip().casefold()
+        if not any(
+            marker in lowered
+            for marker in ("الغرفتين", "الاوضتين", "الأوضتين", "كل الغرف", "جميع الغرف", "الغرف كلها", "both rooms", "all rooms")
+        ):
+            return ""
+        if any(term in lowered for term in ("شباب", "اولاد", "أولاد", "رجال", "رجالة", "boys", "male")):
+            return "boys"
+        if any(term in lowered for term in ("بنات", "girls", "female")):
+            return "girls"
+        return ""
+
+    def _merge_room_requirements(
+        self, session: SessionState, new_requirements: dict[str, Any], clean_text: str
+    ) -> dict[str, Any]:
+        """Addition vs. replacement semantics for room_requirements
+        (Phase 12). session.room_requirements used to be replaced wholesale
+        by whatever the current turn parsed -- a second turn adding one more
+        room for a different gender silently discarded the first one.
+
+        Rules, in order:
+        1. "both/all rooms [are] <gender>" -- every EXISTING requirement's
+           gender is corrected to the one stated; nothing is added.
+        2. A new requirement whose gender already has an existing entry:
+           replaced only if this turn carries an explicit correction signal
+           ("لا"/"instead"/"خليها"/...); otherwise left untouched (an
+           identical restatement is a no-op, a conflicting one is ignored
+           rather than silently applied -- same discipline _merge_hints
+           already uses for a conflicting trip_type hint).
+        3. A new requirement whose gender has no existing entry: added.
+        """
+        new_items = [item for item in (new_requirements.get("requirements") or []) if isinstance(item, dict)]
+        if not new_items:
+            return new_requirements
+
+        existing_data = session.room_requirements if isinstance(session.room_requirements, dict) else {}
+        existing_items = [dict(item) for item in (existing_data.get("requirements") or []) if isinstance(item, dict)]
+
+        global_gender = self._global_room_gender_correction(clean_text)
+        if global_gender and existing_items:
+            for item in existing_items:
+                item["room_group"] = global_gender
+            return self._consolidate_room_requirements(existing_items)
+
+        correction_signal = self._is_room_correction_signal(clean_text)
+        existing_by_gender = {str(item.get("room_group") or "").strip().lower(): item for item in existing_items}
+        merged = list(existing_items)
+        for new_item in new_items:
+            gender = str(new_item.get("room_group") or "").strip().lower()
+            existing_entry = existing_by_gender.get(gender)
+            if existing_entry is not None:
+                if correction_signal:
+                    existing_entry.update(new_item)
+                continue
+            merged.append(new_item)
+            existing_by_gender[gender] = new_item
+        return self._consolidate_room_requirements(merged)
+
     @classmethod
     def _extract_room_requirements(cls, text: str, default_room_type: str = "") -> dict[str, Any]:
-        lowered = str(text or "").strip().casefold()
+        lowered = cls._split_glued_arabic_connector(str(text or "").strip().casefold())
         room_word_present = any(token in lowered for token in ("room", "rooms", "\u063a\u0631\u0641\u0629", "\u063a\u0631\u0641\u062a\u064a\u0646", "\u0623\u0648\u0636\u0629", "\u0627\u0648\u0636\u0629"))
         if not room_word_present:
             return {}
         room_type = default_room_type
-        if "single" in lowered:
+        if "single" in lowered or "\u0633\u0646\u062c\u0644" in lowered or "\u0641\u0631\u062f\u064a" in lowered or "\u0641\u0631\u062f\u064a\u0647" in lowered:
             room_type = "Single"
-        elif "double" in lowered:
+        elif "double" in lowered or "\u062f\u0627\u0628\u0644" in lowered or "\u062f\u0628\u0644" in lowered:
             room_type = "Double"
-        elif "triple" in lowered:
+        elif "triple" in lowered or "\u062a\u0631\u064a\u0628\u0644" in lowered:
             room_type = "Triple"
         requirements: list[dict[str, Any]] = []
         number_pattern = r"[1-9][0-9]?|one|two|three|four|five|six|seven|eight|nine"
         for group, terms in {
-            "boys": ("boys", "boy", "male", "men", "\u0627\u0648\u0644\u0627\u062f", "\u0623\u0648\u0644\u0627\u062f", "\u0634\u0628\u0627\u0628"),
+            "boys": ("boys", "boy", "male", "men", "\u0648\u0644\u0627\u062f", "\u0627\u0648\u0644\u0627\u062f", "\u0623\u0648\u0644\u0627\u062f", "\u0634\u0628\u0627\u0628", "\u0631\u062c\u0627\u0644", "\u0631\u062c\u0627\u0644\u0629"),
             "girls": ("girls", "girl", "female", "women", "\u0628\u0646\u0627\u062a"),
         }.items():
             group_count = 0
@@ -5037,7 +5343,14 @@ class ToolCallingSessionRuntime:
                         group_count += cls._number_from_text(match.group(1)) or 1
             if group_count:
                 requirements.append({"room_type": room_type or "Double", "room_group": group, "rooms": group_count})
-        has_boys = "boys" in lowered or "\u0634\u0628\u0627\u0628" in lowered or "\u0627\u0648\u0644\u0627\u062f" in lowered or "\u0623\u0648\u0644\u0627\u062f" in lowered
+        # Phase 12: "\u0631\u062c\u0627\u0644"/"\u0631\u062c\u0627\u0644\u0629" (men) is at least as common as "\u0634\u0628\u0627\u0628" in
+        # real Egyptian-Arabic group-composition phrasing and was missing
+        # entirely -- a message naming both genders would silently produce
+        # only the girls entry (the reported production bug).
+        has_boys = (
+            "boys" in lowered or "\u0634\u0628\u0627\u0628" in lowered or "\u0627\u0648\u0644\u0627\u062f" in lowered
+            or "\u0623\u0648\u0644\u0627\u062f" in lowered or "\u0631\u062c\u0627\u0644" in lowered
+        )
         has_girls = "girls" in lowered or "\u0628\u0646\u0627\u062a" in lowered
         if not requirements and (has_boys or has_girls):
             if has_boys:
@@ -5127,7 +5440,13 @@ class ToolCallingSessionRuntime:
         group_size = 0
         group_context = stage == "group_size_required" or any(
             token in lowered
-            for token in ("traveler", "travelers", "person", "people", "group", "we are", "passenger", "passengers")
+            for token in (
+                "traveler", "travelers", "person", "people", "group", "we are", "passenger", "passengers",
+                # Phase 11: a correction to an already-answered group size
+                # ("لا العدد 4") never matched here -- the Arabic side of
+                # this OR-list had no entry at all, English-only.
+                "عدد", "مسافر", "مسافرين", "مسافرون", "أفراد", "افراد",
+            )
         )
         if group_context:
             for token, value in {
@@ -5248,7 +5567,7 @@ class ToolCallingSessionRuntime:
         self._update_collection_state(session, selected_trip=False)
         return True
 
-    def _merge_hints(self, session: SessionState, hints: dict[str, Any]) -> None:
+    def _merge_hints(self, session: SessionState, hints: dict[str, Any], clean_text: str = "") -> None:
         """Applies the intent extractor's per-field candidates onto session
         state, one field at a time, each with its own gate. The recurring
         shape below is: a hypothetical/exploratory mention of a field
@@ -5376,11 +5695,12 @@ class ToolCallingSessionRuntime:
             self._update_collection_state(session, room_group=True)
         room_requirements = hints.get("candidate_room_requirements") if not is_exploratory else None
         if isinstance(room_requirements, dict) and room_requirements.get("requirements"):
-            session.room_requirements = dict(room_requirements)
+            merged_requirements = self._merge_room_requirements(session, room_requirements, clean_text)
+            session.room_requirements = merged_requirements
             if not session.room_type:
-                first = next((item for item in room_requirements.get("requirements") or [] if isinstance(item, dict)), {})
+                first = next((item for item in merged_requirements.get("requirements") or [] if isinstance(item, dict)), {})
                 session.room_type = str(first.get("room_type") or session.room_type or "").strip()
-            if room_requirements.get("boys_rooms_requested") and room_requirements.get("girls_rooms_requested"):
+            if merged_requirements.get("boys_rooms_requested") and merged_requirements.get("girls_rooms_requested"):
                 session.room_group = "mixed"
             self._update_collection_state(session, room_type=True, room_group=True)
 

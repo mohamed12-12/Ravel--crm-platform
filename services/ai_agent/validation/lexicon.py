@@ -225,3 +225,36 @@ RESTART_SIGNAL_TERMS: set[str] = {
     "عايز اغير",
     "عايزة اغير",
 }
+
+# Phase 11: an explicit "I don't want this trip, show me something else"
+# signal that names no specific alternate trip -- distinct from
+# RESTART_SIGNAL_TERMS (which requires an actual replacement value/trip to
+# already be given alongside it) and from TRIP_DISCOVERY_TERMS (a neutral
+# "what do you have" question, not a rejection of the current selection).
+# Matched with substring-in-normalized-text, same convention as
+# TRIP_DISCOVERY_TERMS -- entries are pre-normalized (bare alef, ه for tied
+# taa marbuta) to match _normalize_trip_reference's own output.
+GENERIC_TRIP_CHANGE_TERMS: set[str] = {
+    "رحله تانيه",
+    "رحله ثانيه",
+    "رحلات تانيه",
+    "رحلات ثانيه",
+    "رحله اخرى",
+    "رحله غير",
+    "اغير الرحله",
+    "تغيير الرحله",
+    "غير الرحله",
+    "مش عايز الرحله",
+    "ما عايز الرحله",
+    "مش عايزه الرحله",
+    "عايز رحله غير",
+    "عايزه رحله غير",
+    "اختارلي رحله غير",
+    "اختاري رحله غير",
+    "another trip",
+    "a different trip",
+    "different trip instead",
+    "change the trip",
+    "change my trip",
+    "not this trip",
+}
