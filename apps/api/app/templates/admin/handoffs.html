@@ -238,7 +238,24 @@
         flex-direction: column;
         gap: 1.1rem;
         min-height: 400px;
+        max-height: 70vh;
+        overflow-y: auto;
+        overflow-x: hidden;
         flex-grow: 1;
+        padding-right: 0.4rem;
+    }
+
+    .column-body::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    .column-body::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.12);
+        border-radius: 999px;
+    }
+
+    .column-body::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.22);
     }
 
     /* Elegant Kanban Cards with Micro-interactions */
@@ -393,6 +410,9 @@
 
     .btn-view-hover { background: rgba(255, 255, 255, 0.05); border-color: rgba(255, 255, 255, 0.2); }
     .btn-view-hover:hover { background: #fff; color: #0f172a; box-shadow: 0 0 15px rgba(255, 255, 255, 0.4); }
+
+    .btn-delete-hover { background: rgba(239, 68, 68, 0.15); border-color: var(--color-critical); color: var(--color-critical); }
+    .btn-delete-hover:hover { background: var(--color-critical); color: #fff; box-shadow: 0 0 15px rgba(239, 68, 68, 0.4); }
 
     /* Drag and drop states */
     .dragging {
@@ -984,6 +1004,11 @@
                 <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
             </svg>
         </button>
+        <button class="card-action-btn btn-delete-hover" onclick="deleteHandoff('{{ item.handoff_id }}')" title="Delete Handoff">
+            <svg fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m2 0l-.87 12.14A2 2 0 0115.14 21H8.86a2 2 0 01-1.99-1.86L6 7"></path>
+            </svg>
+        </button>
     </div>
 </div>
 {% endmacro %}
@@ -1249,6 +1274,23 @@
         submitResolution(handoffId, "Quick resolved from shortcuts bar.");
     }
 
+    function deleteHandoff(handoffId) {
+        event.stopPropagation();
+        if (!confirm('Delete this handoff permanently? This cannot be undone.')) return;
+        fetch(handoffUpdateUrl(handoffId), {
+            method: 'DELETE',
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN },
+        })
+        .then(r => r.json())
+        .then(() => {
+            const card = document.getElementById(`card-${handoffId}`);
+            if (card) card.remove();
+            applyFilters();
+            updatePendingBadge();
+        });
+    }
+
     function quickAssign(handoffId) {
         event.stopPropagation();
         fetch(handoffUpdateUrl(handoffId), {
@@ -1431,6 +1473,11 @@
                     <button class="card-action-btn btn-resolve-hover" onclick="quickResolve('${data.handoff_id}')" title="Quick Resolve">
                         <svg fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+                        </svg>
+                    </button>
+                    <button class="card-action-btn btn-delete-hover" onclick="deleteHandoff('${data.handoff_id}')" title="Delete Handoff">
+                        <svg fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m2 0l-.87 12.14A2 2 0 0115.14 21H8.86a2 2 0 01-1.99-1.86L6 7"></path>
                         </svg>
                     </button>
                 </div>

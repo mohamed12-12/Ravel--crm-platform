@@ -82,10 +82,20 @@ function appendBidiText(parent, text, parentDir) {
       parent.appendChild(document.createTextNode(value.slice(cursor, match.index)));
     }
     const token = match[0];
-    const bdi = document.createElement("bdi");
-    bdi.dir = inlineDirection(token, parentDir);
-    bdi.textContent = token;
-    parent.appendChild(bdi);
+    if (/^https?:\/\/\S+$/i.test(token)) {
+      const link = document.createElement("a");
+      link.href = token;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.dir = "ltr";
+      link.textContent = token;
+      parent.appendChild(link);
+    } else {
+      const bdi = document.createElement("bdi");
+      bdi.dir = inlineDirection(token, parentDir);
+      bdi.textContent = token;
+      parent.appendChild(bdi);
+    }
     cursor = match.index + token.length;
   }
   if (cursor < value.length) {

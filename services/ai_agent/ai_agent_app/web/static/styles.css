@@ -180,6 +180,8 @@ button:disabled, input:disabled { opacity: 0.5; cursor: not-allowed; filter: non
 .chat-bubble p { margin: 0 0 0.45rem; unicode-bidi: plaintext; }
 .chat-bubble p:last-child { margin-bottom: 0; }
 .chat-bubble bdi { unicode-bidi: isolate; }
+.chat-bubble a { color: var(--accent-2); text-decoration: underline; unicode-bidi: isolate; word-break: break-all; }
+.chat-bubble.user a { color: #06120f; }
 .chat-bubble.dir-rtl { text-align: right; }
 .chat-bubble.dir-ltr { text-align: left; }
 .chat-bubble.dir-auto { text-align: start; }

@@ -114,6 +114,13 @@ def update_handoff(id):
     db.session.commit()
     return jsonify({"status": "success"})
 
+@handoffs_bp.route('/<id>', methods=['DELETE'])
+def delete_handoff(id):
+    handoff = db.get_or_404(HandoffQueue, id)
+    db.session.delete(handoff)
+    db.session.commit()
+    return jsonify({"status": "success"})
+
 @handoffs_bp.route('/pending')
 def pending_count():
     count = HandoffQueue.query.filter(HandoffQueue.status.in_(['Pending', 'New'])).count()
