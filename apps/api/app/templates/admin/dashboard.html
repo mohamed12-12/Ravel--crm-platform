@@ -382,7 +382,6 @@
 {% endblock %}
 
 {% block topbar_actions %}
-<a href="{{ url_for('admin.import_data') }}" class="btn btn-ghost btn-sm">Import / Sync</a>
 <a href="{{ url_for('handoffs.index') }}" class="btn btn-primary btn-sm">Handoff Queue</a>
 {% endblock %}
 
@@ -852,8 +851,9 @@
     <a href="{{ url_for('travelers.index') }}" class="btn btn-ghost">Manage Travelers</a>
     <a href="{{ url_for('trips.index') }}" class="btn btn-ghost">Manage Trips</a>
     <a href="{{ url_for('leads.index') }}" class="btn btn-ghost">View Pipeline</a>
-    <a href="{{ url_for('admin.import_data') }}" class="btn btn-ghost">Import Data</a>
     <a href="{{ url_for('admin.sync_issues') }}" class="btn btn-ghost">Sync Issues</a>
-    <a href="{{ url_for('admin.duplicates') }}" class="btn btn-ghost">Check Duplicates</a>
+    {% if current_employee_role == 'admin' %}
+    <a href="{{ url_for('admin.revenue_analytics') }}" class="btn btn-ghost">Revenue Analytics</a>
+    {% endif %}
 </div>
 {% endblock %}

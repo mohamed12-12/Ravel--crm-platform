@@ -13,8 +13,6 @@ from app.models.user import User
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 SENSITIVE_READ_MARKERS = ("/documents", "/export")
 ADMIN_WRITE_PREFIXES = (
-    "/admin/import",
-    "/admin/duplicates/merge",
     "/admin/sync-issues/retry",
     "/api/crm/resolve-identity",
 )
@@ -28,11 +26,14 @@ ROLE_PERMISSIONS = {
     "sales": {"update_followup"},
 }
 USER_ADMIN_PREFIXES = ("/admin/users",)
-# Only these three admin.* endpoints are exclusive to admin/manager -- unlike
+# Only these admin.* endpoints are exclusive to admin/manager -- unlike
 # admin.dashboard/admin.index (the general landing page every employee is
 # allowed to see) or the internal debug/db-health/sync-issues diagnostics
 # (not customer data, left open to any authenticated employee).
-FULL_ACCESS_ONLY_ADMIN_ENDPOINTS = {"admin.users", "admin.import_data", "admin.duplicates"}
+FULL_ACCESS_ONLY_ADMIN_ENDPOINTS = {"admin.users"}
+# Revenue Analytics exposes company-wide money figures -- admin role only,
+# not even managers (unlike FULL_ACCESS_ONLY_ADMIN_ENDPOINTS above).
+ADMIN_ROLE_ONLY_ENDPOINTS = {"admin.revenue_analytics"}
 
 
 def _configured_token() -> str:
@@ -274,6 +275,10 @@ def crm_request_guard():
             # admin.dashboard (the default _browser_redirect target) is
             # a sibling of the endpoint this check just blocked, not the
             # endpoint itself, so it's a safe redirect target -- no loop.
+            return _browser_redirect("You do not have permission", "error", status_code=403)
+        return jsonify({"error": "forbidden"}), 403
+    if str(request.endpoint or "") in ADMIN_ROLE_ONLY_ENDPOINTS and _authenticated() and current_role() != "admin":
+        if not wants_json:
             return _browser_redirect("You do not have permission", "error", status_code=403)
         return jsonify({"error": "forbidden"}), 403
     if request.method not in WRITE_METHODS and not is_sensitive_read:

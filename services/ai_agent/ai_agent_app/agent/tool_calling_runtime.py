@@ -55,6 +55,7 @@ from services.ai_agent.validation.lexicon import (
     EXPLANATION_REQUEST_SUBSTRING_TERMS,
     GENERIC_TRIP_CHANGE_TERMS,
     HUMAN_HANDOFF_TERMS,
+    ONLY_OPTION_QUESTION_TERMS,
     SELF_SERVICE_HELP_TERMS,
     RESTART_SIGNAL_TERMS,
     TRIP_DISCOVERY_TERMS,
@@ -831,6 +832,68 @@ class ToolCallingSessionRuntime:
         return (
             "Sorry, I'm not managing to understand that and I don't want to waste your time. "
             f"I'm connecting you with {responsible} from the Ravel team to take it from here."
+        )
+
+    def _escalate_no_matching_trip(self, session: SessionState, clean_text: str = "") -> str:
+        """Auto-escalate to a human the moment we genuinely have no trip for
+        this customer -- either the search for their trip_type came back with
+        zero results, or they've just told us the one trip we DO have doesn't
+        work for them (see _is_only_option_question).
+
+        Idempotent per trip_type via session.escalated_no_trip_types, so a
+        customer bouncing Local -> International -> Local again does not
+        create a duplicate case for the same trip_type. Deliberately does NOT
+        promise a proactive "we'll notify you" callback: no such outbound
+        pipeline exists anywhere in this codebase (see
+        WorkflowPolicy._no_trips_available_message's docstring) -- creating a
+        real handoff so a human actually follows up is the honest version of
+        that same intent.
+        """
+        arabic = session.language.startswith("ar")
+        trip_type = str(session.trip_type or "").strip().lower() or "unspecified"
+        already = {token for token in session.escalated_no_trip_types.split(",") if token}
+        if trip_type not in already:
+            already.add(trip_type)
+            session.escalated_no_trip_types = ",".join(sorted(already))
+            try:
+                session_context = self._build_context(session, clean_text)
+                payload = {
+                    "traveler_id": session_context.get("traveler_id") or "",
+                    "raw_phone": session.raw_phone or session.pending_raw_phone,
+                    "country_code": session.country_code or self.settings.default_country_code,
+                    "lead_id": session_context.get("lead_id") or "",
+                    "trip_id": "",
+                    "flow_key": f"tool_calling:{session.id}",
+                    "reason_code": "no_matching_trip_available",
+                    "reason_text": f"No open '{trip_type}' trip matched this customer's request.",
+                    "priority": "Medium",
+                    "channel": "web",
+                    "customer_name": session.customer_name,
+                    "agent_summary": (
+                        f"Customer wants a '{trip_type}' trip but none currently open in CRM match. "
+                        "Logged as a sales signal for new inventory demand, not an urgent complaint."
+                    ),
+                    "customer_summary": clean_text,
+                    "notes": f"Session {session.id}: no '{trip_type}' trip available for this customer.",
+                    "update_lead": True,
+                    "deduplicate_open": True,
+                }
+                self._write_executor.execute(action="create_handoff", payload=payload, session_context=session_context)
+            except Exception as exc:
+                agent_logger.warning(
+                    "No-matching-trip escalation handoff could not be created session=%s error=%s", session.id, exc
+                )
+            agent_logger.info(
+                "Escalated no-matching-trip to human handoff session=%s trip_type=%s", session.id, trip_type
+            )
+        if arabic:
+            return (
+                "للأسف مش متوفر عندنا دلوقتي رحلة تناسب طلبك. "
+                "قيدت طلبك عشان فريق Ravel يراجعه ويتواصل معاك لو توفرت رحلة مناسبة."
+            )
+        return (
+            "Unfortunately we don't currently have a trip that matches what you're looking for. "
+            "I've logged your request so the Ravel team can review it and reach out if a suitable trip opens up."
         )
 
     def _finalize_assistant_reply(
@@ -1782,6 +1845,17 @@ class ToolCallingSessionRuntime:
         return any(phrase in normalized for phrase in GENERIC_TRIP_CHANGE_TERMS)
 
     @classmethod
+    def _is_only_option_question(cls, text: str) -> bool:
+        """Detect "is that the only one? / anything else?" asked right after
+        the agent lists the currently-available trip(s). See
+        ONLY_OPTION_QUESTION_TERMS for the exact phrase set.
+        """
+        normalized = cls._normalize_trip_reference(text)
+        if not normalized:
+            return False
+        return any(phrase in normalized for phrase in ONLY_OPTION_QUESTION_TERMS)
+
+    @classmethod
     def _is_trip_quality_question(cls, text: str) -> bool:
         normalized = cls._normalize_trip_reference(text)
         if not normalized:
@@ -2406,6 +2480,31 @@ class ToolCallingSessionRuntime:
         return "\n".join(lines)
 
     @staticmethod
+    def _current_trip_result_count(session: SessionState) -> int:
+        preview = session.preview if isinstance(session.preview, dict) else {}
+        trip_result = preview.get("trip_result") if isinstance(preview.get("trip_result"), dict) else {}
+        return sum(
+            1
+            for trip in [*list(trip_result.get("open_trips") or []), *list(trip_result.get("date_tbd_trips") or [])]
+            if isinstance(trip, dict)
+        )
+
+    def _only_option_honest_reply(self, session: SessionState) -> str:
+        """Direct, honest answer to "is that the only one?" when there genuinely
+        ARE other options currently listed -- must not escalate or re-ask, since
+        the customer asked a real question and there's a real answer.
+
+        Deliberately does not restate the trip count as a bare number:
+        response_guard's inventory_quantity_leak check treats any "N available"
+        phrasing as a potential internal-inventory leak (it can't tell "2 trips"
+        apart from "2 rooms left"), which would otherwise silently replace this
+        honest answer with the generic "let's start over" recovery message.
+        """
+        if session.language.startswith("ar"):
+            return "أيوة، الرحلات اللي ظهرتلك فوق هي المتاحة حاليًا. تحب تختار واحدة منهم؟"
+        return "Yes, the trips shown above are the ones currently available. Would you like to pick one of them?"
+
+    @staticmethod
     def _canonical_trip_search_reply(session: SessionState) -> str:
         """Render trip results deterministically so numbering cannot drift."""
         preview = session.preview if isinstance(session.preview, dict) else {}
@@ -2970,8 +3069,30 @@ class ToolCallingSessionRuntime:
             return False
         if not self._preview_has_verified_traveler(session):
             # Trip inventory for a verified traveler is only shown after the
-            # phone-first identity step; the normal flow asks for that.
-            return False
+            # phone-first identity step. Answer with the SAME deterministic
+            # "share your number" reply every other pre-verification path
+            # uses (_handle_identity_required_greeting), instead of falling
+            # through to the off-script classifier's free-form LLM turn.
+            # That LLM path had this exact conversation's customer-typed
+            # destination names ("الغردقة"، "مطروح") sitting right there in
+            # session.messages history with no trip search having run yet --
+            # it once ad-libbed them back as confirmed CRM inventory, before
+            # the only real trip in the system turned out to be unrelated.
+            # No tool call can ground a reply that has to happen before any
+            # tool is even allowed to run, so a deterministic reply is the
+            # only reply that cannot hallucinate here.
+            session.messages.append({"role": "user", "text": clean_text})
+            reply = (
+                "عيني، هقولك على كل الرحلات المتاحة، بس الأول ممكن تشاركني رقم الواتساب بتاعك عشان أراجع حسابك بأمان؟"
+                if session.language.startswith("ar")
+                else "I'd love to tell you about all our available trips -- could you share your WhatsApp number first so I can check your profile safely?"
+            )
+            session.messages.append(
+                self._finalize_assistant_reply(session, text=reply, language=session.language, user_text=clean_text)
+            )
+            session.tools_used = []
+            session.fallback_used = False
+            return True
         session.messages.append({"role": "user", "text": clean_text})
         trip_type = self._effective_trip_type(session)
         if trip_type not in {"local", "international"}:
@@ -4139,6 +4260,41 @@ class ToolCallingSessionRuntime:
                 # An unclear customer input is not an incomplete assistant output.
                 # Keep the pending field unchanged and answer from the deterministic policy.
                 step_just_started = capture_stage != workflow_decision.state
+                step_key_for_trip_search = str(workflow_decision.required_step or "")
+                if step_key_for_trip_search in ("select_trip", "handle_empty_trip_results"):
+                    trip_count = self._current_trip_result_count(session)
+                    only_option_question = self._is_only_option_question(clean_text)
+                    # Either the search just came back with nothing to select
+                    # from, or the customer just told us the option(s) we DO
+                    # have don't work for them -- both mean "we cannot find a
+                    # trip for this customer," which must create a visible
+                    # handoff, not loop on the unclear-input strike counter.
+                    exhausted = (
+                        step_just_started and step_key_for_trip_search == "handle_empty_trip_results"
+                    ) or (only_option_question and trip_count <= 1)
+                    if exhausted or (only_option_question and trip_count > 1):
+                        reply_text = (
+                            self._escalate_no_matching_trip(session, clean_text)
+                            if exhausted
+                            else self._only_option_honest_reply(session)
+                        )
+                        session.unclear_step_strikes = 0
+                        session.unclear_step_key = step_key_for_trip_search
+                        self._append_authoritative_reply(
+                            session,
+                            message_key="workflow.no_matching_trip.escalated" if exhausted else "workflow.only_option_clarified",
+                            base_text=reply_text,
+                        )
+                        session.stage = workflow_decision.state
+                        session.tools_used = [str(preloaded_tool_event["name"])] if preloaded_tool_event else []
+                        session.fallback_used = False
+                        agent_logger.info(
+                            "Tool-calling session %s handled trip-exhaustion path escalated=%s step=%s",
+                            session.id,
+                            exhausted,
+                            step_key_for_trip_search,
+                        )
+                        return session
                 pending_base_text = (
                     # A step that just became current gets its own plain question;
                     # only a genuine unclear answer gets the softer re-ask copy.

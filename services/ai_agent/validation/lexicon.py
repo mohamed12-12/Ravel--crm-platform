@@ -241,6 +241,18 @@ TRIP_DISCOVERY_TERMS: set[str] = {
     "عندكم رحلات",
     "عندكو رحلات",
     "الرحلات عندكم",
+    # "I need to know the trips [first]" -- a general discovery question, not
+    # a specific trip name. Missing entirely used to make _is_trip_discovery_
+    # request return False, so _has_trip_reference_words' bare "رحلات" match
+    # fell through to the "trip not found" reply as if this were a failed
+    # name lookup.
+    "اعرف الرحلات",
+    "أعرف الرحلات",
+    "عايز اعرف الرحلات",
+    "عارف الرحلات",
+    "معرفة الرحلات",
+    "اعرف عن الرحلات",
+    "اعرف انواع الرحلات",
 }
 
 # "Why do you need that / what for" -- canonical source for
@@ -320,4 +332,35 @@ GENERIC_TRIP_CHANGE_TERMS: set[str] = {
     "change the trip",
     "change my trip",
     "not this trip",
+}
+
+# "Is that the only one? / nothing else?" -- a direct question about the
+# result count, asked right after the agent lists the currently-available
+# trip(s) (see ToolCallingSessionRuntime._is_only_option_question). Without
+# recognizing this, the customer's own question was misread as an unparsed
+# attempt to pick a trip, incrementing unclear_step_strikes and eventually
+# either repeating the same list or escalating for the wrong reason.
+ONLY_OPTION_QUESTION_TERMS: set[str] = {
+    "مفيش غير",
+    "مافيش غير",
+    "غير ديه",
+    "غير ده",
+    "غير دي",
+    "غير كده",
+    "بس كده",
+    "دي بس",
+    "ده بس",
+    "مفيش تانى",
+    "مفيش تاني",
+    "مفيش حاجه تانيه",
+    "مفيش حاجة تانية",
+    "is that all",
+    "is this the only",
+    "is that the only",
+    "anything else",
+    "any other options",
+    "any other trips",
+    "nothing else",
+    "no other trips",
+    "no other options",
 }

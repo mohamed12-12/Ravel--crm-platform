@@ -828,12 +828,11 @@
             <a href="{{ url_for('admin.users') }}" class="nav-link {% if request.endpoint == 'admin.users' %}active{% endif %}">
                 <span class="nav-icon"></span> Employees
             </a>
-            <a href="{{ url_for('admin.import_data') }}" class="nav-link {% if request.endpoint == 'admin.import_data' %}active{% endif %}">
-                <span class="nav-icon"></span> Import / Sync
+            {% if current_employee_role == 'admin' %}
+            <a href="{{ url_for('admin.revenue_analytics') }}" class="nav-link {% if request.endpoint == 'admin.revenue_analytics' %}active{% endif %}">
+                <span class="nav-icon"></span> Revenue Analytics
             </a>
-            <a href="{{ url_for('admin.duplicates') }}" class="nav-link {% if request.endpoint == 'admin.duplicates' %}active{% endif %}">
-                <span class="nav-icon"></span> Duplicates
-            </a>
+            {% endif %}
             {% endif %}
         </div>
 

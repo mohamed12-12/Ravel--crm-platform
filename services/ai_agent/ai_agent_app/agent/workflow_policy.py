@@ -500,17 +500,27 @@ class ConversationWorkflowPolicy:
 
     @staticmethod
     def _no_trips_available_message(trip_type: str, *, arabic: bool = False) -> str:
+        """Note: this is deliberately not a promise to proactively notify the
+        customer -- no such outbound-notification pipeline exists anywhere in
+        this codebase (services/notifications is an unimplemented placeholder,
+        and Lead.waitlist_id is written by spreadsheet import but never read by
+        anything). ToolCallingSessionRuntime._escalate_no_matching_trip creates
+        a real handoff instead, and this text is overridden by that method's
+        own honest reply the first time this state is reached -- this string
+        only remains as the fallback for any other path that renders
+        WorkflowDecision.assistant_message directly.
+        """
         normalized_type = str(trip_type or "").strip().lower()
         if arabic:
             label = "محلية" if normalized_type == "local" else "دولية"
             return (
-                f"للأسف مفيش رحلات {label} متاحة (مفتوحة) دلوقتي.\n"
-                "هبلغك فور ما تتوفر رحلة جديدة تناسب طلبك."
+                f"للأسف مفيش رحلات {label} متاحة (مفتوحة) دلوقتي. "
+                "قيدت طلبك عشان فريق Ravel يراجعه ويتواصل معاك لو توفرت رحلة مناسبة."
             )
         label = normalized_type or "matching"
         return (
-            f"There are no {label} trips open right now.\n"
-            "I'll let you know as soon as a new one becomes available."
+            f"There are no {label} trips open right now. "
+            "I've logged your request so the Ravel team can review it and reach out if a suitable trip opens up."
         )
 
     @staticmethod

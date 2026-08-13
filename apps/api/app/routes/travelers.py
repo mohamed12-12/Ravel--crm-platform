@@ -23,7 +23,7 @@ from app.models.traveler import Traveler
 from app.models.traveler_document import TravelerDocument
 from services.crm.system_services import UnifiedCRMService
 from services.crm.system_services.phone_normalization import normalize_phone_input
-from services.crm.system_services.trip_pricing import price_for_room_and_currency
+from app.services.revenue import booking_revenue
 from services.data_authority import load_data_authority
 from app.security import can_view_all_records, current_user_id, has_permission
 from app.services.traveler_stats import recalculate_traveler_stats
@@ -42,23 +42,6 @@ DOCUMENT_CATEGORY_LABELS = {
     "payment_screenshot": "Payment Screenshot",
     "document": "Document",
 }
-_REVENUE_BOOKING_STATUSES = {"confirmed", "paid", "completed"}
-_REVENUE_PAYMENT_STATUSES = {"fully paid", "paid"}
-
-
-def _parse_money(value: str | int | float | None) -> float:
-    if isinstance(value, (int, float)):
-        return float(value)
-    text = str(value or "").strip()
-    if not text:
-        return 0.0
-    cleaned = "".join(ch for ch in text if ch.isdigit() or ch in ".-")
-    try:
-        return float(cleaned) if cleaned else 0.0
-    except ValueError:
-        return 0.0
-
-
 def _format_revenue_amount(amount: float, currency: str) -> str:
     return f"${amount:,.2f}" if currency == "USD" else f"{amount:,.2f} EGP"
 
@@ -101,20 +84,10 @@ def _attach_booking_revenue_totals(travelers: list[Traveler]) -> dict[str, dict[
     trip_ids = {booking.trip_id for booking in bookings if booking.trip_id}
     trips = {trip.trip_id: trip for trip in Trip.query.filter(Trip.trip_id.in_(trip_ids)).all()} if trip_ids else {}
     for booking in bookings:
-        booking_status = str(booking.booking_status or "").strip().lower()
-        payment_status = str(booking.payment_status or "").strip().lower()
-        if booking_status not in _REVENUE_BOOKING_STATUSES or payment_status not in _REVENUE_PAYMENT_STATUSES:
+        result = booking_revenue(booking, trips.get(booking.trip_id))
+        if result is None:
             continue
-        currency = str(booking.currency or "").strip().upper()
-        if currency not in {"USD", "EGP"}:
-            continue
-        trip = trips.get(booking.trip_id)
-        price = price_for_room_and_currency(
-            trip.to_dict() if trip else {},
-            room_type=booking.room_type or "",
-            currency=currency,
-        )
-        amount = _parse_money(price) * int(booking.group_size or 1)
+        currency, amount = result
         totals.setdefault(booking.traveler_id, {"USD": 0.0, "EGP": 0.0})[currency] += amount
 
     for traveler in travelers:

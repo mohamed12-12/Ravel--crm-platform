@@ -321,35 +321,38 @@ class IdorOwnershipTests(unittest.TestCase):
         with self.app.app_context():
             self.assertIsNone(self.db.session.get(self.TripBooking, "B-IDOR-B"))
 
-    # --- Employees / Import-Sync / Duplicates are admin+manager only; the
-    # general dashboard stays open to every authenticated role ---
-
-    def test_sales_cannot_view_admin_import_page(self):
-        self._login(user_id=self.sales_id, username=self.sales_username)
-        response = self.client.get("/admin/import")
-        self.assertEqual(response.status_code, 403)
-
-    def test_sales_cannot_view_admin_duplicates_page(self):
-        self._login(user_id=self.sales_id, username=self.sales_username)
-        response = self.client.get("/admin/duplicates")
-        self.assertEqual(response.status_code, 403)
+    # --- Employees is admin+manager only; Revenue Analytics is admin-only
+    # (not even managers); the general dashboard stays open to every
+    # authenticated role ---
 
     def test_sales_cannot_view_employees_page(self):
         self._login(user_id=self.sales_id, username=self.sales_username)
         response = self.client.get("/admin/users")
         self.assertEqual(response.status_code, 403)
 
-    def test_manager_can_view_admin_import_page(self):
-        self._login(user_id=self.manager_id, username=self.manager_username)
-        response = self.client.get("/admin/import")
-        self.assertEqual(response.status_code, 200)
-
     def test_manager_cannot_view_employees_page(self):
         # manage_users is admin-only -- distinct from the broader
-        # admin/manager "view_all" permission checked for import/duplicates.
+        # admin/manager "view_all" permission.
         self._login(user_id=self.manager_id, username=self.manager_username)
         response = self.client.get("/admin/users")
         self.assertEqual(response.status_code, 403)
+
+    def test_sales_cannot_view_revenue_analytics(self):
+        self._login(user_id=self.sales_id, username=self.sales_username)
+        response = self.client.get("/admin/revenue-analytics")
+        self.assertEqual(response.status_code, 403)
+
+    def test_manager_cannot_view_revenue_analytics(self):
+        # Revenue Analytics exposes company-wide money figures -- admin role
+        # only, stricter than the "view_all" permission managers also hold.
+        self._login(user_id=self.manager_id, username=self.manager_username)
+        response = self.client.get("/admin/revenue-analytics")
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_can_view_revenue_analytics(self):
+        self._login(user_id=self.admin_id, username=self.admin_username)
+        response = self.client.get("/admin/revenue-analytics")
+        self.assertEqual(response.status_code, 200)
 
     def test_sales_can_still_view_the_general_dashboard(self):
         self._login(user_id=self.sales_id, username=self.sales_username)

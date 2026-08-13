@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}Revenue Analytics — Nanovate CRM{% endblock %}
+{% block topbar_title %}Revenue Analytics{% endblock %}
+
+{% block content %}
+<style>
+    .rev-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+    @media (max-width: 900px) { .rev-grid { grid-template-columns: repeat(2, 1fr); } }
+
+    .rev-section { margin-bottom: 1.75rem; }
+    .rev-section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.9rem; flex-wrap: wrap; gap: 0.75rem; }
+    .rev-section-title { font-size: 1rem; font-weight: 800; color: var(--text-main); }
+
+    .rev-year-picker { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .rev-year-pill {
+        padding: 0.35rem 0.9rem; border-radius: 999px; font-size: 0.82rem; font-weight: 700;
+        border: 1px solid var(--border); color: var(--text-muted); text-decoration: none;
+    }
+    .rev-year-pill.active { background: var(--accent); color: #06120f; border-color: var(--accent); }
+    .rev-year-pill:hover:not(.active) { border-color: var(--accent-2); color: var(--text-main); }
+
+    .rev-table { width: 100%; border-collapse: collapse; }
+    .rev-table th, .rev-table td { padding: 0.65rem 0.9rem; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.86rem; }
+    .rev-table th { color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
+    .rev-table td.num { text-align: right; font-family: 'JetBrains Mono', monospace; color: var(--text-main); }
+    .rev-table tbody tr:hover { background: rgba(255,255,255,0.02); }
+
+    .rev-bars { display: flex; align-items: flex-end; gap: 0.75rem; height: 200px; padding: 0.5rem 0.5rem 0; overflow-x: auto; }
+    .rev-bar-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; flex: 1; min-width: 42px; height: 100%; }
+    .rev-bar-stack { display: flex; align-items: flex-end; gap: 3px; height: 150px; }
+    .rev-bar { width: 12px; border-radius: 3px 3px 0 0; min-height: 2px; transition: height 0.3s ease; }
+    .rev-bar.usd { background: var(--accent); }
+    .rev-bar.egp { background: var(--accent-2); opacity: 0.75; }
+    .rev-bar-month-label { font-size: 0.68rem; color: var(--text-muted); margin-top: 0.5rem; font-weight: 700; }
+    .rev-legend { display: flex; gap: 1.25rem; font-size: 0.78rem; color: var(--text-muted); margin-top: 0.75rem; }
+    .rev-legend-dot { display: inline-block; width: 8px; height: 8px; border-radius: 999px; margin-right: 0.4rem; }
+</style>
+
+<div class="rev-grid">
+    <div class="kpi-card">
+        <div class="kpi-label">Total Revenue (USD)</div>
+        <div class="kpi-value">${{ '%.2f'|format(total.USD) }}</div>
+        <div class="kpi-sub">All-time, confirmed &amp; paid</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Total Revenue (EGP)</div>
+        <div class="kpi-value">{{ '%.2f'|format(total.EGP) }}</div>
+        <div class="kpi-sub">All-time, confirmed &amp; paid</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">This Year ({{ current_year }})</div>
+        <div class="kpi-value">${{ '%.0f'|format(this_year.USD) }} <span style="font-size:0.9rem;color:var(--text-muted)">/ {{ '%.0f'|format(this_year.EGP) }} EGP</span></div>
+        <div class="kpi-sub">{{ this_year.count }} recognized bookings</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">This Month</div>
+        <div class="kpi-value">${{ '%.0f'|format(this_month.USD) }} <span style="font-size:0.9rem;color:var(--text-muted)">/ {{ '%.0f'|format(this_month.EGP) }} EGP</span></div>
+        <div class="kpi-sub">{{ current_month_label }}</div>
+    </div>
+</div>
+
+<div class="card rev-section">
+    <div class="rev-section-header">
+        <span class="rev-section-title">Monthly breakdown</span>
+        <div class="rev-year-picker">
+            {% for year in available_years %}
+            <a href="{{ url_for('admin.revenue_analytics', year=year) }}" class="rev-year-pill {% if year == selected_year %}active{% endif %}">{{ year }}</a>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="rev-bars">
+        {% for row in monthly_rows %}
+        <div class="rev-bar-col">
+            <div class="rev-bar-stack" title="{{ row.label }} {{ selected_year }}: ${{ '%.2f'|format(row.USD) }} / {{ '%.2f'|format(row.EGP) }} EGP ({{ row.count }} booking{{ 's' if row.count != 1 else '' }})">
+                <div class="rev-bar usd" style="height:{{ row.usd_bar_pct }}%"></div>
+                <div class="rev-bar egp" style="height:{{ row.egp_bar_pct }}%"></div>
+            </div>
+            <div class="rev-bar-month-label">{{ row.label }}</div>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="rev-legend">
+        <span><span class="rev-legend-dot" style="background:var(--accent)"></span>USD</span>
+        <span><span class="rev-legend-dot" style="background:var(--accent-2);opacity:0.75"></span>EGP</span>
+    </div>
+    <table class="rev-table" style="margin-top:1.25rem">
+        <thead><tr><th>Month</th><th class="num">USD</th><th class="num">EGP</th><th class="num">Bookings</th></tr></thead>
+        <tbody>
+        {% for row in monthly_rows %}
+            <tr>
+                <td>{{ row.label }} {{ selected_year }}</td>
+                <td class="num">${{ '%.2f'|format(row.USD) }}</td>
+                <td class="num">{{ '%.2f'|format(row.EGP) }}</td>
+                <td class="num">{{ row.count }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="card rev-section">
+    <div class="rev-section-header"><span class="rev-section-title">Yearly totals</span></div>
+    <table class="rev-table">
+        <thead><tr><th>Year</th><th class="num">USD</th><th class="num">EGP</th><th class="num">Bookings</th></tr></thead>
+        <tbody>
+        {% for row in yearly_rows %}
+            <tr>
+                <td>{{ row.year }}</td>
+                <td class="num">${{ '%.2f'|format(row.USD) }}</td>
+                <td class="num">{{ '%.2f'|format(row.EGP) }}</td>
+                <td class="num">{{ row.count }}</td>
+            </tr>
+        {% else %}
+            <tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No recognized revenue yet.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="card rev-section">
+    <div class="rev-section-header"><span class="rev-section-title">By trip type</span></div>
+    <table class="rev-table">
+        <thead><tr><th>Trip Type</th><th class="num">USD</th><th class="num">EGP</th><th class="num">Bookings</th></tr></thead>
+        <tbody>
+        {% for trip_type, totals in trip_type_rows %}
+            <tr>
+                <td>{{ trip_type }}</td>
+                <td class="num">${{ '%.2f'|format(totals.USD) }}</td>
+                <td class="num">{{ '%.2f'|format(totals.EGP) }}</td>
+                <td class="num">{{ totals.count }}</td>
+            </tr>
+        {% else %}
+            <tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No recognized revenue yet.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

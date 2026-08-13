@@ -10,14 +10,8 @@ from app.models.handoff import HandoffQueue
 from app.models.user import User
 from app.models.user_audit import UserAuditLog
 from app.models.booking_status_history import BookingStatusHistory
-from app.services.importer import run_full_import, run_sheets_import
-from app.services.identity import find_duplicates, merge_travelers
 from services.crm.system_services.config import get_database_diagnostics
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-import os
-import uuid
-from werkzeug.utils import secure_filename
 from sqlalchemy import or_
 from werkzeug.security import generate_password_hash
 from app.security import current_user, current_user_id, has_permission, permission_required
@@ -291,66 +285,100 @@ def dashboard():
                            recent_login_activity=recent_login_activity)
 
 
-@admin_bp.route('/import', methods=['GET', 'POST'])
-def import_data():
-    results = None
-    if request.method == 'POST':
-        source = request.form.get('source', 'excel')
+@admin_bp.route('/revenue-analytics')
+def revenue_analytics():
+    """Company-wide revenue by year/month. Admin-only (see
+    ADMIN_ROLE_ONLY_ENDPOINTS in app/security.py) since this aggregates
+    money across every traveler, not just the ones an employee owns.
+    Reuses app.services.revenue's booking_revenue()/booking_recognized_at()
+    so this can never silently disagree with the per-traveler Lifetime
+    Revenue figure on travelers/detail.html about what counts as revenue.
+    """
+    from app.services.revenue import booking_recognized_at, booking_revenue
 
-        if source == 'sheets':
-            sheet_id = current_app.config.get('GOOGLE_SHEET_ID', '')
-            creds_path = current_app.config.get('GOOGLE_CREDS_PATH', '')
-            if not sheet_id or not creds_path:
-                flash('Google Sheet ID or credentials path not configured in .env', 'error')
-                return redirect(url_for('admin.import_data'))
-            try:
-                results = run_sheets_import(sheet_id, creds_path, apply=False)
-                flash('Google Sheets preview completed. No CRM records were changed.', 'success')
-            except Exception as e:
-                flash(f'Sheets sync failed: {e}', 'error')
-
-        elif source == 'excel':
-            f = request.files.get('excel_file')
-            if not f or not f.filename:
-                flash('No file uploaded.', 'error')
-                return redirect(url_for('admin.import_data'))
-            safe_name = secure_filename(f.filename) or f"import-{uuid.uuid4().hex}.xlsx"
-            upload_root = Path(current_app.instance_path) / "uploads" / "imports"
-            upload_root.mkdir(parents=True, exist_ok=True)
-            upload_path = upload_root / f"{uuid.uuid4().hex}-{safe_name}"
-            f.save(upload_path)
-            try:
-                results = run_full_import(upload_path, apply=False)
-                flash('Excel preview completed. No CRM records were changed.', 'success')
-            except Exception as e:
-                flash(f'Excel import failed: {e}', 'error')
-
-    sheet_id = current_app.config.get('GOOGLE_SHEET_ID', '')
-    return render_template('admin/import.html', results=results, sheet_id=sheet_id)
-
-
-@admin_bp.route('/duplicates')
-def duplicates():
+    now = datetime.now(timezone.utc)
     try:
-        dup_groups = find_duplicates(db.session)
-    except Exception as e:
-        dup_groups = []
-        flash(f'Could not load duplicates: {e}', 'error')
-    return render_template('admin/duplicates.html', dup_groups=dup_groups)
+        selected_year = int(request.args.get('year') or now.year)
+    except (TypeError, ValueError):
+        selected_year = now.year
 
+    bookings = TripBooking.query.all()
+    trip_ids = {b.trip_id for b in bookings if b.trip_id}
+    trips = {t.trip_id: t for t in Trip.query.filter(Trip.trip_id.in_(trip_ids)).all()} if trip_ids else {}
 
-@admin_bp.route('/duplicates/merge', methods=['POST'])
-def merge_dup():
-    data = request.get_json()
-    if not data:
-        return jsonify({'error': 'No data'}), 400
-    master_id = data.get('master_id')
-    alias_ids = data.get('alias_ids', [])
-    try:
-        result = merge_travelers(master_id, alias_ids, db.session)
-        return jsonify({'status': 'ok', 'details': result})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    history_by_booking: dict[str, list] = {}
+    for entry in BookingStatusHistory.query.order_by(BookingStatusHistory.changed_at.asc()).all():
+        history_by_booking.setdefault(entry.booking_id, []).append(entry)
+
+    yearly: dict[int, dict[str, float]] = {}
+    monthly: dict[int, dict[str, float]] = {i: {"USD": 0.0, "EGP": 0.0, "count": 0} for i in range(1, 13)}
+    by_trip_type: dict[str, dict[str, float]] = {}
+    available_years: set[int] = {now.year}
+    total = {"USD": 0.0, "EGP": 0.0, "count": 0}
+    this_month = {"USD": 0.0, "EGP": 0.0}
+
+    for booking in bookings:
+        trip = trips.get(booking.trip_id)
+        result = booking_revenue(booking, trip)
+        if result is None:
+            continue
+        currency, amount = result
+        recognized_at = booking_recognized_at(booking, history_by_booking)
+        if not recognized_at:
+            continue
+        year = recognized_at.year
+        available_years.add(year)
+
+        bucket = yearly.setdefault(year, {"USD": 0.0, "EGP": 0.0, "count": 0})
+        bucket[currency] += amount
+        bucket["count"] += 1
+
+        total[currency] += amount
+        total["count"] += 1
+
+        if year == now.year and recognized_at.month == now.month:
+            this_month[currency] += amount
+
+        if year == selected_year:
+            month_bucket = monthly[recognized_at.month]
+            month_bucket[currency] += amount
+            month_bucket["count"] += 1
+
+        trip_type = str(trip.type).strip().title() if trip and trip.type else "Unspecified"
+        type_bucket = by_trip_type.setdefault(trip_type, {"USD": 0.0, "EGP": 0.0, "count": 0})
+        type_bucket[currency] += amount
+        type_bucket["count"] += 1
+
+    years_sorted = sorted(available_years, reverse=True)
+    yearly_rows = [
+        {"year": year, **yearly.get(year, {"USD": 0.0, "EGP": 0.0, "count": 0})}
+        for year in years_sorted
+    ]
+    monthly_rows = [
+        {"month": month, "label": datetime(2000, month, 1).strftime("%b"), **monthly[month]}
+        for month in range(1, 13)
+    ]
+    max_monthly_usd = max((row["USD"] for row in monthly_rows), default=0.0) or 1.0
+    max_monthly_egp = max((row["EGP"] for row in monthly_rows), default=0.0) or 1.0
+    for row in monthly_rows:
+        row["usd_bar_pct"] = round(min(row["USD"] / max_monthly_usd, 1.0) * 100, 1)
+        row["egp_bar_pct"] = round(min(row["EGP"] / max_monthly_egp, 1.0) * 100, 1)
+
+    trip_type_rows = sorted(by_trip_type.items(), key=lambda item: -(item[1]["USD"] + item[1]["EGP"]))
+
+    return render_template(
+        'admin/revenue_analytics.html',
+        total=total,
+        this_year=yearly.get(now.year, {"USD": 0.0, "EGP": 0.0, "count": 0}),
+        this_month=this_month,
+        yearly_rows=yearly_rows,
+        monthly_rows=monthly_rows,
+        trip_type_rows=trip_type_rows,
+        selected_year=selected_year,
+        available_years=years_sorted,
+        current_year=now.year,
+        current_month_label=now.strftime("%B %Y"),
+    )
 
 
 from app.models.copy_library import DMCopyLibrary, LanguageTemplate

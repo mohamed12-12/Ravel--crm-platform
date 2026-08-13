@@ -19,7 +19,13 @@ import pytest
 from services.ai_agent.ai_agent_app.agent.tool_calling_runtime import ToolCallingSessionRuntime
 from services.ai_agent.ai_agent_app.agent.workflow_policy import ConversationWorkflowPolicy
 from services.ai_agent.validation.validation_rules import normalize_trip_type
-from tests.test_agent_conversation_reliability import TRIPS, PassiveAgent, RecordingReadTools, _selected_trip_session
+from tests.test_agent_conversation_reliability import (
+    TRIPS,
+    PassiveAgent,
+    RecordingReadTools,
+    _selected_trip_session,
+    _verified_trip_search_session,
+)
 from tests.test_phase11_demo_features import _make_app_with_db
 
 
@@ -352,3 +358,102 @@ def test_a_single_unparsed_answer_does_not_escalate(
 
     actions = [call.kwargs.get("action") for call in runtime._write_executor.execute.call_args_list]
     assert "create_handoff" not in actions
+
+
+# ---------------------------------------------------------------------------
+# Real transcript: "محتاج الأاول اعرف الرحلات" / "قولي الرحلات المتاحه" must
+# not be misread as a failed trip-name lookup, and must never hallucinate a
+# destination before the traveler is verified
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "محتاج الأاول اعرف الرحلات",
+        "عايز اعرف الرحلات",
+        "طيب ايه الرحلات",
+    ],
+)
+def test_general_trip_discovery_questions_are_recognized(text: str) -> None:
+    """"I need to first know the trips" is a general discovery question, not a
+    trip name -- it must not fall through to the "trip not found" reply."""
+    assert ToolCallingSessionRuntime._is_trip_discovery_request(text) is True
+
+
+def test_unverified_trip_discovery_question_gets_a_deterministic_phone_ask(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    """Before the traveler is verified, the agent has done zero real trip
+    lookups -- asking about trips at this point must get a fixed, safe reply,
+    not a free-form LLM turn that could ad-lib destinations. Reproduces the
+    real bug: the LLM once echoed back "الغردقة"/"مطروح" (destinations the
+    CUSTOMER had typed earlier) as if they were confirmed CRM inventory."""
+    session = runtime.create_session()
+    session = runtime.handle_message(session, "رحله للغردقه", session)
+    session = runtime.handle_message(session, "رحله مطروح", session)
+
+    session = runtime.handle_message(session, "محتاج الأاول اعرف الرحلات", session)
+
+    reply = session.messages[-1]["text"]
+    assert "لم أجد رحلة مؤكدة" not in reply
+    assert "واتساب" in reply or "WhatsApp" in reply
+    assert "الغردقة" not in reply
+    assert "مطروح" not in reply
+
+
+# ---------------------------------------------------------------------------
+# "مفيش غير ديه؟" (is that the only one?) and exhausted trip search must
+# create a visible handoff, not loop or promise a fake outbound notification
+# ---------------------------------------------------------------------------
+
+def test_empty_trip_search_creates_a_handoff_with_an_honest_message(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    session = _verified_trip_search_session(runtime, trip_type="international")
+    session.preview["trip_result"] = {"open_trips": [], "date_tbd_trips": []}
+
+    session = runtime.handle_message(session, "طيب الدولي؟", session)
+
+    reply = session.messages[-1]["text"]
+    # No fabricated promise of a proactive WhatsApp notification -- no such
+    # outbound pipeline exists anywhere in this codebase.
+    assert "هبلغك" not in reply
+    assert "notify you" not in reply.lower()
+    actions = [call.kwargs.get("action") for call in runtime._write_executor.execute.call_args_list]
+    assert "create_handoff" in actions
+
+
+def test_asking_if_the_single_trip_is_the_only_one_escalates_instead_of_looping(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    """Reproduces "مفيش غير ديه؟" after the agent lists exactly one trip: this
+    must be recognized as "the one option doesn't work for me" and create a
+    handoff, not increment the unclear-answer strike counter and re-list the
+    same trip with softer wording."""
+    session = _verified_trip_search_session(runtime, trip_type="local")
+    session.preview["trip_result"] = {"open_trips": [dict(TRIPS[1])], "date_tbd_trips": []}
+    session.stage = "trip_selection_required"
+
+    session = runtime.handle_message(session, "مفيش غير ديه؟", session)
+
+    assert session.unclear_step_strikes == 0
+    actions = [call.kwargs.get("action") for call in runtime._write_executor.execute.call_args_list]
+    assert "create_handoff" in actions
+
+
+def test_asking_if_that_is_all_with_multiple_trips_shown_gets_an_honest_answer_not_escalation(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    """When there genuinely ARE other options, "is that all?" has a real
+    answer and must not create a handoff or burn a strike."""
+    session = _verified_trip_search_session(runtime, trip_type="local")
+    session.preview["trip_result"] = {"open_trips": [dict(TRIPS[1]), dict(TRIPS[2])], "date_tbd_trips": []}
+    session.stage = "trip_selection_required"
+
+    session = runtime.handle_message(session, "مفيش غير ديه؟", session)
+
+    assert session.unclear_step_strikes == 0
+    actions = [call.kwargs.get("action") for call in runtime._write_executor.execute.call_args_list]
+    assert "create_handoff" not in actions
+    reply = session.messages[-1]["text"]
+    assert "المتاحة حاليًا" in reply or "currently available" in reply

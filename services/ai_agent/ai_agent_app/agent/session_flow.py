@@ -163,6 +163,14 @@ class SessionState:
     unclear_step_strikes: int = field(default=0, repr=False)
     unclear_step_key: str = field(default="", repr=False)
 
+    # Comma-separated trip_type tokens ("local", "international") for which
+    # a "no matching trip" handoff has already been created this session --
+    # see ToolCallingSessionRuntime._escalate_no_matching_trip. Prevents
+    # creating a second CRM case if the customer bounces back to a trip type
+    # that already came up empty (e.g. asks about local trips again after
+    # already being told none are open).
+    escalated_no_trip_types: str = field(default="", repr=False)
+
 
 # ---------------------------------------------------------------------------
 # Manager

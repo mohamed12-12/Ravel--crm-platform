@@ -446,13 +446,17 @@ def test_destination_query_does_not_show_unrelated_broad_search_results(runtime:
     assert session.trip_query == "Turkey"
     assert session.selected_trip_id == ""
     assert session.selected_trip_name == ""
-    assert "do not have any available international trips" in reply.lower()
-    assert "Reason for escalation" in reply
+    # An empty search now creates a real handoff instead of just saying so --
+    # and the reply no longer leaks the internal "Reason for escalation:"
+    # label that used to be sent straight to the customer.
+    assert "don't currently have a trip that matches" in reply.lower()
+    assert "Reason for escalation" not in reply
     assert "DEmo" not in reply
     assert "Today Demo" not in reply
     assert trip_result["open_trips"] == []
     assert trip_result["date_tbd_trips"] == []
-    assert not runtime._write_executor.execute.called
+    handoff_actions = [call.kwargs.get("action") for call in runtime._write_executor.execute.call_args_list]
+    assert "create_handoff" in handoff_actions
 
 
 def test_destination_query_matches_verified_destination_fields_only(runtime: ToolCallingSessionRuntime) -> None:
