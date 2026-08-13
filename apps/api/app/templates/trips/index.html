@@ -95,7 +95,7 @@
                 {% set cover = cover_media_by_trip.get(trip.trip_id) if cover_media_by_trip else None %}
                 {% if cover %}
                 <div class="trip-cover-thumb">
-                    <img src="{{ cover.public_url }}" alt="{{ cover.alt_text or trip.trip_name }}">
+                    <img src="{{ cover.public_url }}" alt="{{ cover.alt_text or trip.trip_name }}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'trip-cover-empty',textContent:'No image'}))">
                 </div>
                 {% else %}
                 <div class="trip-cover-empty">No image</div>

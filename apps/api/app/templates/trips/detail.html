@@ -60,7 +60,7 @@
 
         {% if cover_media %}
         <div class="trip-cover-hero">
-            <img src="{{ cover_media.public_url }}" alt="{{ cover_media.alt_text or trip.trip_name }}">
+            <img src="{{ cover_media.public_url }}" alt="{{ cover_media.alt_text or trip.trip_name }}" onerror="this.closest('.trip-cover-hero').style.display='none'">
         </div>
         {% endif %}
 
@@ -196,7 +196,7 @@
             <div class="trip-media-grid">
                 {% for media in trip_media %}
                 <div class="trip-media-tile">
-                    <img src="{{ media.public_url }}" alt="{{ media.alt_text or trip.trip_name }}">
+                    <img src="{{ media.public_url }}" alt="{{ media.alt_text or trip.trip_name }}" onerror="this.closest('.trip-media-tile').style.display='none'">
                     <div class="trip-media-meta">
                         <span>{{ media.image_type|title }}</span>
                         <span>#{{ media.display_order }}</span>

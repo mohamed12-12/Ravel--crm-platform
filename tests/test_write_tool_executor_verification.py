@@ -39,6 +39,7 @@ class _FakeService:
         self.create_traveler_calls = 0
         self.upsert_lead_outcomes: list = []
         self.upsert_lead_calls = 0
+        self.upsert_lead_received_kwargs: list = []
         self.create_booking_draft_outcomes: list = []
         self.create_booking_draft_calls = 0
         self.update_lead_stage_outcomes: list = []
@@ -65,6 +66,7 @@ class _FakeService:
     def upsert_lead(self, **kwargs):
         outcome = self.upsert_lead_outcomes[self.upsert_lead_calls]
         self.upsert_lead_calls += 1
+        self.upsert_lead_received_kwargs.append(kwargs)
         if outcome == "raise":
             raise RuntimeError("transient lead write error")
         lead_id, insert_row = outcome
@@ -90,6 +92,34 @@ class _FakeService:
             self.connection.commit()
         return {"booking_id": booking_id, "booking_status": "Draft", "write_result_contract": {"executed": True}}
 
+    def resolve_identity(self, full_name, raw_phone, country_code="20"):
+        from services.crm.system_services.unified_service import IdentityResolution
+
+        row = self.connection.execute(
+            "SELECT traveler_id, full_name, status FROM travelers WHERE raw_phone = ?",
+            (raw_phone,),
+        ).fetchone()
+        if row is None:
+            return IdentityResolution(
+                match_status="not_found",
+                handoff_required=False,
+                handoff_reason="",
+                traveler=None,
+                lookup_phone={"raw_phone": raw_phone, "country_code": country_code},
+                name_match_status="",
+                actions=["collect_new_traveler_data"],
+            )
+        traveler = {"traveler_id": row["traveler_id"], "full_name": row["full_name"], "status": row["status"]}
+        return IdentityResolution(
+            match_status="single_match",
+            handoff_required=False,
+            handoff_reason="",
+            traveler=traveler,
+            lookup_phone={"raw_phone": raw_phone, "country_code": country_code},
+            name_match_status="",
+            actions=[],
+        )
+
     def update_lead_stage(self, lead_id, *, requested_stage, **kwargs):
         outcome = self.update_lead_stage_outcomes[self.update_lead_stage_calls]
         self.update_lead_stage_calls += 1
@@ -113,7 +143,7 @@ class _VerificationTestCase(unittest.TestCase):
         self.conn = sqlite3.connect(":memory:")
         self.conn.executescript(
             """
-            CREATE TABLE travelers (traveler_id TEXT PRIMARY KEY, full_name TEXT, status TEXT);
+            CREATE TABLE travelers (traveler_id TEXT PRIMARY KEY, full_name TEXT, status TEXT, raw_phone TEXT);
             CREATE TABLE leads (
                 lead_id TEXT PRIMARY KEY, customer_name TEXT, traveler_id TEXT,
                 raw_phone TEXT, integrated_whatsapp TEXT, phone_lookup_key TEXT,
@@ -227,6 +257,50 @@ class TestCreateLeadVerification(_VerificationTestCase):
         self.assertEqual(self.service.upsert_lead_calls, 2)
         self.assertFalse(result.get("executed", True))
         self.assertNotIn("LD00002", str(result.get("assistant_message") or ""))
+
+
+class TestCreateLeadMatchStatus(_VerificationTestCase):
+    """A Lead's match_status drives the "Existing Traveler" vs "New Profile"
+    badge in the Leads pipeline UI (leads/index.html). On the shared_service
+    path (no record_agent_outcome), a brand-new customer with no prior
+    Traveler record used to be stamped single_match/"Existing Traveler" just
+    because a Traveler row got created for them in the same call -- these pin
+    that a genuinely new customer reads not_found, and a real pre-existing
+    match still reads single_match.
+    """
+
+    def test_brand_new_customer_with_no_prior_traveler_is_not_found(self) -> None:
+        self.service.create_traveler_outcomes = [("TR01000", True)]
+        self.service.upsert_lead_outcomes = [("LD01000", True)]
+        result = self.executor.execute(
+            action="create_lead",
+            payload={"customer_name": "Maged Mousa", "raw_phone": "01199998888"},
+            session_context={"session_id": "s-new"},
+        )
+        self.assertEqual(result["result_id"], "LD01000")
+        self.assertEqual(self.service.upsert_lead_received_kwargs[-1]["match_status"], "not_found")
+        # The traveler record still gets created and linked -- only the
+        # match_status badge was wrong, not the traveler creation itself.
+        lead_row = self.conn.execute(
+            "SELECT traveler_id FROM leads WHERE lead_id = ?", ("LD01000",)
+        ).fetchone()
+        self.assertEqual(lead_row["traveler_id"], "TR01000")
+
+    def test_genuinely_pre_existing_traveler_is_single_match(self) -> None:
+        self.conn.execute(
+            "INSERT INTO travelers (traveler_id, full_name, status, raw_phone) VALUES (?, ?, ?, ?)",
+            ("TR00900", "Mona Ali", "Active", "01112223333"),
+        )
+        self.conn.commit()
+        self.service.upsert_lead_outcomes = [("LD01001", True)]
+        result = self.executor.execute(
+            action="create_lead",
+            payload={"customer_name": "Mona Ali", "raw_phone": "01112223333"},
+            session_context={"session_id": "s-existing"},
+        )
+        self.assertEqual(result["result_id"], "LD01001")
+        self.assertEqual(self.service.create_traveler_calls, 0)
+        self.assertEqual(self.service.upsert_lead_received_kwargs[-1]["match_status"], "single_match")
 
 
 class TestCreateBookingDraftVerification(_VerificationTestCase):

@@ -323,6 +323,7 @@ class GeminiWriteToolExecutor:
         channel = self._value(payload, session_context, "channel") or "web"
         group_size = self._as_int(self._value(payload, session_context, "group_size"), default=1) or 1
         traveler_id = str((traveler or {}).get("traveler_id") or validation.traveler_id or "").strip()
+        pre_existing_traveler_id = traveler_id
         if not raw_phone and traveler:
             raw_phone = str(
                 traveler.get("raw_phone")
@@ -427,7 +428,13 @@ class GeminiWriteToolExecutor:
 
         traveler_status = str((traveler or {}).get("status") or "").strip()
         customer_tier = "VIP" if traveler_status.upper() == "VIP" else ("Repeat" if traveler_status.upper() == "REPEAT" else "")
-        match_status = "single_match" if traveler_id else "not_found"
+        # A traveler_id present here can mean either "matched an existing
+        # traveler by phone" (pre_existing_traveler_id, set before the
+        # create-new-traveler block above) or "just created a brand-new
+        # traveler in this same call" -- only the former is a real match.
+        # Conflating the two stamped every new customer's lead as
+        # single_match/"Existing Traveler" in the CRM UI.
+        match_status = "single_match" if pre_existing_traveler_id else "not_found"
         interested_trip_ids = self._value(payload, session_context, "interested_trip_ids", "selected_trip_id")
         suggested_trip_ids = self._value(payload, session_context, "suggested_trip_ids", "selected_trip_id")
         handoff_required = self._as_bool(self._value(payload, session_context, "handoff_required"))
