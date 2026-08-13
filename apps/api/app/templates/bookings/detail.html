@@ -30,12 +30,13 @@
                 {% elif booking.payment_status == 'Deposit Paid' %}<span class="badge badge-yellow">{{ booking.payment_status }}</span>
                 {% elif booking.payment_status in ['Refunded', 'Full Refund', 'Partial Refund'] %}<span class="badge badge-red">{{ booking.payment_status }}</span>
                 {% else %}<span class="badge badge-gray">Payment: {{ booking.payment_status or 'Pending' }}</span>{% endif %}
+                {% if booking.missing_info %}<span class="badge badge-red">Missing Info</span>{% endif %}
             </div>
             <h1 style="font-size:1.4rem;font-weight:800;color:var(--text-main);margin-bottom:0.35rem">
                 {{ booking.traveler_name or 'Unknown Traveler' }}
             </h1>
             <div style="color:var(--text-muted);font-size:0.83rem">
-                {{ booking.trip_name or booking.trip_id or 'No trip linked' }} · {{ booking.room_type or '—' }} Room
+                {% if booking.trip_id %}<a href="{{ url_for('trips.detail', trip_id=booking.trip_id) }}">{{ booking.trip_name or booking.trip_id }}</a>{% else %}No trip linked{% endif %} · {{ booking.room_type or '—' }} Room
             </div>
         </div>
 
@@ -62,8 +63,8 @@
         <div class="card">
             <div class="card-title" style="margin-bottom:1rem">Booking Details</div>
             <div class="grid-2">
-                <div><div class="form-label">Trip</div><div style="color:var(--text-main)">{{ booking.trip_name or '—' }}</div></div>
-                <div><div class="form-label">Trip ID</div><div class="mono" style="color:var(--accent-2)">{{ booking.trip_id or '—' }}</div></div>
+                <div><div class="form-label">Trip</div><div style="color:var(--text-main)">{% if booking.trip_id %}<a href="{{ url_for('trips.detail', trip_id=booking.trip_id) }}">{{ booking.trip_name or booking.trip_id }}</a>{% else %}—{% endif %}</div></div>
+                <div><div class="form-label">Trip ID</div><div class="mono" style="color:var(--accent-2)">{% if booking.trip_id %}<a href="{{ url_for('trips.detail', trip_id=booking.trip_id) }}">{{ booking.trip_id }}</a>{% else %}—{% endif %}</div></div>
                 <div><div class="form-label">Room Type</div><div style="color:var(--text-main)">{{ booking.room_type or '—' }}</div></div>
                 <div><div class="form-label">Flight Option</div><div style="color:var(--text-main)">{{ booking.flight_option or '—' }}</div></div>
                 <div><div class="form-label">Commercial Review</div>

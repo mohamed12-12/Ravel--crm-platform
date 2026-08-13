@@ -42,6 +42,7 @@ class TripBooking(db.Model):
     passport_required = db.Column(db.Boolean, default=False)
     passport_status = db.Column(db.String(50))
     booking_notes = db.Column(db.Text)
+    missing_info = db.Column(db.Boolean, default=False)
     assigned_to = db.Column(db.String(100))
     assigned_to_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), index=True)
     assigned_at = db.Column(db.DateTime)
@@ -106,6 +107,7 @@ class TripBooking(db.Model):
             passport_required=bool(clean(row.get("Passport Required"))) if clean(row.get("Passport Required")) is not None else False,
             passport_status=clean(row.get("Passport Status")),
             booking_notes=clean(row.get("Booking Notes")),
+            missing_info=bool(clean(row.get("Missing Info"))) if clean(row.get("Missing Info")) is not None else False,
             assigned_to=clean(row.get("Assigned To")),
             assigned_to_user_id=None,
             assigned_at=None,
@@ -145,6 +147,7 @@ class TripBooking(db.Model):
             "passport_required": bool(self.passport_required),
             "passport_status": self.passport_status,
             "booking_notes": self.booking_notes,
+            "missing_info": bool(self.missing_info),
             "assigned_to": self.assigned_to,
             "assigned_to_user_id": self.assigned_to_user_id,
             "assigned_user": self.assigned_user.display_name if self.assigned_user else None,

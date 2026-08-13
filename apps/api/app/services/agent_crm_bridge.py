@@ -11,6 +11,7 @@ from sqlalchemy import func, or_, text
 from app.extensions import db
 from app.models import BookingStatusHistory, HandoffQueue, Interaction, Lead, Traveler, TravelerDocument, Trip, TripBooking, TripMedia
 from app.services.assignments import auto_assign_booking, auto_assign_lead
+from app.services.booking_automation import auto_create_booking_from_lead
 from services.crm.system_services.unified_service import UnifiedCRMService
 
 
@@ -429,6 +430,10 @@ class PostgresAgentBridgeService:
             reason="Automatic round-robin sales assignment on lead creation",
         )
         db.session.commit()
+        try:
+            auto_create_booking_from_lead(lead, trigger_source="agent", actor_label="agent")
+        except Exception:
+            pass
         payload = lead.to_dict()
         payload["idempotency_key"] = resolved_idempotency_key
         payload["write_result_contract"] = self.write_result_contract(
@@ -471,6 +476,10 @@ class PostgresAgentBridgeService:
             lead.notes = notes
         lead.updated_at = _utc_now()
         db.session.commit()
+        try:
+            auto_create_booking_from_lead(lead, trigger_source="agent", actor_label="agent")
+        except Exception:
+            pass
         payload = lead.to_dict()
         payload["write_result_contract"] = self.write_result_contract(
             status="updated",

@@ -20,6 +20,7 @@ from app.services.assignments import (
     exact_legacy_user,
     resolve_user_id,
 )
+from app.services.booking_automation import auto_create_booking_from_lead
 from app.extensions import db, socketio
 from sqlalchemy import or_
 from datetime import datetime, date, timezone
@@ -620,6 +621,10 @@ def update(lead_id):
         )
     except Exception:
         pass
+    try:
+        auto_create_booking_from_lead(lead, trigger_source="employee", actor_label=actor, actor_user=current_user())
+    except Exception:
+        pass
     flash('Changes saved', 'success')
     return redirect(url_for('leads.detail', lead_id=lead_id))
 
@@ -673,6 +678,10 @@ def advance_stage(lead_id):
         lead.lead_stage = next_stage
         lead.updated_at = datetime.now(timezone.utc)
         db.session.commit()
+        try:
+            auto_create_booking_from_lead(lead, trigger_source="employee", actor_label=current_actor(), actor_user=current_user())
+        except Exception:
+            pass
     return jsonify({'status': 'ok', 'new_stage': lead.lead_stage})
 
 
@@ -754,6 +763,10 @@ def quick_action(lead_id):
         metadata={"action": action, "lead_stage": lead.lead_stage},
         occurred_at=now,
     )
+    try:
+        auto_create_booking_from_lead(lead, trigger_source="employee", actor_label=actor, actor_user=current_user())
+    except Exception:
+        pass
     return jsonify({'status': 'ok', 'lead_stage': lead.lead_stage, 'event_id': event['event_id']})
 
 

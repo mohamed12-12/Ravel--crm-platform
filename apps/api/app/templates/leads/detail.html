@@ -128,11 +128,15 @@
                 </div>
                 <div>
                     <div class="form-label">Interested Trip IDs</div>
-                    <div style="color:var(--text-main);font-family:'JetBrains Mono',monospace;font-size:0.8rem">{{ lead.interested_trip_ids or '—' }}</div>
+                    <div style="color:var(--text-main);font-family:'JetBrains Mono',monospace;font-size:0.8rem">
+                        {% if lead.interested_trip_ids %}{% for tid in lead.interested_trip_ids.split(',') %}{% if tid.strip() %}<a href="{{ url_for('trips.detail', trip_id=tid.strip()) }}">{{ tid.strip() }}</a>{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}{% else %}—{% endif %}
+                    </div>
                 </div>
                 <div>
                     <div class="form-label">Suggested Trip IDs</div>
-                    <div style="color:var(--text-main);font-family:'JetBrains Mono',monospace;font-size:0.8rem">{{ lead.suggested_trip_ids or '—' }}</div>
+                    <div style="color:var(--text-main);font-family:'JetBrains Mono',monospace;font-size:0.8rem">
+                        {% if lead.suggested_trip_ids %}{% for tid in lead.suggested_trip_ids.split(',') %}{% if tid.strip() %}<a href="{{ url_for('trips.detail', trip_id=tid.strip()) }}">{{ tid.strip() }}</a>{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}{% else %}—{% endif %}
+                    </div>
                 </div>
                 <div>
                     <div class="form-label">Follow-Up Status</div>

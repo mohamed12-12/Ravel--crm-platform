@@ -76,7 +76,7 @@
                 <div class="primary">{{ b.traveler_name or '—' }}</div>
                 {% if b.traveler_id %}<div style="font-size:0.7rem;color:var(--text-muted)">{{ b.traveler_id }}</div>{% endif %}
             </td>
-            <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ b.trip_name or b.trip_id or '—' }}</td>
+            <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{% if b.trip_id %}<a href="{{ url_for('trips.detail', trip_id=b.trip_id) }}">{{ b.trip_name or b.trip_id }}</a>{% else %}—{% endif %}</td>
             <td>{{ b.room_type or '—' }}</td>
             <td>
                 {% if b.booking_status == 'Confirmed' %}<span class="badge badge-green">Confirmed</span>
@@ -85,6 +85,7 @@
                 {% elif b.booking_status == 'Waiting Customer' or b.booking_status == 'Pending Confirmation' %}<span class="badge badge-blue">{{ b.booking_status }}</span>
                 {% elif b.booking_status == 'Cancelled' %}<span class="badge badge-red">Cancelled</span>
                 {% else %}<span class="badge badge-yellow">Draft</span>{% endif %}
+                {% if b.missing_info %}<span class="badge badge-red" title="Missing required booking info">Missing Info</span>{% endif %}
             </td>
             <td>
                 {% if b.payment_status == 'Fully Paid' %}<span class="badge badge-green">{{ b.payment_status }}</span>

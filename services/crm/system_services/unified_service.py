@@ -31,7 +31,10 @@ ARCHIVED_TRAVELER_STATUSES = {"inactive", "archived", "blocked"}
 REVIEW_STATUSES = {"payment risk", "high maintenance"}
 INACTIVE_TRIP_STATUSES = {"cancelled", "closed", "archived"}
 QUALIFIED_LEAD_STAGES = {"Qualified", "VIP Priority", "Repeat Priority"}
-BOOKING_DRAFT_LEAD_STAGES = {"Booking Draft Created", "VIP Booking Draft", "Repeat Booking Draft"}
+# Every lead_stage spelling (current + legacy aliases, see leads.py's
+# PIPELINE_GROUPS['Booking Draft']) that means "this lead reached Booking
+# Draft" -- used to trigger auto_create_booking_from_lead_if_ready.
+BOOKING_DRAFT_LEAD_STAGES = {"Booking Draft", "Booked", "Booking Draft Created", "VIP Booking Draft", "Repeat Booking Draft"}
 GROUP_DISCOUNT_THRESHOLD = 4
 ROOM_HOLD_COLUMNS = {
     "Single": "draft_holds_single",
@@ -2662,6 +2665,10 @@ class UnifiedCRMService:
             )
         except Exception:
             pass
+        try:
+            self.auto_create_booking_from_lead_if_ready(lead_id, actor="agent", trigger_source="agent")
+        except Exception:
+            pass
         return {
             "lead_id": lead_id,
             "lead_stage": stage,
@@ -2672,6 +2679,143 @@ class UnifiedCRMService:
             "customer_name": str(lead["customer_name"] or ""),
             "event_id": event["event_id"],
         }
+
+    def auto_create_booking_from_lead_if_ready(
+        self,
+        lead_id: str,
+        *,
+        actor: str = "agent",
+        trigger_source: str = "agent",
+    ) -> dict[str, Any] | None:
+        """Create a Draft Booking the first time a Lead reaches Booking Draft.
+
+        Fires from update_lead_stage (agent path, this SQLite backend) so a
+        Booking Draft never depends on someone remembering to create the
+        Booking as a separate step. Idempotent by lead_id/traveler_id: a lead
+        bouncing Qualified -> Booking Draft -> Waiting Customer Reply ->
+        Booking Draft again reuses the booking it already made the first
+        time, matching apps/api/app/services/booking_automation.py's
+        Postgres/SQLAlchemy sibling for the manual-CRM-UI and Postgres-agent
+        paths (see services/crm/README.md for how the two backends relate).
+        """
+        self.ensure_operational_schema()
+        timestamp = _utc_now().replace(microsecond=0)
+        with self.connect() as connection:
+            lead = connection.execute(
+                """
+                SELECT lead_id, traveler_id, customer_name, lead_stage, channel, language,
+                       preferred_trip_type, interested_trip_ids, suggested_trip_ids,
+                       group_size, booking_id, assigned_to, assigned_to_user_id
+                FROM leads
+                WHERE lead_id = ?
+                """,
+                (lead_id,),
+            ).fetchone()
+            if not lead or str(lead["lead_stage"] or "").strip() not in BOOKING_DRAFT_LEAD_STAGES:
+                return None
+
+            existing = connection.execute(
+                "SELECT * FROM trip_bookings WHERE lead_id = ? ORDER BY draft_created_at DESC LIMIT 1",
+                (lead_id,),
+            ).fetchone()
+            traveler_id = str(lead["traveler_id"] or "").strip()
+            if existing is None and traveler_id:
+                placeholders = ",".join("?" for _ in BOOKING_ACTIVE_STATUSES)
+                existing = connection.execute(
+                    f"""
+                    SELECT * FROM trip_bookings
+                    WHERE traveler_id = ?
+                      AND booking_status IN ({placeholders})
+                    ORDER BY draft_created_at DESC LIMIT 1
+                    """,
+                    (traveler_id, *BOOKING_ACTIVE_STATUSES),
+                ).fetchone()
+            if existing is not None:
+                if not lead["booking_id"]:
+                    connection.execute(
+                        "UPDATE leads SET booking_id = ? WHERE lead_id = ?",
+                        (existing["booking_id"], lead_id),
+                    )
+                    connection.commit()
+                return {"booking_id": existing["booking_id"], "created": False}
+
+            if not traveler_id:
+                return None
+            traveler = connection.execute(
+                "SELECT traveler_id, full_name FROM travelers WHERE traveler_id = ?",
+                (traveler_id,),
+            ).fetchone()
+            if not traveler:
+                return None
+
+            trip_id = str(lead["interested_trip_ids"] or lead["suggested_trip_ids"] or "").split(",")[0].strip()
+            trip = connection.execute("SELECT * FROM trips WHERE trip_id = ?", (trip_id,)).fetchone() if trip_id else None
+
+            missing_fields = ["room_type"]
+            if not trip:
+                missing_fields.append("trip")
+
+            booking_id = self._next_booking_id(connection, trip_id or "", traveler_id)
+            notes = (
+                f"Auto-created from Lead {lead_id} upon reaching Booking Draft "
+                f"(channel: {lead['channel'] or 'n/a'}, language: {lead['language'] or 'n/a'}, "
+                f"trip type: {lead['preferred_trip_type'] or 'n/a'})."
+            )
+            connection.execute(
+                """
+                INSERT INTO trip_bookings (
+                    booking_id, trip_id, trip_name, traveler_id, traveler_name, room_type,
+                    booking_status, draft_created_at, booking_source, lead_id, payment_status,
+                    passport_required, group_size, booking_notes, missing_info,
+                    assigned_to, assigned_to_user_id, assigned_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    booking_id,
+                    trip["trip_id"] if trip else None,
+                    trip["trip_name"] if trip else None,
+                    traveler_id,
+                    str(traveler["full_name"] or ""),
+                    None,
+                    "Draft",
+                    timestamp.isoformat(timespec="seconds"),
+                    f"Auto ({trigger_source})",
+                    lead_id,
+                    "Pending",
+                    1 if trip and str(trip["type"] or "").strip().lower() == "international" else 0,
+                    self._as_int(lead["group_size"], default=1) or 1,
+                    notes,
+                    1,
+                    str(lead["assigned_to"] or "") or None,
+                    lead["assigned_to_user_id"],
+                    timestamp.isoformat(timespec="seconds") if lead["assigned_to_user_id"] else None,
+                ),
+            )
+            connection.execute("UPDATE leads SET booking_id = ? WHERE lead_id = ?", (booking_id, lead_id))
+            connection.commit()
+
+        try:
+            self.create_booking_event(
+                event_type="booking_auto_created",
+                event_label="Booking auto-created",
+                traveler_id=traveler_id,
+                lead_id=lead_id,
+                booking_id=booking_id,
+                trip_id=trip_id,
+                channel=str(lead["channel"] or ""),
+                actor=actor,
+                notes="Booking auto-created upon reaching Booking Draft stage",
+                metadata={
+                    "booking_id": booking_id,
+                    "trigger_source": trigger_source,
+                    "missing_info": True,
+                    "missing_fields": missing_fields,
+                },
+                occurred_at=timestamp,
+            )
+        except Exception:
+            pass
+        return {"booking_id": booking_id, "created": True, "missing_info": True, "missing_fields": missing_fields}
 
     @staticmethod
     def _merge_agent_snapshot_notes(existing_notes: str, snapshot_lines: list[str]) -> str:
@@ -3465,6 +3609,8 @@ class UnifiedCRMService:
             connection.execute("ALTER TABLE trip_bookings ADD COLUMN room_requirements_json TEXT")
         if 'refund_amount' not in existing_cols:
             connection.execute("ALTER TABLE trip_bookings ADD COLUMN refund_amount REAL")
+        if 'missing_info' not in existing_cols:
+            connection.execute("ALTER TABLE trip_bookings ADD COLUMN missing_info INTEGER DEFAULT 0")
 
     @staticmethod
     def _migrate_lead_columns(connection: sqlite3.Connection) -> None:
