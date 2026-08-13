@@ -29,6 +29,7 @@ from services.ai_agent.ai_agent_app.agent.response_guard import (
 )
 from services.ai_agent.ai_agent_app.agent.write_response_gating import detect_write_record_type
 from services.ai_agent.ai_agent_app.agent.tool_calling_runtime import ToolCallingSessionRuntime
+from services.ai_agent.ai_agent_app.agent.session_store import SessionLockBusy
 from services.ai_agent.ai_agent_app.agent.session_flow import detect_language
 from services.ai_agent.ai_agent_app.config import Settings, load_settings
 from services.ai_agent.ai_agent_app.conversation_ai import GeminiConversationAI
@@ -2017,7 +2018,12 @@ def create_app(
                 return jsonify({"error": "session_mode_mismatch", "session": _serialize_session(gateway, session)}), 409
 
             if session_mode == "tool_calling":
-                sessions.handle_message(session, text, gateway)
+                if hasattr(sessions, "handle_message_by_id"):
+                    session = sessions.handle_message_by_id(session_id, text, gateway)
+                    if session is None:
+                        return jsonify({"error": "session_not_found"}), 404
+                else:
+                    sessions.handle_message(session, text, gateway)
                 session.tools_used = list(getattr(session, "tools_used", []) or [])
                 session.fallback_used = bool(getattr(session, "fallback_used", False))
             elif session_mode == "gemini" or requested_mode == "gemini":
@@ -2036,6 +2042,9 @@ def create_app(
                 session.fallback_used = False
             _sync_session_lead_snapshot(gateway, session)
             return jsonify({"session": _serialize_session(gateway, session)})
+        except SessionLockBusy:
+            app_logger.warning("Session lock busy session=%s route=message", session_id)
+            return jsonify({"error": "session_busy", "message": "This session is already processing another message."}), 409
         except Exception as e:
             app_logger.error(f"Error handling message for session {session_id}: {e}", exc_info=True)
             try:
@@ -2181,7 +2190,18 @@ def create_app(
 
         f.save(dest)
         ref = str(dest.relative_to(uploads_root)) if uploads_root in dest.parents else str(dest)
-        sessions.handle_passport_attachment(sess, ref)
+        if hasattr(sessions, "apply_passport_attachment_by_id"):
+            try:
+                updated = sessions.apply_passport_attachment_by_id(session_id, ref)
+            except SessionLockBusy:
+                app_logger.warning("Session lock busy session=%s route=passport_attachment", session_id)
+                return jsonify({"error": "session_busy", "message": "This session is already processing another message."}), 409
+            if updated is not None:
+                sess = updated
+        else:
+            sessions.handle_passport_attachment(sess, ref)
+            if hasattr(sessions, "_persist_session"):
+                sessions._persist_session(sess)
         traveler = (sess.final_result or {}).get("traveler") or {}
         traveler_id = str(traveler.get("traveler_id") or "").strip()
         passport_save = {}

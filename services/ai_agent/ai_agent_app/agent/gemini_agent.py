@@ -50,6 +50,53 @@ class GeminiToolLoopError(RuntimeError):
     pass
 
 
+# classify_off_script_turn's allowed output categories. This is a ROUTER
+# vocabulary only -- none of these ever become a session.required_step,
+# trip ID, or tool call directly; tool_calling_runtime.py's
+# _handle_off_script_classifier decides what (if anything) to do with a
+# category, using its own existing deterministic mechanisms.
+OFF_SCRIPT_CLASSIFIER_CATEGORIES = frozenset(
+    {
+        "side_question",
+        "correction_trip_switch",
+        "correction_trip_type_switch",
+        "navigation",
+        "unclear",
+    }
+)
+
+_OFF_SCRIPT_CLASSIFIER_UNCLEAR_RESULT = {"category": "unclear", "target_hint": "", "confidence": 0.0}
+
+_OFF_SCRIPT_CLASSIFIER_SYSTEM_PROMPT = (
+    "You are a conversational-intent classifier inside a travel-booking chat agent. "
+    "You do NOT write the customer-facing reply and you do NOT decide any booking "
+    "action, trip selection, workflow step, or tool call -- a separate deterministic "
+    "system owns all of that. Your only job is to label what the customer's message "
+    "is doing conversationally, given the current booking step and recent messages.\n\n"
+    "Choose exactly one category:\n"
+    "- side_question: a question answerable from the given context/CRM facts, not a "
+    "request to change the booking. Examples: \"is Thailand cheaper?\", \"tell me "
+    "about Thailand\", \"what's the deposit?\", \"is this trip family friendly?\".\n"
+    "- correction_trip_switch: the customer clearly wants to REPLACE the currently "
+    "selected trip with a different one. Examples: \"actually I want Thailand "
+    "instead\", \"show me Thailand instead\". Do NOT use this for a question that "
+    "merely mentions another trip (comparisons, curiosity) without asking to "
+    "replace the current one.\n"
+    "- correction_trip_type_switch: the customer wants to change between local and "
+    "international. Example: \"no, make it international\".\n"
+    "- navigation: the customer wants to cancel, start over, or go back to an "
+    "earlier step.\n"
+    "- unclear: none of the above fit with real confidence.\n\n"
+    "Be conservative. If you are not confident, answer unclear with a low "
+    "confidence score rather than guessing.\n\n"
+    "Respond with strict JSON only, no other text, no markdown fences, matching "
+    "exactly this shape: "
+    '{"category": "<one of: side_question, correction_trip_switch, '
+    'correction_trip_type_switch, navigation, unclear>", "target_hint": '
+    '"<short text or empty string>", "confidence": <number from 0 to 1>}'
+)
+
+
 class GeminiAgent:
     def __init__(
         self,
@@ -647,6 +694,118 @@ class GeminiAgent:
         )
         return replacement, response_id or getattr(response, "response_id", ""), retry_issue or issue
 
+    def classify_off_script_turn(
+        self,
+        *,
+        user_message: str,
+        session_context: dict[str, Any] | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Classify what kind of conversational event an off-script message
+        is -- a ROUTER only, never a decision-maker. Returns
+        {"category", "target_hint", "confidence"} with category always one
+        of OFF_SCRIPT_CLASSIFIER_CATEGORIES. Never returns or implies a
+        trip ID, tool call, or state mutation -- the caller
+        (tool_calling_runtime.py's _handle_off_script_classifier) is solely
+        responsible for deciding what, if anything, to do with the result,
+        using its own existing deterministic mechanisms.
+
+        Fails closed to {"category": "unclear", "confidence": 0.0} on any
+        provider error or malformed/unparseable output -- a classification
+        failure must never raise into the conversation turn, and must never
+        be mistaken for a confident category.
+
+        Modeled on _regenerate_complete_reply's provider-call convention:
+        exactly one tools=[] call, low temperature, small output budget,
+        thinking disabled so the whole budget goes to the JSON output, and
+        its own request_id suffix for tracing.
+        """
+        context = dict(session_context or {})
+        workflow_context = context.get("workflow_policy") if isinstance(context.get("workflow_policy"), dict) else {}
+        required_step = str(workflow_context.get("required_step") or "")
+        payload = {
+            "current_required_step": required_step,
+            "selected_trip_name": str(context.get("selected_trip_name") or ""),
+            "trip_type": str(context.get("trip_type") or ""),
+            "recent_conversation": list(conversation_history or [])[-6:],
+            "customer_message": user_message,
+        }
+        session_id = str(context.get("session_id") or "").strip()
+        request_id = f"{session_id}-offscript-classify" if session_id else "offscript-classify"
+        # Phase 5: every exit path below logs with the same shape (request_id,
+        # required_step, outcome, elapsed_ms) so "was the classifier invoked
+        # this turn, and what happened" is answerable from one consistent
+        # log line regardless of which branch returned -- before this, the
+        # not-a-dict and invalid-category branches returned silently (no log
+        # at all), and no branch measured latency the way respond()/
+        # rewrite_message() already do elsewhere in this file.
+        started = time.perf_counter()
+
+        def _elapsed_ms() -> int:
+            return int((time.perf_counter() - started) * 1000)
+
+        try:
+            response = self.provider.generate(
+                system_prompt=_OFF_SCRIPT_CLASSIFIER_SYSTEM_PROMPT,
+                messages=[{"role": "user", "parts": [{"text": json.dumps(payload, ensure_ascii=False)}]}],
+                tools=[],
+                generation_config={
+                    "temperature": 0.2,
+                    "topP": 0.9,
+                    "maxOutputTokens": 150,
+                    "thinkingConfig": {"thinkingBudget": 0},
+                    "responseMimeType": "application/json",
+                },
+                request_id=request_id,
+            )
+        except GeminiProviderError as exc:
+            agent_logger.warning(
+                "Off-script classifier outcome=provider_error request_id=%s required_step=%s elapsed_ms=%s error=%s",
+                request_id, required_step, _elapsed_ms(), exc,
+            )
+            return dict(_OFF_SCRIPT_CLASSIFIER_UNCLEAR_RESULT)
+        except Exception:
+            agent_logger.exception(
+                "Off-script classifier outcome=unexpected_error request_id=%s required_step=%s elapsed_ms=%s",
+                request_id, required_step, _elapsed_ms(),
+            )
+            return dict(_OFF_SCRIPT_CLASSIFIER_UNCLEAR_RESULT)
+
+        raw_text = self._extract_reply(response.text)
+        try:
+            parsed = json.loads(raw_text)
+        except (TypeError, ValueError):
+            agent_logger.warning(
+                "Off-script classifier outcome=non_json_output request_id=%s required_step=%s elapsed_ms=%s",
+                request_id, required_step, _elapsed_ms(),
+            )
+            return dict(_OFF_SCRIPT_CLASSIFIER_UNCLEAR_RESULT)
+        if not isinstance(parsed, dict):
+            agent_logger.warning(
+                "Off-script classifier outcome=non_object_output request_id=%s required_step=%s elapsed_ms=%s output_type=%s",
+                request_id, required_step, _elapsed_ms(), type(parsed).__name__,
+            )
+            return dict(_OFF_SCRIPT_CLASSIFIER_UNCLEAR_RESULT)
+
+        category = str(parsed.get("category") or "").strip()
+        if category not in OFF_SCRIPT_CLASSIFIER_CATEGORIES:
+            agent_logger.warning(
+                "Off-script classifier outcome=invalid_category request_id=%s required_step=%s elapsed_ms=%s category=%r",
+                request_id, required_step, _elapsed_ms(), category,
+            )
+            return dict(_OFF_SCRIPT_CLASSIFIER_UNCLEAR_RESULT)
+        try:
+            confidence = float(parsed.get("confidence"))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        confidence = max(0.0, min(confidence, 1.0))
+        target_hint = str(parsed.get("target_hint") or "").strip()
+        agent_logger.info(
+            "Off-script classifier outcome=parsed request_id=%s required_step=%s elapsed_ms=%s category=%s confidence=%.2f",
+            request_id, required_step, _elapsed_ms(), category, confidence,
+        )
+        return {"category": category, "target_hint": target_hint, "confidence": confidence}
+
     @staticmethod
     def _part_is_function_call(part: dict[str, Any]) -> bool:
         return "functionCall" in part or "function_call" in part
@@ -900,6 +1059,66 @@ class GeminiAgent:
                     summary[key] = value
         return summary
 
+    # Phase 6: allowlist, not a blocklist -- "known safe metadata -> log,
+    # everything else -> redact", per the audit's own design requirement.
+    # Every field here was individually checked against every tool schema
+    # in tool_registry.py/write_tool_registry.py: internal identifiers
+    # (traveler_id/trip_id/lead_id/booking_id/...), enum/status/category
+    # values, and small counts -- never a phone number, name, or free-text
+    # field. A field not on this list is redacted even if it looks
+    # harmless, so a new tool argument added later is safe by default
+    # instead of silently joining the raw-logged set.
+    _SAFE_TOOL_ARG_FIELDS = frozenset(
+        {
+            "traveler_id", "country_code", "trip_id", "selected_trip_id",
+            "interested_trip_ids", "suggested_trip_ids", "booking_id", "lead_id",
+            "handoff_id", "trip_type", "preferred_trip_type", "lead_source",
+            "channel", "source", "priority", "follow_up_status",
+            "follow_up_due_date", "language", "flight_option", "room_type",
+            "room_group", "flow_key", "current_step", "requested_stage",
+            "reason_code", "date_option", "currency", "group_size",
+            "boys_rooms_requested", "girls_rooms_requested",
+            "handoff_required", "update_lead",
+        }
+    )
+
+    @classmethod
+    def _safe_tool_log_summary(cls, tool_input: dict[str, Any] | None) -> dict[str, Any]:
+        """Build a NEW, log-safe dict from raw tool-call arguments -- never
+        mutates `tool_input`, never touches the value actually passed to
+        tool execution (callers must keep using the original `tool_input`
+        for that; this return value is for the log line only).
+
+        Default-deny: only `_SAFE_TOOL_ARG_FIELDS` are logged with their
+        real value (and even then, never for a list/dict value -- a nested
+        structure could carry a free-text field like room_requirements'
+        "label"). Booleans and numbers are never sensitive by construction,
+        so they pass through for every field, known or not, matching the
+        existing _tool_result_summary convention elsewhere in this file.
+        Every string on an unlisted field is replaced with a length-only
+        marker -- present/absent and how long, never the content.
+        """
+        summary: dict[str, Any] = {}
+        for key, value in (tool_input or {}).items():
+            if value is None or value == "":
+                summary[key] = "<empty>"
+            elif isinstance(value, bool):
+                summary[key] = value
+            elif isinstance(value, (int, float)):
+                summary[key] = value
+            elif isinstance(value, str):
+                if key in cls._SAFE_TOOL_ARG_FIELDS:
+                    summary[key] = value
+                else:
+                    summary[key] = f"<redacted len={len(value)}>"
+            elif isinstance(value, list):
+                summary[key] = f"<list len={len(value)}>"
+            elif isinstance(value, dict):
+                summary[key] = f"<object keys={len(value)}>"
+            else:
+                summary[key] = f"<redacted type={type(value).__name__}>"
+        return summary
+
     @staticmethod
     def _tool_response_part(name: str, result: dict[str, Any], call_id: str = "") -> dict[str, Any]:
         response: dict[str, Any] = {"name": name, "response": result}
@@ -1044,7 +1263,14 @@ class GeminiAgent:
                     spec.name,
                     bool(call_id),
                     thought_signature_present,
-                    json.dumps(tool_input, ensure_ascii=False, sort_keys=True),
+                    # Phase 6: was json.dumps(tool_input, ...) -- the raw
+                    # call arguments, which for create_lead/create_booking_
+                    # draft/create_handoff include raw_phone/customer_name/
+                    # full_name/traveler_name and free-text notes fields.
+                    # _safe_tool_log_summary builds a NEW dict for this log
+                    # line only; tool_input itself (used below for actual
+                    # execution) is never touched.
+                    json.dumps(self._safe_tool_log_summary(tool_input), ensure_ascii=False, sort_keys=True),
                 )
                 route_decision = self._route_tool_call(spec.name, session_context)
                 result = None

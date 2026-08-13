@@ -137,11 +137,19 @@ class GeminiWriteToolExecutor:
             try:
                 result = self.read_only_tools.api_client.write(action, payload, session_context)
             except CRMApiError as exc:
+                # Phase 6: was `error=%s, exc` -- CRMApiError's own message
+                # can embed up to 500 chars of the raw CRM API HTTP response
+                # body (crm_api_client.py's `raise CRMApiError(f"...{detail[:500]}")`),
+                # which can echo back submitted field values in a validation
+                # error. Use the same safe error code already computed one
+                # line below for the audit trail, instead of a second,
+                # separately-reasoned value.
+                safe_error_code = self._safe_error_code_for_exception(exc)
                 agent_logger.error(
-                    "CRM API write failed action=%s session=%s error=%s",
-                    action, session_context.get("session_id", ""), exc,
+                    "CRM API write failed action=%s session=%s error_code=%s",
+                    action, session_context.get("session_id", ""), safe_error_code,
                 )
-                audit["reason"] = self._safe_error_code_for_exception(exc)
+                audit["reason"] = safe_error_code
                 self._log_audit(audit)
                 return self._failed_write_result(
                     action=action,

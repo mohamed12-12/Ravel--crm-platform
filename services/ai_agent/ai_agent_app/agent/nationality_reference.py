@@ -16,7 +16,7 @@ import re
 _NATIONALITIES: dict[str, str] = {
     # English demonyms / country names
     "egyptian": "Egyptian", "egypt": "Egyptian",
-    "saudi": "Saudi", "saudi arabian": "Saudi", "ksa": "Saudi",
+    "saudi": "Saudi", "saudi arabian": "Saudi", "saudi arabia": "Saudi", "ksa": "Saudi",
     "emirati": "Emirati", "uae": "Emirati", "united arab emirates": "Emirati",
     "kuwaiti": "Kuwaiti", "kuwait": "Kuwaiti",
     "qatari": "Qatari", "qatar": "Qatari",

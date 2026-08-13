@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 
+from services.ai_agent.validation.lexicon import TRIP_TYPE_TERMS
 from services.crm.system_services.unified_service import (
     ARCHIVED_TRAVELER_STATUSES,
     BLOCKED_STATUSES,
@@ -88,32 +89,9 @@ VALID_FLIGHT_OPTION_MAP = {
     "مش عايز طيران": "Without Flight",
     "مش عايزة طيران": "Without Flight",
 }
-TRIP_TYPE_ALIASES = {
-    "1": "local",
-    "local": "local",
-    "loc": "local",
-    "loca": "local",
-    "domestic": "local",
-    "\u0645\u062d\u0644\u064a": "local",
-    "\u0645\u062d\u0644\u064a\u0647": "local",
-    "\u062f\u0627\u062e\u0644\u064a": "local",
-    "\u062f\u0627\u062e\u0644\u064a\u0647": "local",
-    "2": "international",
-    "int": "international",
-    "intl": "international",
-    "international": "international",
-    "inter": "international",
-    "abroad": "international",
-    "overseas": "international",
-    "umrah": "international",
-    "hajj": "international",
-    "\u062f\u0648\u0644\u064a": "international",
-    "\u062f\u0648\u0644\u064a\u0647": "international",
-    "\u062e\u0627\u0631\u062c\u064a": "international",
-    "\u062e\u0627\u0631\u062c\u064a\u0647": "international",
-    "\u0639\u0645\u0631\u0647": "international",
-    "\u062d\u062c": "international",
-}
+# Canonical source moved to lexicon.py's TRIP_TYPE_TERMS -- re-exported
+# under this name for backward compatibility.
+TRIP_TYPE_ALIASES = TRIP_TYPE_TERMS
 HANDOFF_CONFIDENCE_THRESHOLD = 0.5
 HANDOFF_VALIDATION_FAILURE_THRESHOLD = 2
 ALLOWED_TRAVELER_UPDATE_FIELDS = {

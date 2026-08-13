@@ -125,6 +125,7 @@ class TestAgentIdentityPolicy(unittest.TestCase):
         session.stage = "post_booking_support"
         session.booking_completed = True
         session.booking_result = {"booking_id": "BK000001", "booking_status": "Draft"}
+        runtime._persist_session(session)
 
         response = client.post(
             f"/api/session/{session_id}/message",

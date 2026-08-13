@@ -231,6 +231,25 @@ CREATE TABLE IF NOT EXISTS interactions (
 
 CREATE INDEX IF NOT EXISTS ix_interactions_traveler_id ON interactions (traveler_id);
 CREATE INDEX IF NOT EXISTS ix_interactions_phone_lookup_key ON interactions (phone_lookup_key);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_interactions_channel_message_key
+    ON interactions (channel, message_key)
+    WHERE message_key IS NOT NULL AND message_key <> '';
+
+CREATE TABLE IF NOT EXISTS ai_agent_sessions (
+    session_id VARCHAR(64) PRIMARY KEY,
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    payload TEXT NOT NULL,
+    agent_state TEXT,
+    version INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ,
+    locked_until TIMESTAMPTZ,
+    lock_owner VARCHAR(80),
+    last_message_key VARCHAR(160)
+);
+
+CREATE INDEX IF NOT EXISTS ix_ai_agent_sessions_locked_until
+    ON ai_agent_sessions (locked_until);
 
 CREATE TABLE IF NOT EXISTS trip_bookings (
     booking_id VARCHAR(50) PRIMARY KEY,

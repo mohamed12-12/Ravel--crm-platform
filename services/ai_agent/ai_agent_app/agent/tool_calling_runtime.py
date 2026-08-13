@@ -34,6 +34,10 @@ from services.ai_agent.ai_agent_app.agent.response_guard import (
     known_record_ids_from_context,
     response_guard_issue,
 )
+from services.ai_agent.ai_agent_app.agent.session_store import (
+    SessionLockBusy,
+    build_session_store,
+)
 from services.ai_agent.ai_agent_app.agent.production_agent import ProductionAgentCoordinator
 from services.ai_agent.ai_agent_app.agent.safety import AgentSafetyLayer
 from services.ai_agent.ai_agent_app.agent.read_only_tools import ReadOnlyCRMTools
@@ -45,6 +49,15 @@ from services.ai_agent.ai_agent_app.agent.write_tool_executor import GeminiWrite
 from services.ai_agent.ai_agent_app.agent.workflow_policy import ConversationWorkflowPolicy
 from services.ai_agent.ai_agent_app.config import Settings
 from services.ai_agent.ai_agent_app.logger import agent_logger
+from services.ai_agent.validation.lexicon import (
+    AFFIRMATIVE_TERMS,
+    EXPLANATION_REQUEST_EXACT_TERMS,
+    EXPLANATION_REQUEST_SUBSTRING_TERMS,
+    HUMAN_HANDOFF_TERMS,
+    RESTART_SIGNAL_TERMS,
+    TRIP_DISCOVERY_TERMS,
+    TRIP_QUALITY_TERMS,
+)
 from services.ai_agent.validation.validation_rules import CLOSED_LEAD_STAGES, normalize_flight_option, normalize_trip_type
 from services.ai_agent.llm import build_llm_provider
 from services.crm.system_services.trip_pricing import price_for_room_and_currency
@@ -102,24 +115,7 @@ _BIRTHDAY_RE = re.compile(r"\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b|\b(\d{1,2})[-/
 _TRIP_MEDIA_URL_RE = re.compile(r"(?:https?://[^\s<>()]+)?/trips/media/[A-Za-z0-9._~:-]+")
 
 
-_AFFIRMATIVE_REPLIES = {
-    "yes",
-    "y",
-    "ok",
-    "okay",
-    "sure",
-    "confirm",
-    "book it",
-    "go ahead",
-    "تمام",
-    "ماشي",
-    "موافق",
-    "ايوه",
-    "أيوه",
-    "نعم",
-    "اوكي",
-    "اوكى",
-}
+_AFFIRMATIVE_REPLIES = AFFIRMATIVE_TERMS
 
 _TRIP_REFERENCE_STOP_WORDS = {
     "a", "an", "about", "all", "any", "can", "details", "for", "get", "i", "info", "is",
@@ -140,6 +136,13 @@ _TRIP_TYPE_ONLY_REFERENCES = {
 _ARABIC_TRIP_REFERENCE_TRANSLATION = str.maketrans(
     {"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي", "ة": "ه", "ؤ": "و", "ئ": "ي"}
 )
+
+# Below this, GeminiAgent.classify_off_script_turn's result is treated as
+# "unclear" regardless of its stated category -- a wrong guess must degrade
+# to the existing scripted fallback, never to a wrong action. Kept as a
+# module-level constant so it stays easy to tune without hunting through
+# _handle_off_script_classifier.
+CLASSIFIER_CONFIDENCE_THRESHOLD = 0.55
 
 _BACKEND_OWNED_COLLECTION_STEPS = {
     "collect_valid_whatsapp_number",
@@ -194,6 +197,7 @@ class ToolCallingSessionRuntime:
         self.settings = settings
         self.agent_persona_name = settings.agent_persona_name or "Ravel Agent"
         self._sessions: dict[str, SessionState] = {}
+        self._session_store = build_session_store(settings)
         self._conversation_ai = conversation_ai
         self._read_only_tools = ReadOnlyCRMTools(settings)
         self._write_executor = GeminiWriteToolExecutor(settings=settings, read_only_tools=self._read_only_tools)
@@ -229,9 +233,40 @@ class ToolCallingSessionRuntime:
 
     def clear(self) -> None:
         self._sessions.clear()
+        try:
+            self._session_store.clear()
+        except Exception:
+            agent_logger.warning("Could not clear durable session store", exc_info=True)
 
-    def get(self, session_id: str) -> SessionState | None:
+    def get(self, session_id: str, *, refresh: bool = False) -> SessionState | None:
+        if not refresh and session_id in self._sessions:
+            return self._sessions.get(session_id)
+        try:
+            loaded = self._session_store.load(session_id)
+        except Exception:
+            agent_logger.warning("Could not load durable session session=%s", session_id, exc_info=True)
+            loaded = None
+        if loaded is not None:
+            session, agent_state, _version = loaded
+            self._sessions[session_id] = session
+            self._state_by_session[session_id] = agent_state
+            return session
         return self._sessions.get(session_id)
+
+    def _persist_session(self, session: SessionState, *, expected_version: int | None = None, last_message_key: str = "") -> None:
+        self._sessions[session.id] = session
+        agent_state = self._state_by_session.get(session.id) or AgentState(goal="help the traveler plan a trip")
+        self._state_by_session[session.id] = agent_state
+        try:
+            self._session_store.save(
+                session,
+                agent_state=agent_state,
+                expected_version=expected_version,
+                last_message_key=last_message_key,
+            )
+        except Exception:
+            agent_logger.error("Could not persist durable session session=%s", session.id, exc_info=True)
+            raise
 
     def create_session(self, gateway=None) -> SessionState:
         session = SessionState(id=uuid.uuid4().hex)
@@ -251,7 +286,57 @@ class ToolCallingSessionRuntime:
             }
         )
         self._sessions[session.id] = session
+        self._persist_session(session)
         return session
+
+    def handle_message_by_id(self, session_id: str, text: str, gateway) -> SessionState | None:
+        """Load, lock, process, and persist one customer turn.
+
+        This is the HTTP boundary used by server.py. Direct unit tests may still
+        call handle_message(session, ...) to exercise pure workflow behavior.
+        """
+
+        with self._session_store.session_lock(session_id):
+            loaded = self._session_store.load(session_id)
+            if loaded is None:
+                session = self._sessions.get(session_id)
+                if session is None:
+                    return None
+                version = None
+            else:
+                session, agent_state, version = loaded
+                self._sessions[session_id] = session
+                self._state_by_session[session_id] = agent_state
+            result = self.handle_message(session, text, gateway)
+            self._persist_session(result, expected_version=version, last_message_key=self._message_id_from_text(text))
+            return result
+
+    def apply_passport_attachment_by_id(self, session_id: str, attachment_ref: str) -> SessionState | None:
+        """Load, lock, apply, and persist a passport attachment for one session.
+
+        Mirrors handle_message_by_id()'s lock+load+persist boundary so a
+        passport upload can never race an in-flight chat turn for the same
+        session and silently overwrite it with a stale snapshot.
+        """
+
+        with self._session_store.session_lock(session_id):
+            loaded = self._session_store.load(session_id)
+            if loaded is None:
+                session = self._sessions.get(session_id)
+                if session is None:
+                    return None
+                version = None
+            else:
+                session, agent_state, version = loaded
+                self._sessions[session_id] = session
+                self._state_by_session[session_id] = agent_state
+            self.handle_passport_attachment(session, attachment_ref)
+            self._persist_session(session, expected_version=version)
+            return session
+
+    @staticmethod
+    def _message_id_from_text(text: str) -> str:
+        return str(text or "").strip()[:120]
 
     def _opening_message(self) -> str:
         return (
@@ -1188,6 +1273,72 @@ class ToolCallingSessionRuntime:
             session.flight_option = "Not Applicable"
             self._update_collection_state(session, flight_option=True)
 
+    def _apply_trip_switch_from_text(self, session: SessionState, clean_text: str) -> bool:
+        """Resolve an explicit request to switch to a different trip after
+        one is already selected (e.g. "actually show me Thailand instead").
+
+        Reuses the exact trip-reference scoring and confidence/margin
+        convention already used pre-selection by
+        _handle_public_trip_reference_if_present/_resolve_public_trip_reference
+        (score >= 65, top match must lead a same-tier runner-up by >= 5) --
+        deliberately the same bar, not a new scoring system. A trip
+        *mention* is not the same as a switch *request*: an explicit
+        correction signal is required in addition to a confident match, so
+        a comparison question ("is Thailand cheaper than Bali?") or a
+        passing mention ("my friend went to Thailand") never discards the
+        current selection -- it is left completely untouched and this
+        function returns False, letting the turn fall through to whatever
+        already handles unmatched input today.
+
+        Deliberately does NOT special-case a bare, unmarked trip name
+        (e.g. a lone "Thailand" with no "actually"/"instead"/etc.) as a
+        replacement -- the existing scorer has no way to distinguish that
+        from an aside without fuzzy/speculative matching, which is out of
+        scope here. A bare mention leaves state unchanged, same as an
+        ambiguous one.
+
+        The actual state reset on a real switch happens entirely inside
+        _select_trip -> _clear_booking_dependent_state; this function never
+        mutates session fields itself.
+        """
+        if not session.selected_trip_id:
+            return False
+        if not self._is_explicit_correction_signal(clean_text):
+            return False
+        candidate_trip = self._resolve_trip_switch_candidate(session, clean_text)
+        if not candidate_trip:
+            return False
+        self._select_trip(session, candidate_trip)
+        return True
+
+    def _resolve_trip_switch_candidate(self, session: SessionState, clean_text: str) -> dict[str, Any] | None:
+        """The score/margin half of a trip switch, with no correction-signal
+        gate -- shared by _apply_trip_switch_from_text (which requires an
+        explicit keyword signal before calling this) and the off-script
+        classifier's correction_trip_switch route (tool_calling_runtime.py's
+        _handle_off_script_classifier), which substitutes the classifier's
+        own semantic judgment for that keyword gate but must still go
+        through this exact same confidence/margin rule to pick (or refuse
+        to pick) a trip. Returns None, never a guess, when the match is
+        anything less than unambiguous.
+        """
+        if not session.selected_trip_id:
+            return None
+        search = self._search_trip_reference_candidates(clean_text)
+        matches = list(search.get("matches") or [])
+        if not matches:
+            return None
+        confident = [item for item in matches if int(item.get("score") or 0) >= 65]
+        if not confident:
+            return None
+        if len(confident) > 1 and confident[0]["score"] < confident[1]["score"] + 5:
+            return None
+        candidate_trip = dict(confident[0]["trip"])
+        candidate_trip_id = str(candidate_trip.get("trip_id") or "").strip()
+        if not candidate_trip_id or candidate_trip_id == str(session.selected_trip_id or "").strip():
+            return None
+        return candidate_trip
+
     @staticmethod
     def _has_trip_reference_words(text: str) -> bool:
         normalized = ToolCallingSessionRuntime._normalize_trip_reference(text)
@@ -1451,73 +1602,14 @@ class ToolCallingSessionRuntime:
         normalized = cls._normalize_trip_reference(text)
         if not normalized:
             return False
-        english_phrases = (
-            "what trips",
-            "which trips",
-            "any trips",
-            "available trips",
-            "trips available",
-            "trips do you have",
-            "trips you have",
-            "show me trips",
-            "show me the trips",
-            "show trips",
-            "list of trips",
-            "what do you have",
-            "what is available",
-            "whats available",
-            "where can i go",
-            "what destinations",
-        )
-        arabic_phrases = (
-            "ايه الرحلات",
-            "اي الرحلات",
-            "ايه رحلات",
-            "ايه المتاح",
-            "ايه الموجود",
-            "في رحلات",
-            "فيه رحلات",
-            "هل يوجد رحلات",
-            "يوجد رحلات",
-            "الرحلات المتاحه",
-            "الرحلات المتوفره",
-            "رحلات متاحه",
-            "رحلات متوفره",
-            "عرض الرحلات",
-            "وريني الرحلات",
-            "ورينى الرحلات",
-            "اعرض الرحلات",
-            "ما الرحلات",
-            "الرحلات المتاح",
-            "عندكم رحلات",
-            "عندكو رحلات",
-            "الرحلات عندكم",
-        )
-        return any(phrase in normalized for phrase in (*english_phrases, *arabic_phrases))
+        return any(phrase in normalized for phrase in TRIP_DISCOVERY_TERMS)
 
     @classmethod
     def _is_trip_quality_question(cls, text: str) -> bool:
         normalized = cls._normalize_trip_reference(text)
         if not normalized:
             return False
-        return any(
-            phrase in normalized
-            for phrase in (
-                "is it good",
-                "is this trip good",
-                "worth it",
-                "worth going",
-                "recommend",
-                "\u0643\u0648\u064a\u0633",
-                "\u0643\u0648\u064a\u0633\u0629",
-                "\u064a\u0633\u062a\u0627\u0647\u0644",
-                "\u062a\u0646\u0635\u062d",
-                "\u0631\u0623\u064a\u0643",
-                "\u0631\u0627\u064a\u0643",
-                "\u0639\u0627\u062c\u0628\u062a\u0643",
-                "\u062d\u0644\u0648\u0629",
-            )
-        )
+        return any(phrase in normalized for phrase in TRIP_QUALITY_TERMS)
 
     @classmethod
     def _is_identity_question(cls, text: str) -> bool:
@@ -1540,39 +1632,7 @@ class ToolCallingSessionRuntime:
     @classmethod
     def _is_human_agent_request(cls, text: str) -> bool:
         normalized = cls._normalize_trip_reference(text)
-        return any(
-            phrase in normalized
-            for phrase in (
-                "human",
-                "real agent",
-                "person",
-                "employee",
-                "call me",
-                "support",
-                "help",
-                "escalate",
-                "speak to someone",
-                "speak to a person",
-                "transfer me",
-                "connect me",
-                # common misspellings of "escalate" seen live -- kept as an
-                # explicit small list rather than fuzzy-matching, to avoid
-                # false positives elsewhere in this substring check.
-                "esclate",
-                "excalate",
-                "escallate",
-                "\u0645\u0648\u0638\u0641",
-                "\u0627\u0646\u0633\u0627\u0646",
-                "\u0643\u0644\u0645\u0646\u064a",
-                "\u062f\u0639\u0645",
-                # "help/support" (masa'ada), spelled with a plain ha: normalization
-                # maps ta marbuta to ha before this check runs.
-                "\u0645\u0633\u0627\u0639\u062f\u0647",
-                "\u062a\u0635\u0639\u064a\u062f",
-                "\u062d\u0648\u0644 \u0644\u0645\u0648\u0638\u0641",
-                "\u0639\u0627\u064a\u0632 \u062d\u062f \u064a\u0631\u062f",
-            )
-        )
+        return any(phrase in normalized for phrase in HUMAN_HANDOFF_TERMS)
 
     @staticmethod
     def _is_hostile_message(text: str) -> bool:
@@ -1583,29 +1643,11 @@ class ToolCallingSessionRuntime:
         normalized = cls._normalize_trip_reference(text)
         if not normalized:
             return False
-        if normalized in {
-            "what do i need", "what is needed",
-            "\u064a\u0639\u0646\u064a \u0627\u064a\u0647", "\u064a\u0639\u0646\u064a \u0625\u064a\u0647",
-            "\u0648\u0636\u062d", "\u0648\u0636\u062d\u0644\u064a",
-            "\u0627\u064a\u0647 \u0627\u0644\u0645\u0637\u0644\u0648\u0628",
-        }:
+        if normalized in EXPLANATION_REQUEST_EXACT_TERMS:
             return True
         return (
-            normalized in {"why", "how come", "what for", "ليه", "لماذا", "ليش"}
-            or any(
-                phrase in normalized
-                for phrase in (
-                    "why do",
-                    "why are",
-                    "why need",
-                    "what do you need",
-                    "ليه",
-                    "لماذا",
-                    "ليش",
-                    "عشان ايه",
-                    "ليه محتاج",
-                )
-            )
+            normalized in EXPLANATION_REQUEST_EXACT_TERMS
+            or any(phrase in normalized for phrase in EXPLANATION_REQUEST_SUBSTRING_TERMS)
         )
 
     @classmethod
@@ -1822,17 +1864,47 @@ class ToolCallingSessionRuntime:
             return any(token in normalized for token in ("flight", "without", "طيران"))
         if required_step == "collect_passport_attachment":
             return any(token in normalized for token in ("passport", "جواز"))
+        # Phase 3B: these steps previously fell through to the bare
+        # language-match check below, which passes almost any on-topic-
+        # sounding reply -- a side-question answer that never actually
+        # mentions the pending field (e.g. "is this trip family-friendly?"
+        # answered while collect_passport_country is pending) would then
+        # reach the customer with no clear signal that the field is still
+        # unanswered. Requiring the field's own vocabulary mirrors the
+        # existing checks above and keeps the reply visibly tied to the one
+        # thing still being asked for.
+        if required_step == "collect_passport_number":
+            return any(token in normalized for token in ("passport", "number", "جواز", "رقم"))
+        if required_step == "collect_passport_expiry":
+            return any(token in normalized for token in ("passport", "expiry", "expire", "expiration", "جواز", "انتهاء", "الصلاحية"))
+        if required_step == "collect_passport_country":
+            return any(token in normalized for token in ("passport", "country", "nationality", "issuing", "جواز", "جنسية", "بلد"))
+        if required_step == "collect_payment_currency":
+            return any(token in normalized for token in ("currency", "usd", "egp", "dollar", "pound", "عملة", "دولار", "جنيه"))
         return bool(language.startswith("ar") == ("".join(ch for ch in candidate if "\u0600" <= ch <= "\u06ff") != ""))
 
-    def _handle_conversational_interruption(self, session: SessionState, decision, clean_text: str) -> bool:
-        if not self._is_conversational_interruption(clean_text):
-            return False
+    def _run_conversational_llm_turn(self, session: SessionState, decision, clean_text: str) -> bool:
+        """Give the model one grounded, tool-permitted turn to answer the
+        customer's actual message in the current required_step's context,
+        falling back to the deterministic per-step copy if the reply is
+        missing or judged irrelevant (_candidate_is_relevant_to_required_step).
 
+        Shared by _handle_conversational_interruption (gated on its own
+        keyword allowlist) and the off-script classifier's side_question
+        route (_handle_off_script_classifier, gated on classifier
+        confidence instead) -- this is the ONE existing conversational-LLM
+        mechanism; neither caller re-implements grounding, the response
+        guard, or tool permissions, all of which live inside
+        self._conversation_ai.respond().
+        """
         session_context = self._build_context(session, clean_text)
         session_context["workflow_policy"] = decision.to_context()
         session_context["conversation_turn_guidance"] = (
             "Answer the customer's actual interruption first. Do not repeat the previous question verbatim. "
-            "Briefly explain or acknowledge it, then ask only for the one required field."
+            "Briefly explain or acknowledge it, then ask only for the one required field. "
+            "Never say or imply that this required field has already been recorded, confirmed, or accepted, "
+            "and never say or imply that the booking workflow has moved forward -- only the backend can "
+            "confirm that, and it has not happened yet this turn. Keep the field itself an open question."
         )
         candidate = ""
         if isinstance(self._conversation_ai, GeminiAgent):
@@ -1844,6 +1916,17 @@ class ToolCallingSessionRuntime:
                 )
                 candidate = self._normalize_reply(str(result.get("reply") or ""), session.language)
                 if not self._candidate_is_relevant_to_required_step(candidate, decision, session.language):
+                    candidate = ""
+                # Phase 3B: every other LLM-authored customer-facing reply in
+                # this file (_agent_reply's rewrite path) is checked against
+                # this same guard before it can reach the customer -- this
+                # was the one path that skipped it, so a leak/false
+                # write-success claim from a side-question turn had nothing
+                # to catch it. Reuses the existing guard, not a new one.
+                elif self._customer_reply_validation_issue(
+                    candidate,
+                    known_record_ids=self._session_known_record_ids(session),
+                ):
                     candidate = ""
             except Exception:
                 agent_logger.exception("Conversational interruption recovery failed for session=%s", session.id)
@@ -1863,6 +1946,120 @@ class ToolCallingSessionRuntime:
         session.tools_used = []
         session.fallback_used = False
         return True
+
+    def _handle_conversational_interruption(self, session: SessionState, decision, clean_text: str) -> bool:
+        if not self._is_conversational_interruption(clean_text):
+            return False
+        return self._run_conversational_llm_turn(session, decision, clean_text)
+
+    def _reply_for_off_script_state_change(self, session: SessionState, clean_text: str) -> bool:
+        """Compose and append the next question after the off-script
+        classifier route mutated trip/trip-type state. Reuses
+        _next_step_prompt -- the same "a step just became current" reply
+        the ordinary deterministic turn loop already renders in
+        handle_message -- because this mutation happens after this turn's
+        own workflow_decision was already computed further up in
+        handle_message, making that earlier decision stale.
+        """
+        fresh_context = self._build_context(session, clean_text)
+        fresh_decision = self._workflow_policy.evaluate(fresh_context)
+        session.stage = fresh_decision.state
+        reply = self._next_step_prompt(session, fresh_decision, clean_text)
+        self._append_agent_reply(
+            session,
+            message_key=f"workflow.off_script_correction.{fresh_decision.required_step}",
+            base_text=reply,
+            user_text=clean_text,
+            required_action="Ask only this one required workflow question for the corrected trip/type.",
+            session_context=fresh_context,
+        )
+        session.tools_used = []
+        session.fallback_used = False
+        return True
+
+    def _handle_off_script_classifier(self, session: SessionState, decision, clean_text: str) -> bool:
+        """Router dispatch for a message neither _apply_required_step_capture
+        nor _is_conversational_interruption could interpret -- only ever
+        reached after both already ran and failed for this turn (see the
+        call site in handle_message). Classifies the message via
+        GeminiAgent.classify_off_script_turn and dispatches to an EXISTING
+        deterministic mechanism per category. Never decides a trip ID,
+        workflow step, or tool call itself -- "unclear" and anything below
+        CLASSIFIER_CONFIDENCE_THRESHOLD fall straight through to the
+        caller's existing scripted fallback, unchanged.
+        """
+        if not isinstance(self._conversation_ai, GeminiAgent):
+            return False
+        session_context = self._build_context(session, clean_text)
+        session_context["workflow_policy"] = decision.to_context()
+        try:
+            classification = self._conversation_ai.classify_off_script_turn(
+                user_message=clean_text,
+                session_context=session_context,
+                conversation_history=session.messages[-12:],
+            )
+        except Exception:
+            agent_logger.exception(
+                "Off-script classification call failed for session=%s required_step=%s",
+                session.id,
+                decision.required_step,
+            )
+            return False
+
+        category = str((classification or {}).get("category") or "unclear")
+        try:
+            confidence = float((classification or {}).get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        raw_category = category
+        if confidence < CLASSIFIER_CONFIDENCE_THRESHOLD:
+            category = "unclear"
+        if category == "unclear":
+            # Phase 5: this branch used to return silently -- indistinguishable
+            # from the classifier never having been called at all. Distinct
+            # from GeminiAgent.classify_off_script_turn's own "outcome=parsed"
+            # log (that one fires on every successful parse, before this
+            # threshold is applied) -- this one specifically marks "the
+            # runtime decided not to act on it."
+            agent_logger.info(
+                "Off-script classifier not acted on session=%s reason=%s raw_category=%s confidence=%.2f required_step=%s",
+                session.id,
+                "low_confidence" if raw_category != "unclear" else "unclear_category",
+                raw_category,
+                confidence,
+                decision.required_step,
+            )
+            return False
+
+        agent_logger.info(
+            "Off-script classifier routed session=%s category=%s confidence=%.2f required_step=%s",
+            session.id,
+            category,
+            confidence,
+            decision.required_step,
+        )
+
+        if category == "side_question":
+            return self._run_conversational_llm_turn(session, decision, clean_text)
+
+        if category == "navigation":
+            return self._handle_navigation_intent(session, clean_text)
+
+        if category == "correction_trip_switch":
+            candidate_trip = self._resolve_trip_switch_candidate(session, clean_text)
+            if not candidate_trip:
+                return False
+            self._select_trip(session, candidate_trip)
+            return self._reply_for_off_script_state_change(session, clean_text)
+
+        if category == "correction_trip_type_switch":
+            new_trip_type = normalize_trip_type(clean_text)
+            if not new_trip_type or not self._apply_trip_type_change(session, new_trip_type):
+                return False
+            self._update_collection_state(session, trip_type=True)
+            return self._reply_for_off_script_state_change(session, clean_text)
+
+        return False
 
     @staticmethod
     def _last_assistant_text(session: SessionState) -> str:
@@ -3540,6 +3737,7 @@ class ToolCallingSessionRuntime:
         hints = self._extract_hints(clean_text, stage=capture_stage)
         self._merge_hints(session, hints)
         self._apply_trip_selection_from_text(session, clean_text)
+        self._apply_trip_switch_from_text(session, clean_text)
         self._apply_trip_configuration_defaults(session)
         self._ensure_room_requirements_for_group(session)
         media_intent = self._is_trip_media_request(clean_text)
@@ -3629,9 +3827,46 @@ class ToolCallingSessionRuntime:
             ):
                 session.stage = workflow_decision.state
                 agent_logger.info(
-                    "Tool-calling session %s handled conversational interruption step=%s",
+                    "Tool-calling session %s handled conversational interruption previous_step=%s step=%s",
                     session.id,
+                    capture_stage,
                     workflow_decision.required_step,
+                )
+                return session
+            # Neither the strict per-step capture nor the keyword interruption
+            # allowlist could interpret this message -- the classifier is the
+            # last thing tried before falling back to the scripted re-ask
+            # below. Each of its routes either mutates state via an existing
+            # deterministic mechanism and computes its own fresh stage
+            # (trip/trip-type switch), or reuses the existing conversational
+            # LLM turn/navigation handler unchanged, so session.stage is not
+            # touched again here.
+            #
+            # Guarded on "not step_just_started": when a step only became
+            # current THIS turn (e.g. identity just verified and trip_type is
+            # being asked for the first time), the customer's message was a
+            # valid answer to whatever came before -- it was never an unclear
+            # answer to this brand-new question, so it must never be
+            # classified as off-script. Without this guard, the very first
+            # message after identity verification (typically the phone number
+            # itself, echoing through to the newly-current step) was
+            # incorrectly sent to the classifier on every session.
+            step_just_started_before_classifier = capture_stage != workflow_decision.state
+            if (
+                not step_value_captured
+                and not step_just_started_before_classifier
+                and self._handle_off_script_classifier(
+                    session,
+                    workflow_decision,
+                    clean_text,
+                )
+            ):
+                agent_logger.info(
+                    "Tool-calling session %s handled off-script classifier route previous_step=%s required_step=%s new_step=%s",
+                    session.id,
+                    capture_stage,
+                    workflow_decision.required_step,
+                    session.stage,
                 )
                 return session
             if not step_value_captured:
@@ -3717,9 +3952,11 @@ class ToolCallingSessionRuntime:
             session.tools_used = [str(preloaded_tool_event["name"])] if preloaded_tool_event else []
             session.fallback_used = False
             agent_logger.info(
-                "Tool-calling session %s used backend workflow prompt step=%s selected_trip=%s",
+                "Tool-calling session %s used backend workflow prompt previous_step=%s step=%s captured=%s selected_trip=%s",
                 session.id,
+                capture_stage,
                 workflow_decision.required_step,
+                step_value_captured,
                 session.selected_trip_id,
             )
             return session
@@ -4860,26 +5097,25 @@ class ToolCallingSessionRuntime:
         return any(marker in lowered for marker in hypothetical_markers)
 
     @staticmethod
-    def _is_explicit_trip_type_restart_signal(text: str) -> bool:
+    def _is_explicit_correction_signal(text: str) -> bool:
         """An unambiguous "I changed my mind, start over" signal.
 
-        Required before a trip-type change is allowed to override an
-        already-selected trip (see _merge_hints) -- an incidental keyword
-        match should never silently discard a real selection.
+        Shared primitive for every place that must distinguish an actual
+        correction ("actually", "instead", "بدل", ...) from a message that
+        merely mentions a different value in passing -- required before a
+        trip-type change (see _merge_hints) or a trip-switch (see
+        _apply_trip_switch_from_text) is allowed to override an
+        already-selected trip. An incidental keyword match should never
+        silently discard a real selection.
         """
         lowered = str(text or "").strip().lower()
         if not lowered:
             return False
-        restart_markers = (
-            "instead",
-            "actually",
-            "بدل",
-            "خليها",
-            "غير رأيي",
-            "عايز اغير",
-            "عايزة اغير",
-        )
-        return any(marker in lowered for marker in restart_markers)
+        return any(marker in lowered for marker in RESTART_SIGNAL_TERMS)
+
+    @classmethod
+    def _is_explicit_trip_type_restart_signal(cls, text: str) -> bool:
+        return cls._is_explicit_correction_signal(text)
 
     @staticmethod
     def _extract_hints(text: str, *, stage: str = "") -> dict[str, Any]:
@@ -4989,6 +5225,29 @@ class ToolCallingSessionRuntime:
             "candidate_requires_whatsapp_for_crm": any(token in lowered for token in ("profile", "traveler", "booking", "lead", "crm", "مليف", "بروفايل", "ملفي")),
         }
 
+    def _apply_trip_type_change(self, session: SessionState, new_trip_type: str) -> bool:
+        """The actual local<->international state transition: reset trip
+        selection and all booking-dependent state. This is the ONLY place
+        that mutation is written -- _merge_hints's keyword-gated hint path
+        (below) and the off-script classifier's correction_trip_type_switch
+        route (_handle_off_script_classifier) both call this; they only
+        differ in how each decides the change is genuine enough to apply.
+        Does not mark collection_state.trip_type itself -- callers own that,
+        exactly as before this was extracted out of _merge_hints.
+        """
+        if not new_trip_type or session.trip_type == new_trip_type:
+            return False
+        session.trip_type = new_trip_type
+        session.trip_query = ""
+        session.selected_trip_id = ""
+        session.selected_trip_name = ""
+        self._clear_booking_dependent_state(session)
+        preview = dict(session.preview or {})
+        preview.pop("trip_result", None)
+        session.preview = preview
+        self._update_collection_state(session, selected_trip=False)
+        return True
+
     def _merge_hints(self, session: SessionState, hints: dict[str, Any]) -> None:
         """Applies the intent extractor's per-field candidates onto session
         state, one field at a time, each with its own gate. The recurring
@@ -5039,15 +5298,7 @@ class ToolCallingSessionRuntime:
             # else: an explicit restart signal while a trip is selected --
             # fall through and let the block below perform the real change.
         if trip_type and session.trip_type != trip_type:
-            session.trip_type = trip_type
-            session.trip_query = ""
-            session.selected_trip_id = ""
-            session.selected_trip_name = ""
-            self._clear_booking_dependent_state(session)
-            preview = dict(session.preview or {})
-            preview.pop("trip_result", None)
-            session.preview = preview
-            self._update_collection_state(session, selected_trip=False)
+            self._apply_trip_type_change(session, trip_type)
         if trip_type:
             self._update_collection_state(session, trip_type=True)
 
@@ -5212,13 +5463,36 @@ class ToolCallingSessionRuntime:
 
     @staticmethod
     def _extract_nationality_hint(text: str) -> str:
+        """Whole-text, or a recognized trigger phrase + country/nationality,
+        resolved against the maintained nationality_reference list only --
+        never a free-text guess. The trailing `or " ".join(...capitalize())`
+        fallback this used to have (Phase 3C finding) meant any unrecognized
+        phrase after "i am" -- e.g. "i am not sure, can I ask something?" --
+        got silently title-cased and accepted as a real nationality, both
+        here (nationality_required's strict capture) and via _merge_hints'
+        opportunistic candidate_nationality hint. Dropped: an unrecognized
+        phrase now returns "" like any other unrecognized answer.
+
+        Phase 4: added "my passport is from X"/"passport is from X"/
+        "passport from X" alongside the existing nationality-framed
+        triggers -- collect_passport_country's own prompt asks "which
+        country issued your passport", and a passport-framed answer is at
+        least as natural there as a nationality-framed one. Still purely a
+        deterministic regex extraction + the same maintained list lookup;
+        an unrecognized country after any trigger phrase still resolves to
+        "" via resolve_nationality, exactly as an unrecognized whole-text
+        answer would.
+        """
         lowered = " ".join(str(text or "").strip().lower().split())
         resolved = resolve_nationality(lowered)
         if resolved:
             return resolved
-        match = re.search(r"\b(?:my nationality is|nationality is|i am)\s+([a-z][a-z\s-]{2,40})\b", lowered)
+        match = re.search(
+            r"\b(?:my nationality is|nationality is|i am|my passport is from|passport is from|passport from)\s+([a-z][a-z\s-]{2,40})\b",
+            lowered,
+        )
         if match:
-            return resolve_nationality(match.group(1)) or " ".join(part.capitalize() for part in match.group(1).split())
+            return resolve_nationality(match.group(1))
         return ""
 
     def _available_room_types(self, session: SessionState) -> list[str]:
@@ -5428,19 +5702,40 @@ class ToolCallingSessionRuntime:
             )
             return False
         if session.stage == "currency_required" and not session.currency:
+            # Phase 3C: "1"/"2"/"$" used to be matched as bare substrings
+            # against the WHOLE message -- any text containing the digit 1
+            # or 2 anywhere ("room 2", "call at 2pm", "extension 21") was
+            # captured as a currency answer. option_number (computed above)
+            # already requires the ENTIRE message to be just that one digit,
+            # the same whole-answer convention "Task 3.1" established for
+            # trip_type/room_type/flight_option/etc. -- reused here instead
+            # of a second, looser digit check. The alphabetic/Arabic tokens
+            # keep substring matching (a currency name is a much rarer,
+            # more specific signal than a bare digit) but now require a word
+            # boundary, so a token can't be a fragment of an unrelated word.
             lowered = " ".join(str(text or "").strip().lower().split())
-            if any(token in lowered for token in ("usd", "dollar", "dollars", "$", "2")):
+            usd_terms = ("usd", "dollar", "dollars")
+            egp_terms = ("egp", "egyptian pound", "egyptian pounds", "pound", "pounds", "\u062c\u0646\u064a\u0647", "\u0645\u0635\u0631\u064a")
+            if option_number == 2 or any(re.search(rf"\b{re.escape(term)}\b", lowered) for term in usd_terms):
                 session.currency = "USD"
                 self._update_collection_state(session, currency=True)
                 return True
-            elif any(token in lowered for token in ("egp", "egyptian pound", "egyptian pounds", "pound", "pounds", "\u062c\u0646\u064a\u0647", "\u0645\u0635\u0631\u064a", "1")):
+            elif option_number == 1 or any(re.search(rf"\b{re.escape(term)}\b", lowered) for term in egp_terms):
                 session.currency = "EGP"
                 self._update_collection_state(session, currency=True)
                 return True
             return False
         if session.stage == "passport_number_required" and not session.passport_number:
             candidate = re.sub(r"\s+", "", str(text or "").strip())
-            if candidate.isalnum() and 6 <= len(candidate) <= 9:
+            # Phase 3C: stripping whitespace before the alnum+length check
+            # meant any short, punctuation-free side question collapsed
+            # into a false match too -- "is it far" -> "isitfar" (7 chars,
+            # alnum) was captured as a passport number. Real passport
+            # numbers are alnum but always contain at least one digit
+            # (either a leading letter + digits, or all-digits); requiring
+            # that rules out pure-alphabetic collapsed phrases without
+            # rejecting any real passport-number format.
+            if candidate.isalnum() and 6 <= len(candidate) <= 9 and any(ch.isdigit() for ch in candidate):
                 session.passport_number = candidate.upper()
                 session._passport_field_rejection_reason = ""
                 return True
@@ -5469,19 +5764,31 @@ class ToolCallingSessionRuntime:
             session._passport_field_rejection_reason = ""
             return True
         if session.stage == "passport_country_required" and not session.passport_nationality:
-            candidate = str(text or "").strip()
-            if not candidate or len(candidate) > 60 or _PHONE_CANDIDATE_RE.search(candidate):
+            # Phase 3C: this used to accept ANY non-empty, non-phone-shaped
+            # text up to 60 chars as-is -- "is this trip family-friendly?"
+            # was captured verbatim as passport_nationality and the workflow
+            # silently advanced. nationality_required already solves exactly
+            # this problem (a country/nationality answer) by resolving
+            # against the maintained nationality_reference list instead of
+            # trusting free text -- reuse that same resolver here rather
+            # than inventing a second one, so "Egypt"/"Egyptian"/"مصري"/
+            # "KSA"/"UAE"/etc. are all still accepted, but an unrelated
+            # sentence is not.
+            resolved = self._extract_nationality_hint(text)
+            if not resolved:
                 session._passport_field_rejection_reason = "passport_country_invalid"
                 return False
-            session.passport_nationality = candidate[:60]
-            if session.nationality and session.nationality.strip().casefold() != candidate.strip().casefold():
+            session.passport_nationality = resolved
+            if session.nationality and session.nationality.strip().casefold() != resolved.casefold():
                 # Cross-check only, per spec: a mismatch is fine and common (dual
-                # nationals, recently-changed nationality) -- log it, don't block.
+                # nationals, recently-changed nationality) -- log that it
+                # happened, don't block. Phase 6: previously logged the two
+                # actual nationality values; the diagnostic value is in
+                # knowing the cross-check fired, not the specific values, so
+                # this now logs presence-of-mismatch only.
                 agent_logger.info(
-                    "Passport nationality differs from stated nationality session=%s nationality=%s passport_nationality=%s",
+                    "Passport nationality differs from stated nationality session=%s mismatch=true",
                     session.id,
-                    session.nationality,
-                    candidate,
                 )
             session._passport_field_rejection_reason = ""
             return True

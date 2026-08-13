@@ -240,6 +240,7 @@ class TestInstagramWebhookPersistence(unittest.TestCase):
         os.environ["META_APP_SECRET"] = "test-meta-secret"
         os.environ["META_VERIFY_TOKEN"] = "verify-me"
         os.environ["META_PAGE_ACCESS_TOKEN"] = "test-page-token"
+        os.environ["META_PAGE_ID"] = "page-456"
 
     def tearDown(self):
         os.environ.clear()
@@ -257,6 +258,7 @@ class TestInstagramWebhookPersistence(unittest.TestCase):
             "object": "page",
             "entry": [
                 {
+                    "id": "page-456",
                     "messaging": [
                         {
                             "sender": {"id": "igsid-123"},
@@ -318,6 +320,7 @@ class TestInstagramWebhookPersistence(unittest.TestCase):
             "object": "page",
             "entry": [
                 {
+                    "id": "page-456",
                     "messaging": [
                         {
                             "sender": {"id": "igsid-999"},

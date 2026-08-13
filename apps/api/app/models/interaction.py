@@ -2,6 +2,7 @@
 from app.extensions import db
 from datetime import datetime, timezone
 import pandas as pd
+import sqlalchemy as sa
 
 
 def _utc_now() -> datetime:
@@ -9,6 +10,16 @@ def _utc_now() -> datetime:
 
 class Interaction(db.Model):
     __tablename__ = 'interactions'
+    __table_args__ = (
+        db.Index(
+            "ux_interactions_channel_message_key",
+            "channel",
+            "message_key",
+            unique=True,
+            sqlite_where=sa.text("message_key IS NOT NULL AND message_key <> ''"),
+            postgresql_where=sa.text("message_key IS NOT NULL AND message_key <> ''"),
+        ),
+    )
     
     # Primary Key
     interaction_id = db.Column(db.String(50), primary_key=True)

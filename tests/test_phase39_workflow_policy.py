@@ -788,14 +788,17 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
 
         runtime = app.config["SESSIONS"]
         runtime._sessions[session["id"]].stage = "nationality_required"
+        runtime._persist_session(runtime._sessions[session["id"]])
         session = client.post(f"/api/session/{session['id']}/message", json={"text": "Egyptian"}).get_json()["session"]
         self.assertEqual(session["nationality"], "Egyptian")
 
         runtime._sessions[session["id"]].stage = "birthday_required"
+        runtime._persist_session(runtime._sessions[session["id"]])
         session = client.post(f"/api/session/{session['id']}/message", json={"text": "1998-02-20"}).get_json()["session"]
         self.assertEqual(session["birthday"], "1998-02-20")
 
         runtime._sessions[session["id"]].stage = "currency_required"
+        runtime._persist_session(runtime._sessions[session["id"]])
         session = client.post(f"/api/session/{session['id']}/message", json={"text": "USD"}).get_json()["session"]
         self.assertEqual(runtime._sessions[session["id"]].currency, "USD")
         self.assertEqual(session["preview"]["collection_state"]["currency"], True)
@@ -972,6 +975,10 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
             "traveler": {"traveler_id": "TR00999", "full_name": "Mona Ali", "status": "Active"},
             "write_result": {"lead_update": {"lead_id": lead_id}},
         }
+        # The passport-attachment route now reloads the durable session under
+        # its own lock (Phase 10 fix), so this test's direct in-memory session
+        # mutations must be persisted first, same as any real mutation path.
+        app.config["SESSIONS"]._persist_session(session)
 
         response = client.post(
             f"/api/session/{session.id}/passport_attachment",

@@ -1719,29 +1719,46 @@ class UnifiedCRMService:
                 + json.dumps(serialized_attachments, ensure_ascii=False, separators=(",", ":"))
             )
 
-        interaction = self.create_interaction(
-            timestamp=safe_timestamp,
-            channel=safe_channel,
-            customer_name=customer_name or f"{safe_channel} sender {safe_sender_id}",
-            raw_phone=safe_sender_id,
-            integrated_whatsapp="",
-            phone_lookup_key="",
-            traveler_id="",
-            matched_row=None,
-            status_snapshot="WEBHOOK_RECEIVED",
-            intent="inbound_message",
-            trip_type="",
-            suggested_trips="",
-            action_taken="webhook_received",
-            handoff_required=False,
-            handoff_reason="",
-            agent_notes="\n".join(notes_parts),
-            flow_key=flow_key or safe_channel.lower(),
-            step_key=step_key or "inbound_webhook",
-            message_key=safe_message_key,
-            language="",
-            outcome=outcome or "received",
-        )
+        try:
+            interaction = self.create_interaction(
+                timestamp=safe_timestamp,
+                channel=safe_channel,
+                customer_name=customer_name or f"{safe_channel} sender {safe_sender_id}",
+                raw_phone=safe_sender_id,
+                integrated_whatsapp="",
+                phone_lookup_key="",
+                traveler_id="",
+                matched_row=None,
+                status_snapshot="WEBHOOK_RECEIVED",
+                intent="inbound_message",
+                trip_type="",
+                suggested_trips="",
+                action_taken="webhook_received",
+                handoff_required=False,
+                handoff_reason="",
+                agent_notes="\n".join(notes_parts),
+                flow_key=flow_key or safe_channel.lower(),
+                step_key=step_key or "inbound_webhook",
+                message_key=safe_message_key,
+                language="",
+                outcome=outcome or "received",
+            )
+        except sqlite3.IntegrityError:
+            if not safe_message_key:
+                raise
+            with self.connect() as connection:
+                existing = connection.execute(
+                    """
+                    SELECT interaction_id
+                    FROM interactions
+                    WHERE channel = ? AND message_key = ?
+                    LIMIT 1
+                    """,
+                    (safe_channel, safe_message_key),
+                ).fetchone()
+            if existing:
+                return {"interaction_id": str(existing["interaction_id"]), "created": False}
+            raise
         interaction["created"] = True
         return interaction
 
@@ -3172,6 +3189,7 @@ class UnifiedCRMService:
                 self._migrate_trip_booking_passport_columns(connection)
                 self._migrate_lead_columns(connection)
                 self._migrate_idempotency_columns(connection)
+                self._migrate_interaction_message_key_unique_index(connection)
                 connection.commit()
             self._schema_ready_paths.add(db_key)
 
@@ -3496,6 +3514,35 @@ class UnifiedCRMService:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_traveler_documents_idempotency_key ON traveler_documents (idempotency_key)"
             )
+
+    @staticmethod
+    def _migrate_interaction_message_key_unique_index(connection: sqlite3.Connection) -> None:
+        columns = UnifiedCRMService._table_columns(connection, "interactions")
+        if not {"channel", "message_key"}.issubset(columns):
+            return
+        duplicate = connection.execute(
+            """
+            SELECT channel, message_key, COUNT(*) AS duplicate_count
+            FROM interactions
+            WHERE message_key IS NOT NULL
+              AND message_key <> ''
+            GROUP BY channel, message_key
+            HAVING COUNT(*) > 1
+            LIMIT 1
+            """
+        ).fetchone()
+        if duplicate:
+            raise RuntimeError(
+                "Cannot add unique webhook message index: duplicate interaction exists "
+                f"for channel={duplicate['channel']!r}, message_key={duplicate['message_key']!r}."
+            )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_interactions_channel_message_key
+            ON interactions (channel, message_key)
+            WHERE message_key IS NOT NULL AND message_key <> ''
+            """
+        )
 
     @staticmethod
     def _ensure_traveler_documents_table(connection: sqlite3.Connection) -> None:
