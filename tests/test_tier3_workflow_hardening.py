@@ -203,7 +203,14 @@ def test_workflow_policy_distinguishes_not_yet_searched_from_zero_results() -> N
     assert has_results.state == "trip_selection_required"
 
 
-def test_search_zero_results_reply_names_the_trip_type(runtime: ToolCallingSessionRuntime) -> None:
+def test_search_zero_results_reply_is_honest_and_creates_a_handoff(runtime: ToolCallingSessionRuntime) -> None:
+    """Zero trips of the requested type used to answer with a leaked internal
+    label ("Reason for escalation:"/"no active inventory") and create no
+    handoff at all -- silently dropping the customer's request with nothing
+    for staff to follow up on. Now it reuses the same honest,
+    handoff-creating escalation used everywhere else a trip search comes up
+    empty (see _escalate_no_matching_trip).
+    """
     identity = {"traveler_id": "TR00777", "full_name": "Youssef Kamal", "status": "Active"}
     read_tools = RecordingReadTools(identity=identity)
     read_tools.trips = []  # `trips=[]` in the constructor falls back to the TRIPS default (falsy check)
@@ -215,8 +222,11 @@ def test_search_zero_results_reply_names_the_trip_type(runtime: ToolCallingSessi
 
     assert session.stage == "no_trips_available"
     reply = session.messages[-1]["text"].lower()
-    assert "local" in reply
-    assert "no active inventory" in reply or "do not have any available" in reply
+    assert "don't currently have a trip that matches" in reply
+    assert "reason for escalation" not in reply
+    assert "no active inventory" not in reply
+    handoff_actions = [call.kwargs.get("action") for call in runtime._write_executor.execute.call_args_list]
+    assert "create_handoff" in handoff_actions
 
 
 def test_search_run_with_results_shows_the_trip_list(runtime: ToolCallingSessionRuntime) -> None:

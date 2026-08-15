@@ -51,6 +51,7 @@ from services.ai_agent.ai_agent_app.config import Settings
 from services.ai_agent.ai_agent_app.logger import agent_logger
 from services.ai_agent.validation.lexicon import (
     AFFIRMATIVE_TERMS,
+    DESTINATION_TRIP_TYPE_ALIASES,
     EXPLANATION_REQUEST_EXACT_TERMS,
     EXPLANATION_REQUEST_SUBSTRING_TERMS,
     GENERIC_TRIP_CHANGE_TERMS,
@@ -2515,11 +2516,30 @@ class ToolCallingSessionRuntime:
             if isinstance(trip, dict)
         ]
         if not trips:
+            # A specific destination search (e.g. session.trip_query =
+            # "Sharm El Sheikh") failing must say so honestly, not blur into
+            # the broader "no {trip_type} trips at all" message below --
+            # those are different facts (there ARE local trips open, just not
+            # this one).
+            if session.trip_query:
+                return ToolCallingSessionRuntime._no_matching_trip_reply(session.trip_query, session.language)
             trip_type = str(session.trip_type or "").strip().lower()
             if trip_type in {"local", "international"}:
+                # Deliberately no internal reason-code label in the
+                # customer-facing text (previously leaked "Reason for
+                # escalation:"/"\u0633\u0628\u0628 \u0627\u0644\u062a\u062d\u0648\u064a\u0644:" verbatim) -- see
+                # WorkflowPolicy._no_trips_available_message for the same
+                # honest wording used elsewhere for this exact fact.
                 if session.language.startswith("ar"):
-                    return "\u0644\u0627 \u062a\u0648\u062c\u062f \u0631\u062d\u0644\u0627\u062a \u0645\u062a\u0627\u062d\u0629 \u0644\u0647\u0630\u0627 \u0627\u0644\u0646\u0648\u0639 \u062d\u0627\u0644\u064a\u0627 \u0641\u064a CRM. \u0644\u0646 \u0623\u0639\u0631\u0636 \u0646\u0648\u0639 \u0631\u062d\u0644\u0629 \u0622\u062e\u0631 \u0644\u0623\u0646 \u0637\u0644\u0628\u0643 \u0645\u062d\u062f\u062f. \u0633\u0628\u0628 \u0627\u0644\u062a\u062d\u0648\u064a\u0644: \u0644\u0627 \u062a\u0648\u062c\u062f \u0631\u062d\u0644\u0627\u062a \u0646\u0634\u0637\u0629 \u0645\u062a\u0627\u062d\u0629 \u0644\u0647\u0630\u0627 \u0627\u0644\u0646\u0648\u0639 \u0627\u0644\u0622\u0646."
-                return f"I do not have any available {trip_type} trips in CRM right now. I will not show another trip type because you asked for this one. Reason for escalation: no active inventory is available for the requested trip type."
+                    label = "\u0645\u062d\u0644\u064a\u0629" if trip_type == "local" else "\u062f\u0648\u0644\u064a\u0629"
+                    return (
+                        f"\u0644\u0644\u0623\u0633\u0641 \u0645\u0641\u064a\u0634 \u0631\u062d\u0644\u0627\u062a {label} \u0645\u062a\u0627\u062d\u0629 (\u0645\u0641\u062a\u0648\u062d\u0629) \u062f\u0644\u0648\u0642\u062a\u064a. "
+                        "\u0642\u064a\u062f\u062a \u0637\u0644\u0628\u0643 \u0639\u0634\u0627\u0646 \u0641\u0631\u064a\u0642 Ravel \u064a\u0631\u0627\u062c\u0639\u0647 \u0648\u064a\u062a\u0648\u0627\u0635\u0644 \u0645\u0639\u0627\u0643 \u0644\u0648 \u062a\u0648\u0641\u0631\u062a \u0631\u062d\u0644\u0629 \u0645\u0646\u0627\u0633\u0628\u0629."
+                    )
+                return (
+                    f"There are no {trip_type} trips open right now. "
+                    "I've logged your request so the Ravel team can review it and reach out if a suitable trip opens up."
+                )
             return ToolCallingSessionRuntime._no_matching_trip_reply(session.trip_query or session.selected_trip_name, session.language)
 
         trip_type = str(session.trip_type or "").strip().lower()
@@ -4362,11 +4382,20 @@ class ToolCallingSessionRuntime:
                     workflow_decision.required_step,
                 )
                 return session
-            base_reply = (
-                self._canonical_trip_search_reply(session)
-                if workflow_decision.required_step in ("select_trip", "handle_empty_trip_results")
-                else self._backend_required_step_reply(session, workflow_decision, clean_text)
-            )
+            if workflow_decision.required_step == "handle_empty_trip_results":
+                # The capture succeeded this turn (e.g. a named destination
+                # resolved trip_type AND trip_query in one step -- see
+                # _destination_trip_type_hint) and immediately landed on zero
+                # search results. This is the same "we genuinely have no trip
+                # for this customer" fact _escalate_no_matching_trip already
+                # handles for the not-captured path -- reuse it here too so a
+                # real, visible handoff gets created instead of silently
+                # answering "no trips" with nothing logged for staff to act on.
+                base_reply = self._escalate_no_matching_trip(session, clean_text)
+            elif workflow_decision.required_step == "select_trip":
+                base_reply = self._canonical_trip_search_reply(session)
+            else:
+                base_reply = self._backend_required_step_reply(session, workflow_decision, clean_text)
             if step_value_captured and session._passport_expiry_warning:
                 # A short-validity passport is flagged, not blocked (per spec), so the
                 # warning rides along with the next question instead of a separate turn.
@@ -5810,12 +5839,13 @@ class ToolCallingSessionRuntime:
             flight_option = "Without Flight"
         elif flight_context and ("with flight" in lowered or "with flights" in lowered or "مع طيران" in lowered):
             flight_option = "With Flight"
+        destination_trip_type, destination_name = ToolCallingSessionRuntime._destination_trip_type_hint(lowered)
         candidate_trip_type = trip_type or ("local"
         if "local" in lowered or "داخلي" in lowered or "محلي" in lowered
         else (
             "international"
             if "international" in lowered or "دولي" in lowered or "عمرة" in lowered or "turkey" in lowered or "تركيا" in lowered
-            else ""
+            else destination_trip_type
         ))
         message_is_exploratory = ToolCallingSessionRuntime._is_exploratory_question(text)
         return {
@@ -5826,7 +5856,7 @@ class ToolCallingSessionRuntime:
             ),
             "candidate_group_size": group_size,
             "candidate_raw_phone": raw_phone,
-            "candidate_destination": "Turkey" if "turkey" in lowered or "تركيا" in lowered else "",
+            "candidate_destination": destination_name,
             "candidate_preferred_date": "August" if "august" in lowered or "أغسطس" in lowered else "",
             "candidate_birthday": ToolCallingSessionRuntime._extract_birthday(text),
             "candidate_nationality": ToolCallingSessionRuntime._extract_nationality_hint(text),
@@ -6143,6 +6173,20 @@ class ToolCallingSessionRuntime:
             options.append("Triple")
         return options
 
+    @staticmethod
+    def _destination_trip_type_hint(lowered_text: str) -> tuple[str, str]:
+        """Resolve a bare destination name (e.g. "شرم" / "شرم الشيخ") to
+        (trip_type, canonical_destination_name), or ("", "") if none of the
+        known destinations appear. Longer keys are checked first so a
+        specific match like "شرم الشيخ" isn't shadowed by a shorter one.
+        """
+        if not lowered_text:
+            return "", ""
+        for phrase in sorted(DESTINATION_TRIP_TYPE_ALIASES, key=len, reverse=True):
+            if phrase in lowered_text:
+                return DESTINATION_TRIP_TYPE_ALIASES[phrase]
+        return "", ""
+
     def _apply_required_step_capture(self, session: SessionState, text: str) -> bool:
         normalized_text = str(text or "").translate(_DIGIT_TRANSLATION).strip()
         option_match = re.fullmatch(r"([1-9])[\s.)_\-]*", normalized_text)
@@ -6173,9 +6217,21 @@ class ToolCallingSessionRuntime:
                 # _merge_hints's own exploratory gate ever gets a chance to
                 # run (this branch mutates session.trip_type directly).
                 trip_type = normalize_trip_type(normalized_text)
+            destination_name = ""
+            if not trip_type and not self._is_exploratory_question(text):
+                # The customer named a specific place ("شرم" / "شرم الشيخ")
+                # instead of answering the abstract local/international
+                # question -- that IS an answer, just not one
+                # normalize_trip_type recognizes. Without this, repeatedly
+                # naming a real destination looked identical to giving no
+                # answer at all and escalated to a human after two strikes.
+                trip_type, destination_name = self._destination_trip_type_hint(lowered)
             if trip_type:
                 session.trip_type = trip_type
                 self._update_collection_state(session, trip_type=True)
+                if destination_name and not session.selected_trip_id:
+                    session.trip_query = destination_name
+                    self._update_collection_state(session, destination=True)
                 return True
             return False
 

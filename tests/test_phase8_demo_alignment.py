@@ -7,6 +7,7 @@ import sys
 import unittest
 import uuid
 from contextlib import closing
+from datetime import date, timedelta
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -19,6 +20,13 @@ if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
 from test_phase3_booking_write_through import create_operational_tables
+
+# Fixed relative to today (not a hardcoded calendar date) -- a static future
+# date silently becomes "in the past" as real time passes, which made this
+# seeded trip fall out of the "confirmed upcoming trips" window and start
+# failing the moment the wall clock caught up to it.
+_TRIP_START = (date.today() + timedelta(days=7)).isoformat()
+_TRIP_END = (date.today() + timedelta(days=10)).isoformat()
 
 
 def seed_workbook(path: Path) -> None:
@@ -43,8 +51,8 @@ def seed_workbook(path: Path) -> None:
     ws_trips["B3"] = "Siwa Discovery Demo"
     ws_trips["C3"] = "Local"
     ws_trips["D3"] = 2026
-    ws_trips["F3"] = "2026-08-14"
-    ws_trips["G3"] = "2026-08-17"
+    ws_trips["F3"] = _TRIP_START
+    ws_trips["G3"] = _TRIP_END
     ws_trips["Z3"] = "Open"
 
     # Leads
@@ -107,8 +115,8 @@ class Phase8DemoAlignmentTests(unittest.TestCase):
                     "Siwa Discovery Demo",
                     "Local",
                     2026,
-                    "2026-08-14",
-                    "2026-08-17",
+                    _TRIP_START,
+                    _TRIP_END,
                     "Open",
                     5,
                     5,

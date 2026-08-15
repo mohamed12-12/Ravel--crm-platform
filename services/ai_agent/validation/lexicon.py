@@ -334,6 +334,67 @@ GENERIC_TRIP_CHANGE_TERMS: set[str] = {
     "not this trip",
 }
 
+# A customer names a specific destination instead of answering the abstract
+# collect_trip_type question ("local inside Egypt or international outside
+# Egypt?") -- e.g. "شرم" / "شرم الشيخ" for Sharm El Sheikh. Without this,
+# _apply_required_step_capture's trip_type_required branch (
+# tool_calling_runtime.py) had no fallback beyond TRIP_TYPE_TERMS's generic
+# local/international words, so naming a real place repeatedly re-asked the
+# same menu question and eventually escalated the customer to a human for
+# giving "unclear" answers -- even though they had already answered, just
+# not in the local/international vocabulary the capture function expected.
+# Matched as a substring against normalized (casefolded) text, same
+# convention as TRIP_DISCOVERY_TERMS et al. -- longer/more specific keys are
+# checked first by the lookup helper so "شرم الشيخ" doesn't get shadowed by
+# a shorter unrelated key. Values are (trip_type, canonical destination name
+# used for trip_query/search -- the same field _merge_hints's
+# candidate_destination hint already writes to).
+DESTINATION_TRIP_TYPE_ALIASES: dict[str, tuple[str, str]] = {
+    "شرم الشيخ": ("local", "Sharm El Sheikh"),
+    "شرم الشيخه": ("local", "Sharm El Sheikh"),
+    "شرم": ("local", "Sharm El Sheikh"),
+    "sharm el sheikh": ("local", "Sharm El Sheikh"),
+    "sharm": ("local", "Sharm El Sheikh"),
+    "الغردقة": ("local", "Hurghada"),
+    "الغردقه": ("local", "Hurghada"),
+    "hurghada": ("local", "Hurghada"),
+    "دهب": ("local", "Dahab"),
+    "dahab": ("local", "Dahab"),
+    "نويبع": ("local", "Nuweiba"),
+    "nuweiba": ("local", "Nuweiba"),
+    "رأس سدر": ("local", "Ras Sudr"),
+    "راس سدر": ("local", "Ras Sudr"),
+    "ras sudr": ("local", "Ras Sudr"),
+    "مرسى علم": ("local", "Marsa Alam"),
+    "مرسي علم": ("local", "Marsa Alam"),
+    "marsa alam": ("local", "Marsa Alam"),
+    "سيوة": ("local", "Siwa"),
+    "سيوه": ("local", "Siwa"),
+    "siwa": ("local", "Siwa"),
+    "الفيوم": ("local", "Fayoum"),
+    "fayoum": ("local", "Fayoum"),
+    "العلمين": ("local", "El Alamein"),
+    "el alamein": ("local", "El Alamein"),
+    "الأقصر": ("local", "Luxor"),
+    "الاقصر": ("local", "Luxor"),
+    "luxor": ("local", "Luxor"),
+    "أسوان": ("local", "Aswan"),
+    "اسوان": ("local", "Aswan"),
+    "aswan": ("local", "Aswan"),
+    "تركيا": ("international", "Turkey"),
+    "turkey": ("international", "Turkey"),
+    "دبي": ("international", "Dubai"),
+    "dubai": ("international", "Dubai"),
+    "جورجيا": ("international", "Georgia"),
+    "georgia": ("international", "Georgia"),
+    "المالديف": ("international", "Maldives"),
+    "maldives": ("international", "Maldives"),
+    "زنجبار": ("international", "Zanzibar"),
+    "zanzibar": ("international", "Zanzibar"),
+    "لبنان": ("international", "Lebanon"),
+    "lebanon": ("international", "Lebanon"),
+}
+
 # "Is that the only one? / nothing else?" -- a direct question about the
 # result count, asked right after the agent lists the currently-available
 # trip(s) (see ToolCallingSessionRuntime._is_only_option_question). Without

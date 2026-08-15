@@ -135,6 +135,63 @@ def test_new_traveler_intake_saves_lead_instead_of_looping(runtime: ToolCallingS
     ]
 
 
+# ---------------------------------------------------------------------------
+# Bug: a real customer answered "collect_trip_type" (local inside Egypt or
+# international outside Egypt?) by naming their actual destination -- "شرم"
+# then "شرم الشيخ" then "ايواه شرم الشيخ" -- three times in a row. Sharm El
+# Sheikh IS inside Egypt (local), but _apply_required_step_capture's
+# trip_type_required branch only recognized the abstract local/international
+# vocabulary, so every reply looked identical to "no answer at all." After
+# two unclear-answer strikes the agent escalated with "مش عارف أفهم إجابتك
+# صح" ("I can't understand your answer correctly") -- the wrong reason,
+# reached the wrong way, after wasting the customer's patience for nothing.
+# ---------------------------------------------------------------------------
+def test_naming_a_known_destination_answers_trip_type_instead_of_escalating_as_unclear(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    runtime._write_executor.execute.side_effect = _write_results_by_action(
+        create_traveler=NEW_TRAVELER_WRITE,
+        create_lead={
+            "executed": True,
+            "result_id": "LD00001",
+            "assistant_message": "Lead saved.",
+            "lead_update": {"lead_id": "LD00001"},
+            "write_result_contract": {
+                "status": "success",
+                "record_id": "LD00001",
+                "record_type": "lead",
+                "executed": True,
+            },
+        },
+        create_handoff={"executed": True, "result_id": "H-0001"},
+    )
+    session = runtime.create_session()
+    for text in ("01554158741", "حمد أشرف صفوت", "مصري", "28/4/2003"):
+        session = _send(runtime, text, session)
+    assert session.stage == "trip_type_required"
+
+    session = _send(runtime, "شرم", session)
+
+    reply = session.messages[-1]["text"]
+    assert session.trip_type == "local"
+    assert session.trip_query == "Sharm El Sheikh"
+    assert session.unclear_step_strikes == 0
+    # The default test trip catalog has no Sharm El Sheikh trip, so this
+    # correctly falls to the HONEST no-matching-trip escalation (a real,
+    # visible handoff, right reason) -- never the "I can't understand your
+    # answer" unclear-input escalation the live transcript hit.
+    assert "لا يوجد لدي رحلة مؤكدة" not in reply
+    assert "مش عارف أفهم إجابتك" not in reply
+    assert "قيدت طلبك عشان فريق Ravel يراجعه" in reply
+    handoff_calls = [
+        call.kwargs["payload"]
+        for call in runtime._write_executor.execute.call_args_list
+        if call.kwargs.get("action") == "create_handoff"
+    ]
+    assert len(handoff_calls) == 1
+    assert handoff_calls[0]["reason_code"] == "no_matching_trip_available"
+
+
 def test_new_traveler_lead_save_failure_does_not_falsely_claim_success(runtime: ToolCallingSessionRuntime) -> None:
     """Regression: a failed create_lead write used to `return False` with no
     customer-facing message at all, falling through to the unvetted model
