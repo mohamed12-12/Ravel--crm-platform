@@ -136,6 +136,61 @@ def test_new_traveler_intake_saves_lead_instead_of_looping(runtime: ToolCallingS
 
 
 # ---------------------------------------------------------------------------
+# Product feedback: a customer's very FIRST message named a destination
+# ("عايز شرم الشيخ" -- "I want Sharm El Sheikh") before any identity was
+# known. The agent immediately demanded a WhatsApp number before showing so
+# much as a trip name, because _handle_public_trip_reference_if_present
+# (which CAN show public trip details with no identity at all) requires
+# either a confident trip_id/trip_name match or the literal word
+# "رحلة"/"trip"/"حجز" -- a bare destination name has neither, so it silently
+# fell through, all the way to workflow_policy's identity_required gate.
+# The product owner wants: show trip details as normal for a browsing
+# question; only require the WhatsApp/identity steps once booking is
+# actually being pursued.
+# ---------------------------------------------------------------------------
+def test_naming_a_destination_before_any_identity_shows_trip_details_without_asking_for_phone(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    runtime._read_only_tools = RecordingReadTools(
+        trips=[
+            {
+                "trip_id": "RT-LOC-26-RS1",
+                "trip_name": "رحلة شرم الشيخ",
+                "type": "Local",
+                "trip_type": "local",
+                "start_date": "2026-09-10",
+                "end_date": "2026-09-14",
+                "public_price": "3000 EGP",
+                "public_description": "برنامج شرم الشيخ المؤكد بإطلالة على البحر الأحمر.",
+                "available_single": 2,
+            },
+        ]
+    )
+    session = _send(runtime, "عايز شرم الشيخ")
+
+    reply = session.messages[-1]["text"]
+    assert "شرم الشيخ" in reply
+    assert session.selected_trip_id == "RT-LOC-26-RS1"
+    assert session.stage == "public_trip_details"
+    assert session.raw_phone == ""
+    assert "واتساب" not in reply
+    assert "whatsapp" not in reply.lower()
+
+
+def test_naming_an_unmatched_destination_before_identity_asks_to_clarify_not_for_phone(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    session = _send(runtime, "عايز شرم الشيخ")  # default RecordingReadTools catalog has no Sharm trip
+
+    reply = session.messages[-1]["text"]
+    assert session.selected_trip_id == ""
+    assert session.stage == "trip_selection_required"
+    assert session.raw_phone == ""
+    assert "واتساب" not in reply
+    assert "whatsapp" not in reply.lower()
+
+
+# ---------------------------------------------------------------------------
 # Bug: a real customer answered "collect_trip_type" (local inside Egypt or
 # international outside Egypt?) by naming their actual destination -- "شرم"
 # then "شرم الشيخ" then "ايواه شرم الشيخ" -- three times in a row. Sharm El

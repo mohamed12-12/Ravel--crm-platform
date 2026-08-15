@@ -3200,8 +3200,25 @@ class ToolCallingSessionRuntime:
             session.fallback_used = False
             session.stage = "trip_selection_required"
             return True
+        no_identity_yet = not (session.raw_phone or session.pending_raw_phone)
         if (
-            self._has_trip_reference_words(clean_text)
+            (
+                self._has_trip_reference_words(clean_text)
+                # A pre-identity message naming a specific, recognized
+                # destination ("عايز شرم الشيخ") is just as much a trip
+                # reference as one using the literal word "رحلة"/"trip" --
+                # without this, it fell through here with no reply at all,
+                # straight to the identity/phone gate (see
+                # _handle_trip_discovery_request_if_ready /
+                # workflow_policy's identity_required), forcing a WhatsApp
+                # number before showing so much as an honest "no matching
+                # trip" answer. Scoped to no_identity_yet only -- once
+                # identity is established, a bare destination word (e.g.
+                # "شرم" answering collect_trip_type) must reach
+                # _apply_required_step_capture's own destination handling
+                # instead of being intercepted here.
+                or (no_identity_yet and self._destination_trip_type_hint(clean_text.casefold())[0])
+            )
             and not self._is_trip_discovery_request(clean_text)
             and not self._extract_phone_candidate(clean_text)
             and len(self._trip_reference_tokens(query)) <= 4
