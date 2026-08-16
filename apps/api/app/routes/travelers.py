@@ -58,16 +58,18 @@ def _revenue_display(usd_total: float, egp_total: float) -> str:
 def _build_revenue_summary_from_totals(usd_total: float, egp_total: float, preferred_currency: str) -> dict[str, str]:
     preferred = str(preferred_currency or "USD").strip().upper()
     if preferred == "EGP":
-        primary = {"label": "Lifetime Revenue (EGP)", "value": _format_revenue_amount(egp_total, "EGP")}
-        secondary = {"label": "Lifetime Revenue (USD)", "value": _format_revenue_amount(usd_total, "USD")}
+        primary = {"label": "Lifetime Revenue (EGP)", "value": _format_revenue_amount(egp_total, "EGP"), "currency": "EGP"}
+        secondary = {"label": "Lifetime Revenue (USD)", "value": _format_revenue_amount(usd_total, "USD"), "currency": "USD"}
     else:
-        primary = {"label": "Lifetime Revenue (USD)", "value": _format_revenue_amount(usd_total, "USD")}
-        secondary = {"label": "Lifetime Revenue (EGP)", "value": _format_revenue_amount(egp_total, "EGP")}
+        primary = {"label": "Lifetime Revenue (USD)", "value": _format_revenue_amount(usd_total, "USD"), "currency": "USD"}
+        secondary = {"label": "Lifetime Revenue (EGP)", "value": _format_revenue_amount(egp_total, "EGP"), "currency": "EGP"}
     return {
         "primary_label": primary["label"],
         "primary_value": primary["value"],
+        "primary_currency": primary["currency"],
         "secondary_label": secondary["label"],
         "secondary_value": secondary["value"],
+        "secondary_currency": secondary["currency"],
         "exchange_note": "Aggregated from paid trip bookings by booking currency",
     }
 

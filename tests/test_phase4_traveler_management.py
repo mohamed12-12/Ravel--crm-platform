@@ -278,9 +278,11 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         # (_build_revenue_summary_from_totals) rather than converted from USD at
         # a fixed USD_TO_EGP_RATE, so there is deliberately no "1 USD = X EGP"
         # conversion line any more -- these assertions track that current design.
-        self.assertIn("Lifetime Revenue (EGP)", body)
+        # Rendered as two side-by-side currency boxes (preferred currency
+        # first) rather than one primary/secondary text line.
+        self.assertIn("Lifetime Revenue", body)
         self.assertIn("0.00 EGP", body)
-        self.assertIn("Lifetime Revenue (USD): $0.00", body)
+        self.assertIn("$0.00", body)
         self.assertIn("Aggregated from paid trip bookings by booking currency", body)
         self.assertIn("Preferred Payment Currency", body)
 

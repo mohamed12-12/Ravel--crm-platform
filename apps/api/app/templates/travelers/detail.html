@@ -18,49 +18,75 @@
 {% block content %}
 <div style="display:flex;flex-direction:column;gap:1.5rem">
     <div class="card" style="position:relative;overflow:hidden;background:linear-gradient(135deg, rgba(0,208,146,0.10), rgba(255,255,255,0.02));border:1px solid rgba(0,208,146,0.26)">
-        <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap">
-            <div style="width:72px;height:72px;border-radius:8px;background:linear-gradient(134deg, #38b98d 6%, #ffffff 96%);display:flex;align-items:center;justify-content:center;font-size:2rem;font-weight:800;color:#06120f;border:1px solid rgba(0,208,146,0.30);box-shadow:none">
-                {{ traveler.full_name[0] if traveler.full_name else '?' }}
-            </div>
-            <div style="flex:1;min-width:240px">
-                <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:0.25rem">
-                    <h1 style="font-size:1.6rem;font-weight:800;color:var(--text-main);margin:0">{{ traveler.full_name }}</h1>
-                    <span class="badge {% if traveler.status == 'VIP' %}badge-purple{% elif traveler.status == 'Repeat' %}badge-green{% elif traveler.status in ['Inactive', 'Archived', 'Blocked', 'Blacklisted'] %}badge-red{% else %}badge-blue{% endif %}">
-                        {{ traveler.status or 'Active' }}
-                    </span>
-                    <span class="mono" style="color:var(--text-muted);font-size:0.85rem">ID: {{ traveler.traveler_id }}</span>
+        <div style="display:flex;align-items:flex-start;gap:1.5rem;flex-wrap:wrap;justify-content:space-between">
+            <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;flex:1;min-width:280px">
+                <div style="width:72px;height:72px;border-radius:8px;background:linear-gradient(134deg, #38b98d 6%, #ffffff 96%);display:flex;align-items:center;justify-content:center;font-size:2rem;font-weight:800;color:#06120f;border:1px solid rgba(0,208,146,0.30);box-shadow:none;flex-shrink:0">
+                    {{ traveler.full_name[0] if traveler.full_name else '?' }}
                 </div>
-                <p style="font-size:0.85rem;color:var(--text-muted);margin:0">
-                    Primary language: <strong>{{ traveler.primary_language or 'English' }}</strong> -
-                    Created: {{ traveler.created_at.strftime('%d %b %Y') if traveler.created_at else '—' }}
-                </p>
+                <div style="flex:1;min-width:200px">
+                    <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:0.25rem">
+                        <h1 style="font-size:1.6rem;font-weight:800;color:var(--text-main);margin:0">{{ traveler.full_name }}</h1>
+                        <span class="badge {% if traveler.status == 'VIP' %}badge-purple{% elif traveler.status == 'Repeat' %}badge-green{% elif traveler.status in ['Inactive', 'Archived', 'Blocked', 'Blacklisted'] %}badge-red{% else %}badge-blue{% endif %}">
+                            {{ traveler.status or 'Active' }}
+                        </span>
+                        <span class="mono" style="color:var(--text-muted);font-size:0.85rem">ID: {{ traveler.traveler_id }}</span>
+                    </div>
+                    <p style="font-size:0.85rem;color:var(--text-muted);margin:0">
+                        Primary language: <strong>{{ traveler.primary_language or 'English' }}</strong> -
+                        Created: {{ traveler.created_at.strftime('%d %b %Y') if traveler.created_at else '—' }}
+                    </p>
+                </div>
             </div>
-            <div style="text-align:right;min-width:180px">
-                <span style="font-size:0.75rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;display:block">{{ revenue_summary.primary_label }}</span>
-                <strong style="font-size:1.8rem;font-weight:800;color:var(--green);display:block">{{ revenue_summary.primary_value }}</strong>
-                <span style="font-size:0.82rem;color:var(--text-muted);display:block;margin-top:0.25rem">{{ revenue_summary.secondary_label }}: {{ revenue_summary.secondary_value }}</span>
+
+            <!-- Revenue: the customer's own preferred currency shown first and largest,
+                 the other currency alongside it -- both always visible, never hidden
+                 behind a single blended number. -->
+            <div style="min-width:260px">
+                <div style="font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.09em;margin-bottom:0.55rem;text-align:right">Lifetime Revenue</div>
+                <div style="display:flex;gap:0.6rem;justify-content:flex-end;flex-wrap:wrap">
+                    <div style="text-align:center;padding:0.75rem 1.15rem;background:rgba(0,208,146,0.12);border-radius:10px;border:1px solid rgba(0,208,146,0.32);min-width:112px">
+                        <div style="font-size:1.4rem;font-weight:800;color:#00d092;white-space:nowrap">{{ revenue_summary.primary_value }}</div>
+                        <div style="font-size:0.64rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-top:0.2rem">{{ revenue_summary.primary_currency }}</div>
+                    </div>
+                    <div style="text-align:center;padding:0.75rem 1.15rem;background:rgba(56,185,141,0.07);border-radius:10px;border:1px solid rgba(56,185,141,0.2);min-width:112px">
+                        <div style="font-size:1.4rem;font-weight:800;color:#38b98d;white-space:nowrap">{{ revenue_summary.secondary_value }}</div>
+                        <div style="font-size:0.64rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-top:0.2rem">{{ revenue_summary.secondary_currency }}</div>
+                    </div>
+                </div>
                 {% if revenue_summary.exchange_note %}
-                <span style="font-size:0.72rem;color:var(--text-dim);display:block;margin-top:0.2rem">{{ revenue_summary.exchange_note }}</span>
+                <div style="font-size:0.68rem;color:var(--text-dim);margin-top:0.5rem;text-align:right">{{ revenue_summary.exchange_note }}</div>
                 {% endif %}
             </div>
         </div>
 
         <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1rem;margin-top:1.5rem;padding-top:1.25rem;border-top:1px solid var(--border)">
-            <div>
-                <span style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;display:block">WhatsApp</span>
-                <strong style="font-size:0.95rem;color:var(--text-main)" class="mono">{{ traveler.normalized_whatsapp or traveler.whatsapp_raw or '—' }}</strong>
+            <div style="display:flex;align-items:flex-start;gap:0.6rem">
+                <span style="width:6px;height:6px;border-radius:50%;background:#25d366;margin-top:0.4rem;flex-shrink:0"></span>
+                <div>
+                    <span style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;display:block">WhatsApp</span>
+                    <strong style="font-size:0.95rem;color:var(--text-main)" class="mono">{{ traveler.normalized_whatsapp or traveler.whatsapp_raw or '—' }}</strong>
+                </div>
             </div>
-            <div>
-                <span style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;display:block">Email</span>
-                <strong style="font-size:0.95rem;color:var(--text-main)">{{ traveler.email or '—' }}</strong>
+            <div style="display:flex;align-items:flex-start;gap:0.6rem">
+                <span style="width:6px;height:6px;border-radius:50%;background:var(--accent-2);margin-top:0.4rem;flex-shrink:0"></span>
+                <div>
+                    <span style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;display:block">Email</span>
+                    <strong style="font-size:0.95rem;color:var(--text-main)">{{ traveler.email or '—' }}</strong>
+                </div>
             </div>
-            <div>
-                <span style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;display:block">Nationality / Code</span>
-                <strong style="font-size:0.95rem;color:var(--text-main)">{{ traveler.nationality or '—' }} ({{ traveler.phone_code or '+20' }})</strong>
+            <div style="display:flex;align-items:flex-start;gap:0.6rem">
+                <span style="width:6px;height:6px;border-radius:50%;background:#818cf8;margin-top:0.4rem;flex-shrink:0"></span>
+                <div>
+                    <span style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;display:block">Nationality / Code</span>
+                    <strong style="font-size:0.95rem;color:var(--text-main)">{{ traveler.nationality or '—' }} ({{ traveler.phone_code or '+20' }})</strong>
+                </div>
             </div>
-            <div>
-                <span style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;display:block">Trips / Events</span>
+            <div style="display:flex;align-items:flex-start;gap:0.6rem">
+                <span style="width:6px;height:6px;border-radius:50%;background:#fbbf24;margin-top:0.4rem;flex-shrink:0"></span>
+                <div>
+                    <span style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;display:block">Trips / Events</span>
                     <strong style="font-size:0.95rem;color:var(--text-main)">{{ traveler.total_trips or 0 }} trips - {{ traveler.community_events_count or 0 }} events</strong>
+                </div>
             </div>
         </div>
     </div>
