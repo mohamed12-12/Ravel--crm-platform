@@ -2039,6 +2039,60 @@ def test_side_question_reply_missing_the_pending_field_is_rejected_to_fallback(
     assert session.passport_number == ""
 
 
+def test_side_question_reply_missing_trip_type_is_rejected_to_fallback(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    """collect_trip_type was one of the steps the plan's Phase 4 flagged as
+    still falling through to the bare language-match check -- a reply that
+    answers a side question but never mentions local/international must be
+    rejected in favor of the deterministic re-ask, exactly like the other
+    hardened steps above.
+    """
+    _verified_runtime_with_switch_trips(runtime)
+    session = runtime.create_session()
+    session = _send(runtime, "01554158741", session)
+    assert session.stage == "trip_type_required"
+
+    off_topic_reply = "Sure, our team is available 9am to 9pm daily!"
+    _install_real_gemini_agent(
+        runtime,
+        LoopProviderStub([_classification_response("side_question", 0.85), text_response(off_topic_reply)]),
+    )
+
+    session = _send(runtime, "what are your working hours?", session)
+
+    assert session.messages[-1]["text"] != off_topic_reply
+    assert session.stage == "trip_type_required"
+    assert session.trip_type == ""
+
+
+def test_side_question_reply_missing_trip_selection_is_rejected_to_fallback(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    """select_trip was another step the plan's Phase 4 flagged -- a reply
+    that answers a side question but never references trip selection at
+    all must be rejected in favor of the deterministic re-ask.
+    """
+    _verified_runtime_with_switch_trips(runtime)
+    session = runtime.create_session()
+    for text in ("01554158741", "international"):
+        session = _send(runtime, text, session)
+    assert session.stage == "trip_selection_required"
+    assert session.selected_trip_id == ""
+
+    off_topic_reply = "Sure, our team is available 9am to 9pm daily!"
+    _install_real_gemini_agent(
+        runtime,
+        LoopProviderStub([_classification_response("side_question", 0.85), text_response(off_topic_reply)]),
+    )
+
+    session = _send(runtime, "what are your working hours?", session)
+
+    assert session.messages[-1]["text"] != off_topic_reply
+    assert session.stage == "trip_selection_required"
+    assert session.selected_trip_id == ""
+
+
 def test_conversational_reply_claiming_field_capture_is_rejected_and_state_is_untouched(
     runtime: ToolCallingSessionRuntime,
 ) -> None:

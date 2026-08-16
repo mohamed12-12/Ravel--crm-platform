@@ -2156,6 +2156,25 @@ class ToolCallingSessionRuntime:
             return any(token in normalized for token in ("passport", "country", "nationality", "issuing", "جواز", "جنسية", "بلد"))
         if required_step == "collect_payment_currency":
             return any(token in normalized for token in ("currency", "usd", "egp", "dollar", "pound", "عملة", "دولار", "جنيه"))
+        # These steps were the ones the plan's Phase 4 flagged as still
+        # falling through to the bare language-match check below -- same
+        # gap as Phase 3B above, just not yet closed for these fields.
+        if required_step in ("select_trip", "handle_empty_trip_results"):
+            return any(token in normalized for token in ("trip", "select", "choose", "which", "رحلة", "اختار", "اي رحلة"))
+        if required_step == "collect_trip_type":
+            return any(token in normalized for token in ("local", "international", "trip type", "محلي", "دولي", "محلية", "دولية"))
+        if required_step == "collect_new_traveler_name":
+            return any(token in normalized for token in ("name", "full name", "اسم", "الاسم"))
+        if required_step == "collect_nationality":
+            return any(token in normalized for token in ("nationality", "جنسية", "الجنسية"))
+        if required_step == "collect_birthday":
+            return any(token in normalized for token in ("birthday", "birth date", "date of birth", "ميلاد", "الميلاد"))
+        if required_step in ("collect_guardian_name", "collect_guardian_phone"):
+            return any(token in normalized for token in ("guardian", "parent", "phone", "number", "ولي الأمر", "ولي امر", "رقم"))
+        if required_step == "collect_valid_whatsapp_number":
+            return any(token in normalized for token in ("whatsapp", "number", "phone", "واتساب", "رقم"))
+        if required_step == "collect_duplicate_lead_choice":
+            return any(token in normalized for token in ("continue", "new", "existing", "request", "استمرار", "جديد", "طلب"))
         return bool(language.startswith("ar") == ("".join(ch for ch in candidate if "\u0600" <= ch <= "\u06ff") != ""))
 
     def _run_conversational_llm_turn(self, session: SessionState, decision, clean_text: str) -> bool:
