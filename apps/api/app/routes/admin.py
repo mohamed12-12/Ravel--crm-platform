@@ -294,7 +294,12 @@ def revenue_analytics():
     so this can never silently disagree with the per-traveler Lifetime
     Revenue figure on travelers/detail.html about what counts as revenue.
     """
-    from app.services.revenue import booking_recognized_at, booking_revenue
+    from app.services.revenue import (
+        REVENUE_BOOKING_STATUSES,
+        REVENUE_PAYMENT_STATUSES,
+        booking_recognized_at,
+        booking_revenue,
+    )
 
     now = datetime.now(timezone.utc)
     try:
@@ -316,13 +321,39 @@ def revenue_analytics():
     available_years: set[int] = {now.year}
     total = {"USD": 0.0, "EGP": 0.0, "count": 0}
     this_month = {"USD": 0.0, "EGP": 0.0}
+    needs_attention: list[dict[str, str]] = []
 
     for booking in bookings:
         trip = trips.get(booking.trip_id)
         result = booking_revenue(booking, trip)
         if result is None:
+            # Status/payment don't (yet) call for revenue at all -- e.g. a
+            # Draft or Cancelled booking -- nothing to flag. But if this
+            # booking's status/payment already say it SHOULD be revenue and
+            # it's still excluded, that's exactly the "Completed, Fully
+            # Paid, invisible" gap: currency is missing/invalid, so
+            # booking_revenue() never even got to look at the trip/room.
+            booking_status_lower = str(booking.booking_status or "").strip().lower()
+            payment_status_lower = str(booking.payment_status or "").strip().lower()
+            if booking_status_lower in REVENUE_BOOKING_STATUSES and payment_status_lower in REVENUE_PAYMENT_STATUSES:
+                missing = booking.compute_missing_fields()
+                if missing:
+                    needs_attention.append({
+                        "booking_id": booking.booking_id,
+                        "traveler_name": booking.traveler_name or "Unknown traveler",
+                        "reason": "Missing " + ", ".join(missing) + ".",
+                    })
             continue
         currency, amount = result
+        if amount <= 0:
+            # Currency/trip/room are all valid, but the trip has no price
+            # configured for this room + currency combination -- the same
+            # class of gap, just discovered one step later.
+            needs_attention.append({
+                "booking_id": booking.booking_id,
+                "traveler_name": booking.traveler_name or "Unknown traveler",
+                "reason": "No price configured for this room/currency combination.",
+            })
         recognized_at = booking_recognized_at(booking, history_by_booking)
         if not recognized_at:
             continue
@@ -378,6 +409,7 @@ def revenue_analytics():
         available_years=years_sorted,
         current_year=now.year,
         current_month_label=now.strftime("%B %Y"),
+        needs_attention=needs_attention,
     )
 
 

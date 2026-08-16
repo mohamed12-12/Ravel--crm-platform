@@ -1,0 +1,142 @@
+<script>
+// Shared Trip -> Room Type (-> Currency price preview) wiring for booking
+// forms. Used by both the New Booking modal (bookings/index.html) and the
+// booking-completion fields on the Update Booking form (bookings/detail.html)
+// so trip/room selection and pricing logic is never duplicated -- both
+// pages call initBookingRoomSelector() with their own element IDs.
+
+function bookingRoomPrice(trip, roomType, currency) {
+    if (!trip || !roomType || !currency) return null;
+    const grid = trip.room_prices || {};
+    const roomPrices = grid[roomType] || {};
+    const specific = roomPrices[currency];
+    if (specific) return specific;
+    return trip.public_price || null;
+}
+
+function bookingDefaultCurrencyForTrip(trip) {
+    if (!trip) return '';
+    return (trip.type || '').trim().toLowerCase() === 'international' ? 'USD' : 'EGP';
+}
+
+function initBookingRoomSelector(config) {
+    const tripsData = config.tripsData || [];
+    const tripSelect = document.getElementById(config.tripSelectId);
+    const roomSelect = document.getElementById(config.roomSelectId);
+    if (!tripSelect || !roomSelect) return null;
+
+    const currencySelect = config.currencySelectId ? document.getElementById(config.currencySelectId) : null;
+    const pricePreview = config.pricePreviewId ? document.getElementById(config.pricePreviewId) : null;
+    const tripDetailsCard = config.tripDetailsCardId ? document.getElementById(config.tripDetailsCardId) : null;
+    const roomAvailabilityCard = config.roomAvailabilityCardId ? document.getElementById(config.roomAvailabilityCardId) : null;
+    const typeField = config.typeFieldId ? document.getElementById(config.typeFieldId) : null;
+    const datesField = config.datesFieldId ? document.getElementById(config.datesFieldId) : null;
+    const roomsField = config.roomsFieldId ? document.getElementById(config.roomsFieldId) : null;
+    const submitButton = config.submitButtonId ? document.getElementById(config.submitButtonId) : null;
+    const titleField = config.titleFieldId ? document.getElementById(config.titleFieldId) : null;
+    const boysField = config.boysFieldId ? document.getElementById(config.boysFieldId) : null;
+    const girlsField = config.girlsFieldId ? document.getElementById(config.girlsFieldId) : null;
+
+    function currentTrip() {
+        return tripsData.find(function (t) { return t.trip_id === tripSelect.value; });
+    }
+
+    function updatePricePreview() {
+        if (!pricePreview) return;
+        const trip = currentTrip();
+        const roomType = roomSelect.value;
+        const currency = currencySelect ? currencySelect.value : '';
+        const price = bookingRoomPrice(trip, roomType, currency);
+        if (trip && roomType && currency && price) {
+            pricePreview.style.display = 'block';
+            pricePreview.innerText = roomType + ' room, ' + currency + ': ' + price;
+        } else {
+            pricePreview.style.display = 'none';
+            pricePreview.innerText = '';
+        }
+    }
+
+    function updateRoomAvailability() {
+        const trip = currentTrip();
+        const roomType = roomSelect.value;
+        if (!roomAvailabilityCard) { updatePricePreview(); return; }
+        if (!trip || !roomType) {
+            roomAvailabilityCard.style.display = 'none';
+            updatePricePreview();
+            return;
+        }
+        if (roomType === 'Double') {
+            if (titleField) titleField.innerText = 'Double Rooms (' + (trip.double_remaining || 0) + ' remaining)';
+            if (boysField) boysField.innerText = 'Boys: ' + (trip.boys_double || 0);
+            if (girlsField) girlsField.innerText = 'Girls: ' + (trip.girls_double || 0);
+            roomAvailabilityCard.style.display = 'block';
+        } else if (roomType === 'Triple') {
+            if (titleField) titleField.innerText = 'Triple Rooms (' + (trip.triple_remaining || 0) + ' remaining)';
+            if (boysField) boysField.innerText = 'Boys: ' + (trip.boys_triple || 0);
+            if (girlsField) girlsField.innerText = 'Girls: ' + (trip.girls_triple || 0);
+            roomAvailabilityCard.style.display = 'block';
+        } else {
+            roomAvailabilityCard.style.display = 'none';
+        }
+        updatePricePreview();
+    }
+
+    function onTripChange(preserveRoomType) {
+        const trip = currentTrip();
+        const keepRoomType = preserveRoomType ? roomSelect.value : '';
+        if (!trip) {
+            if (tripDetailsCard) tripDetailsCard.style.display = 'none';
+            if (roomAvailabilityCard) roomAvailabilityCard.style.display = 'none';
+            roomSelect.innerHTML = '<option value="">-- Select Trip First --</option>';
+            roomSelect.disabled = true;
+            if (submitButton) submitButton.disabled = true;
+            updatePricePreview();
+            return;
+        }
+        if (typeField) typeField.innerText = trip.type || 'Unknown';
+        if (datesField) datesField.innerText = (trip.start_date || 'TBD') + ' to ' + (trip.end_date || 'TBD');
+        const sRem = trip.single_remaining || 0;
+        const dRem = trip.double_remaining || 0;
+        const tRem = trip.triple_remaining || 0;
+        if (roomsField) {
+            roomsField.innerHTML =
+                '<span style="color:' + (sRem > 0 ? 'var(--green)' : 'var(--red)') + '">S: ' + sRem + '</span> | ' +
+                '<span style="color:' + (dRem > 0 ? 'var(--green)' : 'var(--red)') + '">D: ' + dRem + '</span> | ' +
+                '<span style="color:' + (tRem > 0 ? 'var(--green)' : 'var(--red)') + '">T: ' + tRem + '</span>';
+        }
+        if (tripDetailsCard) tripDetailsCard.style.display = 'block';
+
+        const options = [];
+        if (sRem > 0 || config.alwaysOfferRoomType === 'Single') options.push('Single');
+        if (dRem > 0 || config.alwaysOfferRoomType === 'Double') options.push('Double');
+        if (tRem > 0 || config.alwaysOfferRoomType === 'Triple') options.push('Triple');
+
+        if (!options.length) {
+            roomSelect.innerHTML = '<option value="">-- Trip Full --</option>';
+            roomSelect.disabled = true;
+            if (submitButton) submitButton.disabled = true;
+        } else {
+            roomSelect.innerHTML = options.map(function (o) { return '<option value="' + o + '">' + o + '</option>'; }).join('');
+            roomSelect.disabled = false;
+            if (submitButton) submitButton.disabled = false;
+            if (keepRoomType && options.indexOf(keepRoomType) !== -1) {
+                roomSelect.value = keepRoomType;
+            }
+        }
+
+        if (currencySelect && config.autoDefaultCurrency && !currencySelect.value) {
+            currencySelect.value = bookingDefaultCurrencyForTrip(trip);
+        }
+
+        updateRoomAvailability();
+    }
+
+    tripSelect.addEventListener('change', function () { onTripChange(false); });
+    roomSelect.addEventListener('change', updateRoomAvailability);
+    if (currencySelect) currencySelect.addEventListener('change', updatePricePreview);
+
+    return {
+        refresh: function () { onTripChange(true); },
+    };
+}
+</script>

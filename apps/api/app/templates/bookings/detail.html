@@ -30,7 +30,7 @@
                 {% elif booking.payment_status == 'Deposit Paid' %}<span class="badge badge-yellow">{{ booking.payment_status }}</span>
                 {% elif booking.payment_status in ['Refunded', 'Full Refund', 'Partial Refund'] %}<span class="badge badge-red">{{ booking.payment_status }}</span>
                 {% else %}<span class="badge badge-gray">Payment: {{ booking.payment_status or 'Pending' }}</span>{% endif %}
-                {% if booking.missing_info %}<span class="badge badge-red">Missing Info</span>{% endif %}
+                {% if missing_fields %}<span class="badge badge-red" title="Needs: {{ missing_fields | join(', ') }}">Needs Info</span>{% endif %}
             </div>
             <h1 style="font-size:1.4rem;font-weight:800;color:var(--text-main);margin-bottom:0.35rem">
                 {{ booking.traveler_name or 'Unknown Traveler' }}
@@ -192,6 +192,57 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="expected_history_count" value="{{ history_count }}">
                 <input type="hidden" name="employee_correction" value="1">
+
+                {% if missing_fields %}
+                <div style="background:rgba(220,50,50,0.08);border:1px solid rgba(220,50,50,0.3);border-radius:0.5rem;padding:0.75rem;margin-bottom:1rem">
+                    <div style="font-weight:700;color:var(--text-main);margin-bottom:0.25rem">Missing Information</div>
+                    <div style="color:var(--text-dim);font-size:0.83rem">
+                        This booking is missing: <strong>{{ missing_fields | join(', ') }}</strong>.
+                        Complete it below so it can count toward revenue.
+                    </div>
+                </div>
+                {% else %}
+                <div style="background:rgba(0,180,120,0.08);border:1px solid rgba(0,180,120,0.3);border-radius:0.5rem;padding:0.6rem 0.75rem;margin-bottom:1rem;color:var(--text-main);font-size:0.83rem;font-weight:600">
+                    ✓ Booking information complete
+                </div>
+                {% endif %}
+
+                <div class="form-group" style="margin-bottom:0.75rem">
+                    <label class="form-label">Trip</label>
+                    <select class="form-select" name="trip_id" id="bookingTripSelector">
+                        <option value="">-- No Trip Linked --</option>
+                        {% for t in trips_data %}
+                        <option value="{{ t.trip_id }}" {% if booking.trip_id == t.trip_id %}selected{% endif %}>{{ t.trip_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group col-span-2" id="bookingTripDetailsCard" style="display:none;background:var(--bg-base);border:1px solid var(--border);padding:0.65rem 0.75rem;border-radius:6px;font-size:0.8rem;margin-bottom:0.75rem">
+                    <div style="display:flex;justify-content:space-between;margin-bottom:0.2rem"><span style="color:var(--text-muted)">Type:</span><strong id="bookingTdType"></strong></div>
+                    <div style="display:flex;justify-content:space-between"><span style="color:var(--text-muted)">Remaining Rooms:</span><strong id="bookingTdRooms"></strong></div>
+                </div>
+                <div class="form-group" style="margin-bottom:0.75rem">
+                    <label class="form-label">Room Type</label>
+                    <select class="form-select" name="room_type" id="bookingRoomTypeSelector">
+                        <option value="">-- None --</option>
+                        {% for r in ['Single', 'Double', 'Triple'] %}
+                        <option value="{{ r }}" {% if booking.room_type == r %}selected{% endif %}>{{ r }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group" style="margin-bottom:0.75rem">
+                    <label class="form-label">Currency</label>
+                    <select class="form-select" name="currency" id="bookingCurrencySelector">
+                        <option value="">-- None --</option>
+                        <option value="USD" {% if booking.currency == 'USD' %}selected{% endif %}>USD</option>
+                        <option value="EGP" {% if booking.currency == 'EGP' %}selected{% endif %}>EGP</option>
+                    </select>
+                </div>
+                <div id="bookingPricePreview" style="display:none;background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.82rem;color:var(--text-main);font-weight:600"></div>
+                <div class="form-group" style="margin-bottom:0.75rem">
+                    <label class="form-label">Flight Option</label>
+                    <input class="form-input" type="text" name="flight_option" value="{{ booking.flight_option or '' }}" placeholder="e.g. Included, Not Applicable">
+                </div>
+
                 <div class="form-group" style="margin-bottom:0.75rem">
                     <label class="form-label">Booking Status</label>
                     <select class="form-select" name="booking_status">
@@ -310,4 +361,24 @@
         {% endif %}
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+{% include "bookings/_trip_room_selector.html" %}
+<script>
+const BOOKING_TRIPS_DATA = {{ trips_data | tojson | safe }};
+const bookingDetailSelector = initBookingRoomSelector({
+    tripsData: BOOKING_TRIPS_DATA,
+    tripSelectId: 'bookingTripSelector',
+    roomSelectId: 'bookingRoomTypeSelector',
+    currencySelectId: 'bookingCurrencySelector',
+    pricePreviewId: 'bookingPricePreview',
+    tripDetailsCardId: 'bookingTripDetailsCard',
+    typeFieldId: 'bookingTdType',
+    roomsFieldId: 'bookingTdRooms',
+    alwaysOfferRoomType: {{ booking.room_type | tojson }},
+    autoDefaultCurrency: true,
+});
+if (bookingDetailSelector) bookingDetailSelector.refresh();
+</script>
 {% endblock %}

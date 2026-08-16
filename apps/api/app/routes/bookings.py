@@ -30,6 +30,7 @@ from app.security import (
     has_permission,
 )
 from app.services.traveler_stats import recalculate_traveler_stats
+from services.crm.system_services.trip_pricing import ROOM_PRICE_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,48 @@ def _validate_payment_transition(
         raise ValueError(f"Invalid payment status transition: {current} -> {target}")
 
 
+def _validate_completeness_for_status(
+    missing_fields: list[str],
+    *,
+    target_booking_status: str | None,
+    target_payment_status: str | None,
+    allow_employee_correction: bool = False,
+    correction_note: str = '',
+) -> None:
+    """Block a booking from silently reaching Completed / Fully Paid while
+    it is still missing the fields app.services.revenue.booking_revenue
+    needs to recognize any revenue at all -- that mismatch (a Completed,
+    Fully Paid booking worth $0, with no visible sign anything is wrong) is
+    exactly how bookings auto-created from a Lead go unnoticed. Mirrors
+    _validate_payment_transition's override convention exactly: an employee
+    can still push the change through with a written reason via the same
+    employee_correction/notes fields already on this form.
+
+    Deliberately narrower than app.services.revenue.REVENUE_BOOKING_STATUSES
+    / REVENUE_PAYMENT_STATUSES (which also include "Confirmed"/"Paid") --
+    those are earlier, everyday pipeline stages a booking legitimately
+    passes through before its commercial details (trip/room/currency) are
+    always finalized, and gating them here blocked normal status/refund
+    updates that have nothing to do with the Completed/Fully-Paid-with-no-
+    data bug this exists to catch."""
+    if not missing_fields:
+        return
+
+    entering_revenue_state = (
+        str(target_booking_status or '').strip().lower() == 'completed'
+        or str(target_payment_status or '').strip().lower() == 'fully paid'
+    )
+    if not entering_revenue_state:
+        return
+    if allow_employee_correction and correction_note.strip():
+        return
+    raise ValueError(
+        "This booking is missing required information: " + ", ".join(missing_fields)
+        + ". Please complete the booking information before marking it Completed / Fully Paid, "
+        "or add a reason to confirm anyway."
+    )
+
+
 def _append_note(existing: str | None, note: str, actor: str) -> str | None:
     clean_note = (note or '').strip()
     if not clean_note:
@@ -181,6 +224,8 @@ def index():
         query = query.filter(or_(TripBooking.payment_status == 'Pending', TripBooking.booking_status == 'Payment Pending'))
     elif queue == 'documents_missing':
         query = query.filter(TripBooking.passport_status == 'pending')
+    elif queue == 'needs_info':
+        query = query.filter(TripBooking.missing_info.is_(True))
 
     if not has_permission('view_all'):
         query = query.filter(or_(TripBooking.assigned_to_user_id.is_(None), TripBooking.assigned_to_user_id == current_user_id()))
@@ -191,6 +236,7 @@ def index():
 
     # Summary counts
     counts = {s: TripBooking.query.filter_by(booking_status=s).count() for s in BOOKING_STATUSES}
+    needs_info_count = TripBooking.query.filter(TripBooking.missing_info.is_(True)).count()
 
     # Fetch active trips for the booking modal
     active_trips = Trip.query.filter(Trip.sales_status == 'Open').all()
@@ -210,6 +256,7 @@ def index():
                            statuses=BOOKING_STATUSES,
                            payment_statuses=PAYMENT_STATUSES,
                            counts=counts,
+                           needs_info_count=needs_info_count,
                            trips_data=trips_data,
                            today=date.today())
 
@@ -241,6 +288,17 @@ def detail(booking_id):
     status_history = BookingStatusHistory.query.filter_by(booking_id=booking.booking_id).order_by(BookingStatusHistory.changed_at.asc(), BookingStatusHistory.history_id.asc()).all()
     history_count = len(status_history)
     assigned_history = assignment_history('booking', booking.booking_id)
+
+    # Fix 1: reuse the same active-trip catalog + serialization the New
+    # Booking modal uses, so the Trip -> Room Type selector on this page is
+    # driven by identical data, not a second independent source. The
+    # booking's own linked trip is included even if it's no longer "Open"
+    # for sale, so an already-linked trip is never missing from the list.
+    active_trips = Trip.query.filter(Trip.sales_status == 'Open').all()
+    if trip and trip.trip_id not in {t.trip_id for t in active_trips}:
+        active_trips = [trip] + active_trips
+    trips_data = [t.to_dict() for t in active_trips]
+
     return render_template('bookings/detail.html',
                            booking=booking,
                            traveler=traveler,
@@ -253,6 +311,8 @@ def detail(booking_id):
                            employees=active_assignees(),
                            can_assign=has_permission('assign_work'),
                            can_change_payment_status=_can_change_payment_status(),
+                           missing_fields=booking.compute_missing_fields(),
+                           trips_data=trips_data,
                            assigned_user=booking.assigned_user,
                            is_overdue=_is_overdue,
                            booking_statuses=_allowed_status_options(booking.booking_status),
@@ -369,6 +429,34 @@ def update_status(booking_id):
     if new_payment and new_payment not in PAYMENT_STATUSES:
         flash('Invalid payment status transition', 'error')
         return redirect(url_for('bookings.detail', booking_id=booking_id))
+
+    # Booking-completion fields (Fix 1): let an employee fill in what an
+    # auto-created-from-lead booking is missing, right on this same form,
+    # instead of only being able to fix status/payment here.
+    trip_id_submitted = 'trip_id' in data
+    room_type_submitted = 'room_type' in data
+    flight_option_submitted = 'flight_option' in data
+    currency_submitted = 'currency' in data
+    new_trip_id = (data.get('trip_id') or '').strip() if trip_id_submitted else None
+    new_room_type = (data.get('room_type') or '').strip().title() if room_type_submitted else None
+    new_flight_option = (data.get('flight_option') or '').strip() if flight_option_submitted else None
+    new_currency = (data.get('currency') or '').strip().upper() if currency_submitted else None
+
+    trip_for_update = None
+    if trip_id_submitted and new_trip_id:
+        trip_for_update = db.session.get(Trip, new_trip_id)
+        if not trip_for_update:
+            flash(f"Trip '{new_trip_id}' was not found.", 'error')
+            return redirect(url_for('bookings.detail', booking_id=booking_id))
+    if room_type_submitted and new_room_type and new_room_type not in ROOM_PRICE_TYPES:
+        flash('Choose a valid room type (Single, Double, or Triple).', 'error')
+        return redirect(url_for('bookings.detail', booking_id=booking_id))
+    if currency_submitted and new_currency:
+        from app.services.revenue import REVENUE_CURRENCIES
+        if new_currency not in REVENUE_CURRENCIES:
+            flash('Currency must be USD or EGP.', 'error')
+            return redirect(url_for('bookings.detail', booking_id=booking_id))
+
     try:
         refund_amount = _parse_refund_amount(data.get('refund_amount')) if refund_amount_present else booking.refund_amount
     except ValueError as e:
@@ -421,6 +509,28 @@ def update_status(booking_id):
             flash(str(exc), 'error')
             return redirect(url_for('bookings.detail', booking_id=booking_id))
     status_for_service = new_status if new_status and new_status != (booking.booking_status or '') else None
+
+    prospective_missing = booking.compute_missing_fields(
+        trip_id=(trip_for_update.trip_id if trip_for_update else new_trip_id) if trip_id_submitted else None,
+        room_type=new_room_type if room_type_submitted else None,
+        currency=new_currency if currency_submitted else None,
+    )
+    try:
+        _validate_completeness_for_status(
+            prospective_missing,
+            target_booking_status=status_for_service or booking.booking_status,
+            target_payment_status=payment_for_service or booking.payment_status,
+            allow_employee_correction=employee_correction,
+            correction_note=note_for_service,
+        )
+    except ValueError as e:
+        if request.is_json:
+            return jsonify({'error': str(e)}), 400
+        flash(str(e), 'error')
+        return redirect(url_for('bookings.detail', booking_id=booking_id))
+
+    detail_fields_changed = trip_id_submitted or room_type_submitted or flight_option_submitted or currency_submitted
+    was_missing = booking.missing_info
     try:
         if status_for_service:
             UnifiedCRMService._validate_booking_transition(
@@ -445,6 +555,21 @@ def update_status(booking_id):
         effective_payment_status = payment_for_service or booking.payment_status or 'Pending'
         if refund_amount_present or payment_for_service:
             booking.refund_amount = refund_amount if effective_payment_status in REFUND_PAYMENT_STATUSES else None
+        if trip_id_submitted:
+            booking.trip_id = trip_for_update.trip_id if trip_for_update else None
+            booking.trip_name = trip_for_update.trip_name if trip_for_update else None
+            if trip_for_update:
+                booking.passport_required = str(trip_for_update.type or '').strip().lower() == 'international'
+                if booking.passport_status != 'provided':
+                    booking.passport_status = 'pending' if booking.passport_required else ''
+        if room_type_submitted:
+            booking.room_type = new_room_type or None
+        if flight_option_submitted:
+            booking.flight_option = new_flight_option or None
+        if currency_submitted:
+            booking.currency = new_currency or None
+        if detail_fields_changed:
+            booking.recompute_missing_info()
         if assignment_requested:
             apply_assignment(
                 booking,
@@ -463,7 +588,7 @@ def update_status(booking_id):
             booking.customer_response_status = booking.customer_response_status or 'Contacted'
         booking.booking_notes = _append_note(booking.booking_notes, note_for_service, actor)
         db.session.commit()
-        if booking.traveler_id and (status_for_service or payment_for_service):
+        if booking.traveler_id and (status_for_service or payment_for_service or detail_fields_changed):
             try:
                 recalculate_traveler_stats(booking.traveler_id)
             except Exception:
@@ -481,7 +606,9 @@ def update_status(booking_id):
 
     if request.is_json:
         return jsonify({'status': 'ok', 'booking': booking.to_dict()})
-    if status_for_service and payment_for_service:
+    if was_missing and not booking.missing_info:
+        flash('Booking information completed -- this booking now counts toward revenue.', 'success')
+    elif status_for_service and payment_for_service:
         flash('Changes saved', 'success')
     elif payment_for_service:
         flash('Payment status updated successfully', 'success')

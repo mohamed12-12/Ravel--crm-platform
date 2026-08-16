@@ -47,6 +47,7 @@
         <option value="waiting_customer" {% if current_queue == 'waiting_customer' %}selected{% endif %}>Waiting customer</option>
         <option value="deposit_pending" {% if current_queue == 'deposit_pending' %}selected{% endif %}>Deposit pending</option>
         <option value="documents_missing" {% if current_queue == 'documents_missing' %}selected{% endif %}>Documents missing</option>
+        <option value="needs_info" {% if current_queue == 'needs_info' %}selected{% endif %}>Needs Info ({{ needs_info_count }})</option>
     </select>
     {% if employees %}
     <select class="form-select" name="employee_id" style="width:190px">
@@ -85,7 +86,7 @@
                 {% elif b.booking_status == 'Waiting Customer' or b.booking_status == 'Pending Confirmation' %}<span class="badge badge-blue">{{ b.booking_status }}</span>
                 {% elif b.booking_status == 'Cancelled' %}<span class="badge badge-red">Cancelled</span>
                 {% else %}<span class="badge badge-yellow">Draft</span>{% endif %}
-                {% if b.missing_info %}<span class="badge badge-red" title="Missing required booking info">Missing Info</span>{% endif %}
+                {% if b.missing_info %}<span class="badge badge-red" title="Needs: {{ b.compute_missing_fields() | join(', ') }}">Needs Info</span>{% endif %}
             </td>
             <td>
                 {% if b.payment_status == 'Fully Paid' %}<span class="badge badge-green">{{ b.payment_status }}</span>
@@ -139,7 +140,7 @@
                 </div>
                 <div class="form-group col-span-2">
                     <label class="form-label">Trip Selection</label>
-                    <select class="form-select" name="trip_id" id="tripSelector" required onchange="handleTripSelection()">
+                    <select class="form-select" name="trip_id" id="tripSelector" required>
                         <option value="">-- Select an Active Trip --</option>
                         {% for t in trips_data %}
                         <option value="{{ t.trip_id }}">{{ t.trip_name }}</option>
@@ -174,7 +175,7 @@
                 
                 <div class="form-group">
                     <label class="form-label">Room Type</label>
-                    <select class="form-select" name="room_type" id="roomTypeSelector" required disabled onchange="handleRoomSelection()">
+                    <select class="form-select" name="room_type" id="roomTypeSelector" required disabled>
                         <option value="">-- Select Trip First --</option>
                     </select>
                 </div>
@@ -211,10 +212,9 @@
                 </div>
                 <div class="form-group">
                     <label class="form-label">Currency</label>
-                    <select class="form-select" name="currency">
+                    <select class="form-select" name="currency" id="createBookingCurrencySelector">
                         <option value="USD">USD</option>
                         <option value="EGP">EGP</option>
-                        <option value="EUR">EUR</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -236,6 +236,7 @@
 {% endblock %}
 
 {% block scripts %}
+{% include "bookings/_trip_room_selector.html" %}
 <script>
 const TRIPS_DATA = {{ trips_data | tojson | safe }};
 const PREFILL_BOOKING_CONTEXT = {
@@ -246,91 +247,22 @@ const PREFILL_BOOKING_CONTEXT = {
     tripId: {{ request.args.get('trip_id', '') | tojson }},
 };
 
-function handleTripSelection() {
-    const tripId = document.getElementById('tripSelector').value;
-    const card = document.getElementById('tripDetailsCard');
-    const roomSelector = document.getElementById('roomTypeSelector');
-    const submitBtn = document.getElementById('submitBookingBtn');
-    const roomCard = document.getElementById('roomAvailabilityCard');
-    
-    if (!tripId) {
-        card.style.display = 'none';
-        roomCard.style.display = 'none';
-        roomSelector.innerHTML = '<option value="">-- Select Trip First --</option>';
-        roomSelector.disabled = true;
-        submitBtn.disabled = true;
-        return;
-    }
-    
-    const trip = TRIPS_DATA.find(t => t.trip_id === tripId);
-    if (!trip) return;
-    
-    document.getElementById('tdType').innerText = trip.type || 'Unknown';
-    const sDate = trip.start_date || 'TBD';
-    const eDate = trip.end_date || 'TBD';
-    document.getElementById('tdDates').innerText = `${sDate} to ${eDate}`;
-    
-    const sRem = trip.single_remaining || 0;
-    const dRem = trip.double_remaining || 0;
-    const tRem = trip.triple_remaining || 0;
-    
-    document.getElementById('tdRooms').innerHTML = 
-        `<span style="color:${sRem > 0 ? 'var(--green)' : 'var(--red)'}">S: ${sRem}</span> | ` +
-        `<span style="color:${dRem > 0 ? 'var(--green)' : 'var(--red)'}">D: ${dRem}</span> | ` +
-        `<span style="color:${tRem > 0 ? 'var(--green)' : 'var(--red)'}">T: ${tRem}</span>`;
-        
-    card.style.display = 'block';
-    
-    roomSelector.innerHTML = '';
-    let hasRooms = false;
-    if (sRem > 0) { roomSelector.innerHTML += '<option value="Single">Single</option>'; hasRooms = true; }
-    if (dRem > 0) { roomSelector.innerHTML += '<option value="Double">Double</option>'; hasRooms = true; }
-    if (tRem > 0) { roomSelector.innerHTML += '<option value="Triple">Triple</option>'; hasRooms = true; }
-    
-    if (!hasRooms) {
-        roomSelector.innerHTML = '<option value="">-- Trip Full --</option>';
-        roomSelector.disabled = true;
-        submitBtn.disabled = true;
-    } else {
-        roomSelector.disabled = false;
-        submitBtn.disabled = false;
-    }
-
-    handleRoomSelection();
-}
-
-function handleRoomSelection() {
-    const tripId = document.getElementById('tripSelector').value;
-    const roomType = document.getElementById('roomTypeSelector').value;
-    const roomCard = document.getElementById('roomAvailabilityCard');
-    const title = document.getElementById('raTitle');
-    const boys = document.getElementById('raBoys');
-    const girls = document.getElementById('raGirls');
-    const trip = TRIPS_DATA.find(t => t.trip_id === tripId);
-
-    if (!trip || !roomType) {
-        roomCard.style.display = 'none';
-        return;
-    }
-
-    if (roomType === 'Double') {
-        title.innerText = `Double Rooms (${trip.double_remaining || 0} remaining)`;
-        boys.innerText = `Boys: ${trip.boys_double || 0}`;
-        girls.innerText = `Girls: ${trip.girls_double || 0}`;
-        roomCard.style.display = 'block';
-        return;
-    }
-
-    if (roomType === 'Triple') {
-        title.innerText = `Triple Rooms (${trip.triple_remaining || 0} remaining)`;
-        boys.innerText = `Boys: ${trip.boys_triple || 0}`;
-        girls.innerText = `Girls: ${trip.girls_triple || 0}`;
-        roomCard.style.display = 'block';
-        return;
-    }
-
-    roomCard.style.display = 'none';
-}
+const createBookingSelector = initBookingRoomSelector({
+    tripsData: TRIPS_DATA,
+    tripSelectId: 'tripSelector',
+    roomSelectId: 'roomTypeSelector',
+    currencySelectId: 'createBookingCurrencySelector',
+    tripDetailsCardId: 'tripDetailsCard',
+    roomAvailabilityCardId: 'roomAvailabilityCard',
+    typeFieldId: 'tdType',
+    datesFieldId: 'tdDates',
+    roomsFieldId: 'tdRooms',
+    submitButtonId: 'submitBookingBtn',
+    titleFieldId: 'raTitle',
+    boysFieldId: 'raBoys',
+    girlsFieldId: 'raGirls',
+    autoDefaultCurrency: true,
+});
 
 function prefillBookingModalFromContext() {
     const leadIdInput = document.getElementById('leadIdInput');
@@ -351,7 +283,7 @@ function prefillBookingModalFromContext() {
     }
     if (tripSelector && PREFILL_BOOKING_CONTEXT.tripId) {
         tripSelector.value = PREFILL_BOOKING_CONTEXT.tripId;
-        handleTripSelection();
+        if (createBookingSelector) createBookingSelector.refresh();
     }
     if (leadNotice && leadNoticeId) {
         if (PREFILL_BOOKING_CONTEXT.leadId) {

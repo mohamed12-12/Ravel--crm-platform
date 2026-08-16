@@ -112,6 +112,68 @@ class RevenueAnalyticsTests(unittest.TestCase):
         # must never be counted.
         self.assertIn("<td class=\"num\">1</td>", body)
 
+    def test_needs_attention_lists_a_booking_missing_currency(self) -> None:
+        with self.app.app_context():
+            # Completed + Fully Paid, but currency was never set (the exact
+            # gap auto-created-from-lead bookings leave) -- booking_revenue()
+            # excludes it entirely, so it must not be silently invisible.
+            self.db.session.add(self.TripBooking(
+                booking_id="BK-REV-NOCUR",
+                trip_id="TRIP-REV-1",
+                traveler_id="TR900",
+                traveler_name="Revenue Traveler",
+                room_type="Double",
+                currency=None,
+                group_size=1,
+                booking_status="Completed",
+                payment_status="Fully Paid",
+                draft_created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            ))
+            self.db.session.commit()
+
+        response = self.client.get("/admin/revenue-analytics")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Needs Attention", body)
+        self.assertIn("BK-REV-NOCUR", body)
+        self.assertIn("Missing", body)
+        self.assertIn("Currency", body)
+
+    def test_needs_attention_lists_a_booking_with_no_configured_price(self) -> None:
+        with self.app.app_context():
+            from app.models.trip import Trip
+
+            self.db.session.add(Trip(
+                trip_id="TRIP-REV-NOPRICE",
+                trip_name="No Price Trip",
+                type="Local",
+                sales_status="Open",
+            ))
+            # Currency and room are both valid, but the trip has no price
+            # configured for this room/currency (and no public_price
+            # fallback either) -- amount resolves to 0 while still passing
+            # the status/payment/currency gate.
+            self.db.session.add(self.TripBooking(
+                booking_id="BK-REV-NOPRICE",
+                trip_id="TRIP-REV-NOPRICE",
+                traveler_id="TR900",
+                traveler_name="Revenue Traveler",
+                room_type="Single",
+                currency="USD",
+                group_size=1,
+                booking_status="Completed",
+                payment_status="Fully Paid",
+                draft_created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            ))
+            self.db.session.commit()
+
+        response = self.client.get("/admin/revenue-analytics")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Needs Attention", body)
+        self.assertIn("BK-REV-NOPRICE", body)
+        self.assertIn("No price configured", body)
+
     def test_revenue_analytics_matches_shared_revenue_module(self) -> None:
         with self.app.app_context():
             from app.models.trip import Trip

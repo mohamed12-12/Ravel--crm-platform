@@ -50,7 +50,10 @@
     <div class="kpi-card">
         <div class="kpi-label">This Year ({{ current_year }})</div>
         <div class="kpi-value">${{ '%.0f'|format(this_year.USD) }} <span style="font-size:0.9rem;color:var(--text-muted)">/ {{ '%.0f'|format(this_year.EGP) }} EGP</span></div>
-        <div class="kpi-sub">{{ this_year.count }} recognized bookings</div>
+        <div class="kpi-sub">
+            {{ this_year.count }} recognized booking{{ 's' if this_year.count != 1 else '' }}
+            {% if needs_attention %}<br><span style="color:var(--red)">{{ needs_attention|length }} need{{ 's' if needs_attention|length == 1 else '' }} attention ↓</span>{% endif %}
+        </div>
     </div>
     <div class="kpi-card">
         <div class="kpi-label">This Month</div>
@@ -58,6 +61,28 @@
         <div class="kpi-sub">{{ current_month_label }}</div>
     </div>
 </div>
+
+{% if needs_attention %}
+<div class="card rev-section" style="border:1px solid rgba(220,50,50,0.35)">
+    <div class="rev-section-header">
+        <span class="rev-section-title" style="color:var(--red)">Needs Attention</span>
+        <span style="color:var(--text-muted);font-size:0.8rem">Completed / Fully Paid bookings not contributing real revenue yet</span>
+    </div>
+    <table class="rev-table">
+        <thead><tr><th>Booking ID</th><th>Traveler</th><th>Reason</th><th></th></tr></thead>
+        <tbody>
+        {% for item in needs_attention %}
+            <tr>
+                <td class="mono">{{ item.booking_id }}</td>
+                <td>{{ item.traveler_name }}</td>
+                <td style="color:var(--text-dim)">{{ item.reason }}</td>
+                <td><a href="{{ url_for('bookings.detail', booking_id=item.booking_id) }}" class="btn btn-ghost btn-sm">Fix Booking</a></td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
 
 <div class="card rev-section">
     <div class="rev-section-header">

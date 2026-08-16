@@ -64,6 +64,49 @@ class TripBooking(db.Model):
     def __repr__(self):
         return f'<TripBooking {self.booking_id} - {self.traveler_name}>'
 
+    def compute_missing_fields(
+        self,
+        *,
+        trip_id: str | None = None,
+        room_type: str | None = None,
+        currency: str | None = None,
+    ) -> list[str]:
+        """Employee-facing labels for required fields this booking is still
+        missing. Single source of truth for "is this booking complete" --
+        deliberately mirrors exactly what app.services.revenue.booking_revenue
+        requires to recognize any revenue (a linked trip, a room type, and a
+        currency it recognizes), so a booking that passes this check is
+        actually capable of contributing real revenue, not just look filled
+        in. flight_option is intentionally excluded: many trips have no
+        flight component at all, so it is editable but not required.
+
+        The trip_id/room_type/currency kwargs let a caller ask "if these
+        prospective values were saved, what would still be missing?" without
+        mutating the instance first -- used by the booking-update route to
+        validate a pending save before committing it."""
+        from app.services.revenue import REVENUE_CURRENCIES
+
+        effective_trip_id = self.trip_id if trip_id is None else trip_id
+        effective_room_type = self.room_type if room_type is None else room_type
+        effective_currency = self.currency if currency is None else currency
+
+        missing: list[str] = []
+        if not (effective_trip_id or "").strip():
+            missing.append("Trip")
+        if not (effective_room_type or "").strip():
+            missing.append("Room Type")
+        if str(effective_currency or "").strip().upper() not in REVENUE_CURRENCIES:
+            missing.append("Currency")
+        return missing
+
+    def recompute_missing_info(self) -> bool:
+        """Recalculate `missing_info` from the booking's current field
+        values and persist it on this instance (caller still needs to
+        commit). Call this after any change to trip/room/currency so the
+        "Missing Info" badge and the Needs Info filter never go stale."""
+        self.missing_info = bool(self.compute_missing_fields())
+        return self.missing_info
+
     @classmethod
     def from_excel_row(cls, row: dict):
         """Creates a TripBooking instance from a pandas DataFrame row."""

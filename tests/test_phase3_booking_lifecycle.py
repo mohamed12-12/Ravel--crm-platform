@@ -351,6 +351,253 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
         self.assertNotIn('<option value="Payment Pending"', status_select)
         self.assertNotIn('<option value="Paid"', status_select)
 
+    def test_missing_fields_are_computed_dynamically_not_from_a_stored_list(self) -> None:
+        with self.app.app_context():
+            booking = self.TripBooking(
+                booking_id="B-DYNAMIC-1",
+                trip_id="TRIP-100",
+                trip_name="Lifecycle Trip",
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type=None,
+                currency=None,
+                booking_status="Draft",
+                booking_source="Auto (lead_stage_change)",
+                payment_status="Pending",
+                missing_info=True,
+            )
+            self.db.session.add(booking)
+            self.db.session.commit()
+
+            booking = self.db.session.get(self.TripBooking, "B-DYNAMIC-1")
+            self.assertEqual(booking.compute_missing_fields(), ["Room Type", "Currency"])
+
+            booking.room_type = "Single"
+            booking.currency = "EGP"
+            self.assertEqual(booking.compute_missing_fields(), [])
+            self.assertFalse(booking.recompute_missing_info())
+
+    def test_incomplete_booking_can_be_completed_from_the_detail_page(self) -> None:
+        with self.app.app_context():
+            booking = self.TripBooking(
+                booking_id="B-COMPLETE-1",
+                trip_id=None,
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type=None,
+                currency=None,
+                booking_status="Completed",
+                booking_source="Auto (lead_stage_change)",
+                payment_status="Fully Paid",
+                missing_info=True,
+            )
+            self.db.session.add(booking)
+            self.db.session.commit()
+
+        detail_response = self.client.get("/bookings/B-COMPLETE-1")
+        self.assertEqual(detail_response.status_code, 200)
+        body = detail_response.get_data(as_text=True)
+        self.assertIn("Missing Information", body)
+        self.assertIn("Trip, Room Type, Currency", body)
+
+        response = self.client.post(
+            "/bookings/B-COMPLETE-1/status",
+            data={
+                "trip_id": "TRIP-100",
+                "room_type": "Single",
+                "currency": "EGP",
+                "employee_correction": "1",
+                "booking_notes": "",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-COMPLETE-1")
+            self.assertEqual(booking.trip_id, "TRIP-100")
+            self.assertEqual(booking.room_type, "Single")
+            self.assertEqual(booking.currency, "EGP")
+            self.assertFalse(booking.missing_info)
+            traveler = self.db.session.get(self.Traveler, "TR100")
+            self.assertGreater(traveler.lifetime_revenue or 0, 0)
+
+        detail_response = self.client.get("/bookings/B-COMPLETE-1")
+        body = detail_response.get_data(as_text=True)
+        self.assertIn("Booking information complete", body)
+        self.assertNotIn("Needs Info</span>", body)
+
+    def test_completed_status_is_blocked_while_required_info_is_missing(self) -> None:
+        with self.app.app_context():
+            booking = self.TripBooking(
+                booking_id="B-BLOCKED-1",
+                trip_id=None,
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type=None,
+                currency=None,
+                booking_status="Draft",
+                booking_source="Auto (lead_stage_change)",
+                payment_status="Pending",
+                missing_info=True,
+            )
+            self.db.session.add(booking)
+            self.db.session.commit()
+
+        response = self.client.post(
+            "/bookings/B-BLOCKED-1/status",
+            data={
+                "booking_status": "Completed",
+                "employee_correction": "1",
+                "booking_notes": "",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("missing required information", body)
+
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-BLOCKED-1")
+            self.assertEqual(booking.booking_status, "Draft")
+
+    def test_completed_status_can_be_overridden_with_a_written_reason(self) -> None:
+        with self.app.app_context():
+            booking = self.TripBooking(
+                booking_id="B-OVERRIDE-1",
+                trip_id=None,
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type=None,
+                currency=None,
+                booking_status="Draft",
+                booking_source="Auto (lead_stage_change)",
+                payment_status="Pending",
+                missing_info=True,
+            )
+            self.db.session.add(booking)
+            self.db.session.commit()
+
+        response = self.client.post(
+            "/bookings/B-OVERRIDE-1/status",
+            data={
+                "booking_status": "Completed",
+                "employee_correction": "1",
+                "booking_notes": "Manager-approved historic booking, trip data unavailable.",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-OVERRIDE-1")
+            self.assertEqual(booking.booking_status, "Completed")
+            # The override lets the status through, but it does not
+            # fabricate the missing data -- the booking is still flagged.
+            self.assertTrue(booking.missing_info)
+
+    def test_normal_completion_of_an_already_complete_booking_is_unaffected(self) -> None:
+        with self.app.app_context():
+            booking = self.TripBooking(
+                booking_id="B-NORMAL-1",
+                trip_id="TRIP-100",
+                trip_name="Lifecycle Trip",
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type="Double",
+                currency="EGP",
+                booking_status="Confirmed",
+                booking_source="Admin",
+                payment_status="Deposit Paid",
+            )
+            self.db.session.add(booking)
+            self.db.session.commit()
+
+        response = self.client.post(
+            "/bookings/B-NORMAL-1/status",
+            data={
+                "booking_status": "Completed",
+                "payment_status": "Fully Paid",
+                # Confirmed -> Completed directly is a non-standard jump in
+                # this booking's lifecycle (independent of the new
+                # completeness gate this change adds), so it needs the same
+                # override + reason every such jump already requires.
+                "employee_correction": "1",
+                "booking_notes": "Trip completed, payment finalized.",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-NORMAL-1")
+            self.assertEqual(booking.booking_status, "Completed")
+            self.assertEqual(booking.payment_status, "Fully Paid")
+            self.assertFalse(booking.missing_info)
+
+    def test_needs_info_filter_returns_only_incomplete_bookings(self) -> None:
+        with self.app.app_context():
+            self.db.session.add(self.TripBooking(
+                booking_id="B-FILTER-COMPLETE",
+                trip_id="TRIP-100",
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type="Double",
+                currency="EGP",
+                booking_status="Confirmed",
+                booking_source="Admin",
+                payment_status="Deposit Paid",
+                missing_info=False,
+            ))
+            self.db.session.add(self.TripBooking(
+                booking_id="B-FILTER-INCOMPLETE",
+                trip_id=None,
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type=None,
+                currency=None,
+                booking_status="Draft",
+                booking_source="Auto (lead_stage_change)",
+                payment_status="Pending",
+                missing_info=True,
+            ))
+            self.db.session.commit()
+
+        response = self.client.get("/bookings/?queue=needs_info")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("B-FILTER-INCOMPLETE", body)
+        self.assertNotIn("B-FILTER-COMPLETE", body)
+
+    def test_new_booking_currency_selector_does_not_offer_eur(self) -> None:
+        response = self.client.get("/bookings/")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        currency_select = body.split('id="createBookingCurrencySelector"', 1)[1].split('</select>', 1)[0]
+        self.assertNotIn('EUR', currency_select)
+
+    def test_invalid_currency_is_rejected_server_side(self) -> None:
+        with self.app.app_context():
+            booking = self.TripBooking(
+                booking_id="B-BADCUR-1",
+                trip_id="TRIP-100",
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type="Double",
+                booking_status="Draft",
+                booking_source="Admin",
+                payment_status="Pending",
+            )
+            self.db.session.add(booking)
+            self.db.session.commit()
+
+        response = self.client.post(
+            "/bookings/B-BADCUR-1/status",
+            data={"currency": "EUR"},
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-BADCUR-1")
+            self.assertIsNone(booking.currency)
+
     def test_delete_booking_removes_links_and_related_history(self) -> None:
         with self.app.app_context():
             booking = self.TripBooking(
