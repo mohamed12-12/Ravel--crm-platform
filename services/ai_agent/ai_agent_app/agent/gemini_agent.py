@@ -495,6 +495,12 @@ class GeminiAgent:
             if isinstance(result, dict) and result.get("status") == "privacy_blocked":
                 return str(result.get("assistant_message") or AgentPrivacyPolicy.EN_RESPONSE).strip()
         workflow = session_context.get("workflow_policy") if isinstance(session_context.get("workflow_policy"), dict) else {}
+        # Defensive fallbacks below only fire when `workflow`/its
+        # assistant_message is missing entirely (workflow_policy.py already
+        # provides an Arabic assistant_message in the normal case) -- kept
+        # language-aware too so this rare path can't leak English into an
+        # all-Arabic conversation either.
+        arabic_reply = str(session_context.get("language") or "").strip().lower().startswith("ar")
         grounded_text = self._grounded_fact_text(session_context, tool_events)
         sensitive_tokens = self._sensitive_fact_tokens(reply)
         ungrounded_tokens = [token for token in sensitive_tokens if token.casefold() not in grounded_text]
@@ -518,7 +524,11 @@ class GeminiAgent:
         if ungrounded_tokens:
             return str(
                 workflow.get("assistant_message")
-                or "I need to verify that information in the CRM before I can confirm it. Please share the missing detail, or I can connect you with a human agent."
+                or (
+                    "محتاج أتأكد من المعلومة دي في الـCRM قبل ما أأكدها. من فضلك ابعت التفاصيل الناقصة، أو أقدر أحولك لموظف."
+                    if arabic_reply
+                    else "I need to verify that information in the CRM before I can confirm it. Please share the missing detail, or I can connect you with a human agent."
+                )
             ).strip()
         if self._reply_is_trusted_tool_message(reply, tool_events):
             # The reply is a tool executor's own deterministic message (e.g. "I
@@ -529,7 +539,11 @@ class GeminiAgent:
         if self._tool_events_contain_failed_contract(tool_events) and self._contains_unverified_crm_claim(reply):
             return str(
                 workflow.get("assistant_message")
-                or "I could not verify that information right now. Please try again, or I can connect you with a human agent."
+                or (
+                    "مقدرتش أتأكد من المعلومة دي دلوقتي. من فضلك جرب تاني، أو أقدر أحولك لموظف."
+                    if arabic_reply
+                    else "I could not verify that information right now. Please try again, or I can connect you with a human agent."
+                )
             ).strip()
         if not workflow or workflow.get("identity_verified"):
             return reply
@@ -539,7 +553,11 @@ class GeminiAgent:
             return reply
         return str(
             workflow.get("assistant_message")
-            or "Please share your WhatsApp number first so I can check your Ravel Traveler profile safely."
+            or (
+                "من فضلك شاركني رقم الواتساب الخاص بك الأول عشان أقدر أراجع ملفك في Ravel Traveler بأمان."
+                if arabic_reply
+                else "Please share your WhatsApp number first so I can check your Ravel Traveler profile safely."
+            )
         ).strip()
 
     @staticmethod

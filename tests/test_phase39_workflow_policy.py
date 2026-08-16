@@ -567,6 +567,34 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
         self.assertNotIn("available", room_message)
         self.assertIn("\u0627\u0643\u062a\u0628 \u0627\u0644\u062e\u064a\u0627\u0631 \u0627\u0644\u0645\u0646\u0627\u0633\u0628 \u0623\u0648 \u0631\u0642\u0645\u0647.", room_message)
 
+    def test_pre_identity_workflow_messages_are_bilingual(self) -> None:
+        """A real transcript showed an all-Arabic conversation suddenly get
+        a pure-English "Please share your WhatsApp number" reply the
+        moment a turn (a price question, pre-identity) fell through to
+        WorkflowDecision.assistant_message directly -- every consumer of
+        that field renders it verbatim with no translation, so the field
+        itself must already be in the right language.
+        """
+        policy = ConversationWorkflowPolicy()
+
+        arabic_decision = policy.evaluate({"language": "ar"})
+        self.assertEqual(arabic_decision.required_step, "collect_whatsapp_number")
+        self.assertNotIn("Please share your WhatsApp number", arabic_decision.assistant_message)
+        self.assertIn("\u0648\u0627\u062a\u0633\u0627\u0628", arabic_decision.assistant_message)
+
+        english_decision = policy.evaluate({"language": "en"})
+        self.assertIn("Please share your WhatsApp number", english_decision.assistant_message)
+
+        arabic_invalid_phone = policy.evaluate(
+            {"language": "ar", "workflow": {"lookup_status": "invalid_phone"}}
+        )
+        self.assertNotIn("Please send a valid WhatsApp", arabic_invalid_phone.assistant_message)
+        self.assertIn("\u0648\u0627\u062a\u0633\u0627\u0628", arabic_invalid_phone.assistant_message)
+
+        arabic_lookup_pending = policy.evaluate({"language": "ar", "raw_phone": "01554158741"})
+        self.assertNotIn("I will check this WhatsApp number", arabic_lookup_pending.assistant_message)
+        self.assertIn("\u0648\u0627\u062a\u0633\u0627\u0628", arabic_lookup_pending.assistant_message)
+
     def test_customer_reply_formatter_removes_markdown_and_preserves_lists(self) -> None:
         reply = format_agent_reply(
             "I found **DEmo** * **Dates:** July 28, 2026 * **Price:** $1000 * **Status:** Available"

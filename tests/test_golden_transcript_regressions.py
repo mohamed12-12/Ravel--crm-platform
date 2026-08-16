@@ -214,6 +214,44 @@ def test_arabic_query_matches_via_trip_name_ar_and_replies_show_the_arabic_name(
     assert "Red Sea Getaway" not in reply
 
 
+# ---------------------------------------------------------------------------
+# Bug: a customer asked "كام السعر؟للغرفه الدبل" (what's the price for the
+# double room) about a trip already shown to them, before giving any
+# identity. _is_trip_details_request had no price vocabulary at all, so the
+# question was never recognized as a browsing question -- it fell through
+# to the identity gate, contradicting the already-established rule that
+# browsing/asking about a trip must never require WhatsApp/identity first.
+# ---------------------------------------------------------------------------
+def test_price_question_about_shown_trip_is_answered_without_requiring_phone(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    runtime._read_only_tools = RecordingReadTools(
+        trips=[
+            {
+                "trip_id": "RT-LOC-26-RS3",
+                "trip_name": "رحلة شرم الشيخ",
+                "type": "Local",
+                "trip_type": "local",
+                "start_date": "2026-08-20",
+                "end_date": "2026-08-25",
+                "public_price": "3000 EGP",
+                "public_description": "Amazing Red Sea program.",
+                "available_single": 2,
+            },
+        ]
+    )
+    session = _send(runtime, "عايز رحلة شرم الشيخ")
+    assert session.selected_trip_id == "RT-LOC-26-RS3"
+
+    session = _send(runtime, "كام السعر؟للغرفه الدبل", session)
+
+    reply = session.messages[-1]["text"]
+    assert session.raw_phone == ""
+    assert "واتساب" not in reply
+    assert "whatsapp" not in reply.lower()
+    assert "3000" in reply
+
+
 def test_naming_an_unmatched_destination_before_identity_asks_to_clarify_not_for_phone(
     runtime: ToolCallingSessionRuntime,
 ) -> None:

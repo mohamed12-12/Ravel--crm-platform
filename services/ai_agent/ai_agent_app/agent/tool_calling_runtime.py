@@ -1857,11 +1857,27 @@ class ToolCallingSessionRuntime:
                 "info",
                 "information",
                 "program",
+                # Price is a normal pre-booking browsing question about an
+                # already-selected trip, same as its dates/description --
+                # without these, "how much is the double room?" wasn't
+                # recognized at all and fell through to the identity gate,
+                # which must never block a browsing question (see the
+                # "show trip details before identity" fix).
+                "price",
+                "prices",
+                "cost",
+                "how much",
                 "\u062a\u0641\u0627\u0635\u064a\u0644",
                 "\u0645\u0639\u0644\u0648\u0645\u0627\u062a",
                 "\u0628\u0631\u0646\u0627\u0645\u062c",
                 "\u0645\u0648\u0627\u0635\u0641\u0627\u062a",
                 "\u0648\u0635\u0641",
+                "\u0633\u0639\u0631",
+                "\u0627\u0644\u0633\u0639\u0631",
+                "\u0643\u0627\u0645",
+                "\u0628\u0643\u0627\u0645",
+                "\u062a\u0643\u0644\u0641\u0629",
+                "\u0628\u0643\u0645",
             )
         )
 

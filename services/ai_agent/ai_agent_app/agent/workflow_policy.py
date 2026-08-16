@@ -89,6 +89,14 @@ class ConversationWorkflowPolicy:
         traveler = verified or known_traveler or {}
         lookup_status = str(workflow.get("lookup_status") or "").strip().lower()
         raw_phone = str(session_context.get("raw_phone") or session_context.get("pending_raw_phone") or "").strip()
+        # Every WorkflowDecision.assistant_message below is rendered VERBATIM
+        # to the customer on several code paths (_ground_reply,
+        # _natural_interruption_fallback, _backend_required_step_reply) --
+        # none of them translate it. These were English-only, so an
+        # all-Arabic conversation could suddenly get one pure-English reply
+        # the moment a turn landed on one of these branches (e.g. a price
+        # question asked before identity was verified).
+        arabic = self._is_arabic(session_context)
 
         if lookup_status == "duplicate":
             return WorkflowDecision(
@@ -97,7 +105,11 @@ class ConversationWorkflowPolicy:
                 allowed_tools=IDENTITY_TOOLS,
                 required_step="human_review",
                 customer_message_key="duplicate_traveler_review",
-                assistant_message="This WhatsApp number matches more than one traveler profile, so a team member needs to review it before we continue.",
+                assistant_message=(
+                    "رقم الواتساب ده مرتبط بأكتر من ملف مسافر، فمحتاجين موظف من الفريق يراجعه قبل ما نكمل."
+                    if arabic
+                    else "This WhatsApp number matches more than one traveler profile, so a team member needs to review it before we continue."
+                ),
                 handoff_required=True,
                 reason="duplicate_phone_match",
             )
@@ -125,7 +137,11 @@ class ConversationWorkflowPolicy:
                 allowed_tools=IDENTITY_TOOLS,
                 required_step="collect_valid_whatsapp_number",
                 customer_message_key="invalid_phone",
-                assistant_message="Please send a valid WhatsApp mobile number. If it is outside Egypt, include the country code, for example +966512345678.",
+                assistant_message=(
+                    "من فضلك ابعت رقم واتساب صحيح. لو الرقم خارج مصر، اكتب كود الدولة معاه، مثال: +966512345678."
+                    if arabic
+                    else "Please send a valid WhatsApp mobile number. If it is outside Egypt, include the country code, for example +966512345678."
+                ),
                 reason="invalid_phone",
             )
 
@@ -140,7 +156,11 @@ class ConversationWorkflowPolicy:
                     allowed_tools={"find_traveler_by_phone", "get_traveler_profile"},
                     required_step="human_review",
                     customer_message_key="restricted_traveler_review",
-                    assistant_message="I found your traveler profile, but this request needs review by the Ravel Traveler team before we continue.",
+                    assistant_message=(
+                        "لقيت ملفك كمسافر، بس الطلب ده محتاج مراجعة من فريق Ravel Traveler قبل ما نكمل."
+                        if arabic
+                        else "I found your traveler profile, but this request needs review by the Ravel Traveler team before we continue."
+                    ),
                     verified_traveler=dict(traveler),
                     verified_status=status,
                     handoff_required=True,
@@ -155,7 +175,11 @@ class ConversationWorkflowPolicy:
                 allowed_tools=IDENTITY_TOOLS,
                 required_step="run_traveler_lookup",
                 customer_message_key="identity_lookup_pending",
-                assistant_message="I will check this WhatsApp number first, then continue with your trip request.",
+                assistant_message=(
+                    "هراجع رقم الواتساب ده الأول، وبعدين نكمل طلب رحلتك."
+                    if arabic
+                    else "I will check this WhatsApp number first, then continue with your trip request."
+                ),
                 reason="phone_collected",
             )
 
@@ -165,7 +189,11 @@ class ConversationWorkflowPolicy:
             allowed_tools=IDENTITY_TOOLS,
             required_step="collect_whatsapp_number",
             customer_message_key="identity_required",
-            assistant_message="Please share your WhatsApp number first so I can check your Ravel Traveler profile safely.",
+            assistant_message=(
+                "من فضلك شاركني رقم الواتساب الخاص بك الأول عشان أقدر أراجع ملفك في Ravel Traveler بأمان."
+                if arabic
+                else "Please share your WhatsApp number first so I can check your Ravel Traveler profile safely."
+            ),
             reason="missing_identity",
         )
 
