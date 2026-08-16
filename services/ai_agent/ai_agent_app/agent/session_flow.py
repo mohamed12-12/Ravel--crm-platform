@@ -97,6 +97,7 @@ class SessionState:
     booking_result: dict[str, Any] | None = None
     selected_trip_id: str = ""
     selected_trip_name: str = ""
+    selected_trip_name_ar: str = ""
     # Phase 11: set when the agent has just offered the trip list in
     # response to a trip-change/browse interruption while a trip was
     # already selected -- the *next* turn is allowed to select a trip by a

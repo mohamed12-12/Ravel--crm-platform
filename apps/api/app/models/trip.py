@@ -13,6 +13,7 @@ class Trip(db.Model):
     
     # Core Fields
     trip_name = db.Column(db.String(200), nullable=False)
+    trip_name_ar = db.Column(db.String(200), nullable=True)
     type = db.Column(db.String(50)) # Local / International
     year = db.Column(db.Integer)
     trip_leader = db.Column(db.String(100))
@@ -100,6 +101,7 @@ class Trip(db.Model):
         return cls(
             trip_id=clean(row.get("Trip ID")),
             trip_name=clean(row.get("Trip Name")),
+            trip_name_ar=clean(row.get("Trip Name (Arabic)")) or clean(row.get("Trip Name AR")),
             type=clean(row.get("Type")),
             year=to_int(row.get("Year")),
             trip_leader=clean(row.get("Trip Leader")),
@@ -137,6 +139,7 @@ class Trip(db.Model):
         return {
             "trip_id": self.trip_id,
             "trip_name": self.trip_name,
+            "trip_name_ar": self.trip_name_ar,
             "type": self.type,
             "year": self.year,
             "trip_leader": self.trip_leader,

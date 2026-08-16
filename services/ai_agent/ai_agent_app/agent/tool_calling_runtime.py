@@ -705,7 +705,7 @@ class ToolCallingSessionRuntime:
         """
         arabic = session.language.startswith("ar")
         if session.selected_trip_id:
-            trip_name = session.selected_trip_name or session.selected_trip_id
+            trip_name = self._session_trip_display_name(session) or session.selected_trip_id
             effective_type = self._effective_trip_type(session)
             if arabic:
                 type_word = "محلية" if effective_type == "local" else "دولية" if effective_type == "international" else ""
@@ -1410,6 +1410,30 @@ class ToolCallingSessionRuntime:
             return
         self._select_trip(session, chosen)
 
+    @staticmethod
+    def _trip_display_name(trip: dict[str, Any], language: str) -> str:
+        """The trip name to show a customer, honoring reply language.
+
+        Falls back to the English trip_name whenever trip_name_ar is blank
+        (an older, not-yet-updated trip row) rather than showing nothing --
+        see the "Missing Arabic Name" badge on the Trip Inventory page for
+        the employee-facing signal that this trip still needs it filled in.
+        """
+        if language.startswith("ar"):
+            arabic_name = str(trip.get("trip_name_ar") or "").strip()
+            if arabic_name:
+                return arabic_name
+        return str(trip.get("trip_name") or "").strip()
+
+    @staticmethod
+    def _session_trip_display_name(session: SessionState) -> str:
+        """Same as _trip_display_name, for call sites that only have the
+        session's already-selected trip name(s), not the full trip dict.
+        """
+        if session.language.startswith("ar") and session.selected_trip_name_ar:
+            return session.selected_trip_name_ar
+        return session.selected_trip_name
+
     def _select_trip(self, session: SessionState, trip: dict[str, Any]) -> None:
         previous_trip_id = str(session.selected_trip_id or "").strip()
         new_trip_id = str(trip.get("trip_id") or "").strip()
@@ -1417,6 +1441,7 @@ class ToolCallingSessionRuntime:
             self._clear_booking_dependent_state(session)
         session.selected_trip_id = str(trip.get("trip_id") or "").strip()
         session.selected_trip_name = str(trip.get("trip_name") or session.selected_trip_name or "").strip()
+        session.selected_trip_name_ar = str(trip.get("trip_name_ar") or "").strip()
         chosen_type = str(trip.get("type") or trip.get("trip_type") or "").strip().lower()
         if chosen_type in {"local", "international"}:
             session.trip_type = chosen_type
@@ -1666,22 +1691,29 @@ class ToolCallingSessionRuntime:
 
         trip_id = str(trip.get("trip_id") or "")
         trip_name = str(trip.get("trip_name") or "")
+        trip_name_ar = str(trip.get("trip_name_ar") or "")
         normalized_id = cls._normalize_trip_reference(trip_id)
         normalized_name = cls._normalize_trip_reference(trip_name)
+        normalized_name_ar = cls._normalize_trip_reference(trip_name_ar)
         compact_query = cls._compact_trip_reference(normalized_query)
         compact_id = cls._compact_trip_reference(trip_id)
         compact_name = cls._compact_trip_reference(trip_name)
+        compact_name_ar = cls._compact_trip_reference(trip_name_ar)
 
         if normalized_query == normalized_id or compact_query == compact_id:
             return 100
         if normalized_query == normalized_name or compact_query == compact_name:
             return 96
+        if normalized_name_ar and (normalized_query == normalized_name_ar or compact_query == compact_name_ar):
+            return 96
         if compact_id and compact_id in compact_query:
             return 94
         if compact_name and compact_name in compact_query:
             return 95
+        if compact_name_ar and compact_name_ar in compact_query:
+            return 95
 
-        name_tokens = set(cls._trip_name_tokens(trip_name))
+        name_tokens = set(cls._trip_name_tokens(trip_name)) | set(cls._trip_name_tokens(trip_name_ar))
         id_tokens = set(cls._trip_reference_tokens(trip_id))
         searchable_tokens = name_tokens | id_tokens
         if not searchable_tokens:
@@ -1788,7 +1820,7 @@ class ToolCallingSessionRuntime:
         if language.startswith("ar"):
             lines = ["وجدت أكثر من رحلة مطابقة. من فضلك اختر رقم الرحلة:"]
             for index, trip in enumerate(trips, start=1):
-                trip_name = str(trip.get("trip_name") or trip.get("trip_id") or "").strip()
+                trip_name = ToolCallingSessionRuntime._trip_display_name(trip, language) or str(trip.get("trip_id") or "").strip()
                 trip_id = str(trip.get("trip_id") or "").strip()
                 start_date = str(trip.get("start_date") or "").strip()
                 date_part = f" - {start_date}" if start_date else ""
@@ -1796,7 +1828,7 @@ class ToolCallingSessionRuntime:
             return "\n".join(lines)
         lines = ["I found more than one matching trip. Please choose the trip number:"]
         for index, trip in enumerate(trips, start=1):
-            trip_name = str(trip.get("trip_name") or trip.get("trip_id") or "").strip()
+            trip_name = ToolCallingSessionRuntime._trip_display_name(trip, language) or str(trip.get("trip_id") or "").strip()
             trip_id = str(trip.get("trip_id") or "").strip()
             start_date = str(trip.get("start_date") or "").strip()
             date_part = f" - {start_date}" if start_date else ""
@@ -1997,7 +2029,11 @@ class ToolCallingSessionRuntime:
     def _natural_interruption_fallback(self, session: SessionState, decision, clean_text: str) -> str:
         language = session.language
         trip = self._current_trip_for_followup(session)
-        trip_name = session.selected_trip_name or str(trip.get("trip_name") or "الرحلة" if language.startswith("ar") else "the trip")
+        trip_name = (
+            self._session_trip_display_name(session)
+            or self._trip_display_name(trip, language)
+            or ("الرحلة" if language.startswith("ar") else "the trip")
+        )
         step = str(decision.required_step or "")
         if step == "collect_group_size":
             if self._is_explanation_request(clean_text):
@@ -2398,6 +2434,7 @@ class ToolCallingSessionRuntime:
                 for key in (
                     "trip_id",
                     "trip_name",
+                    "trip_name_ar",
                     "destination",
                     "country",
                     "city",
@@ -2452,7 +2489,7 @@ class ToolCallingSessionRuntime:
         room_type: str = "",
         currency: str = "",
     ) -> str:
-        trip_name = str(trip.get("trip_name") or "this trip").strip()
+        trip_name = ToolCallingSessionRuntime._trip_display_name(trip, language) or "this trip"
         trip_type = str(trip.get("trip_type") or trip.get("type") or "").strip().lower()
         start_date = str(trip.get("start_date") or "").strip()
         end_date = str(trip.get("end_date") or "").strip()
@@ -2574,7 +2611,9 @@ class ToolCallingSessionRuntime:
                     f"There are no {trip_type} trips open right now. "
                     "I've logged your request so the Ravel team can review it and reach out if a suitable trip opens up."
                 )
-            return ToolCallingSessionRuntime._no_matching_trip_reply(session.trip_query or session.selected_trip_name, session.language)
+            return ToolCallingSessionRuntime._no_matching_trip_reply(
+                session.trip_query or ToolCallingSessionRuntime._session_trip_display_name(session), session.language
+            )
 
         trip_type = str(session.trip_type or "").strip().lower()
         arabic = session.language.startswith("ar")
@@ -2585,7 +2624,7 @@ class ToolCallingSessionRuntime:
             heading = f"دي الرحلات {type_label} المتاحة حاليا:" if type_label else "دي الرحلات المتاحة حاليا:"
             lines = [heading, ""]
             for index, trip in enumerate(trips, start=1):
-                name = str(trip.get("trip_name") or trip.get("trip_id") or "رحلة بدون اسم").strip()
+                name = ToolCallingSessionRuntime._trip_display_name(trip, session.language) or str(trip.get("trip_id") or "").strip() or "رحلة بدون اسم"
                 lines.append(f"{index}) {name}")
                 start_date = str(trip.get("start_date") or "").strip()
                 end_date = str(trip.get("end_date") or "").strip()
@@ -2648,7 +2687,7 @@ class ToolCallingSessionRuntime:
     def _backend_required_step_reply(self, session: SessionState, decision, clean_text: str = "") -> str:
         language = session.language
         current_trip = self._current_trip_for_followup(session)
-        trip_name = session.selected_trip_name or str(current_trip.get("trip_name") or "").strip()
+        trip_name = self._session_trip_display_name(session) or self._trip_display_name(current_trip, language)
         step = str(decision.required_step or "")
         prefix = ""
         if self._is_hostile_message(clean_text):
@@ -2749,7 +2788,7 @@ class ToolCallingSessionRuntime:
         return True
 
     def _booking_confirmation_summary(self, session: SessionState) -> str:
-        trip_name = session.selected_trip_name or session.selected_trip_id or "the selected trip"
+        trip_name = self._session_trip_display_name(session) or session.selected_trip_id or "the selected trip"
         room = " ".join(part for part in (session.room_type, session.room_group) if part).strip() or "not specified"
         room_request = self._room_requirements_summary(session)
         if room_request:
@@ -3043,6 +3082,7 @@ class ToolCallingSessionRuntime:
         session.trip_query = ""
         session.selected_trip_id = ""
         session.selected_trip_name = ""
+        session.selected_trip_name_ar = ""
         session.room_type = ""
         session.room_group = ""
         session.room_requirements = {}
@@ -3279,7 +3319,7 @@ class ToolCallingSessionRuntime:
         room_type: str = "",
         currency: str = "",
     ) -> str:
-        trip_name = str(trip.get("trip_name") or "this trip").strip()
+        trip_name = ToolCallingSessionRuntime._trip_display_name(trip, language) or "this trip"
         trip_type = str(trip.get("trip_type") or trip.get("type") or "").strip().lower()
         start_date = str(trip.get("start_date") or "").strip()
         end_date = str(trip.get("end_date") or "").strip()
@@ -3392,13 +3432,14 @@ class ToolCallingSessionRuntime:
         if public_trip:
             session.selected_trip_id = str(public_trip.get("trip_id") or "").strip()
             session.selected_trip_name = str(public_trip.get("trip_name") or session.selected_trip_name or "").strip()
+            session.selected_trip_name_ar = str(public_trip.get("trip_name_ar") or "").strip()
             self._update_collection_state(session, selected_trip=True, destination=bool(session.selected_trip_name))
             return dict(public_trip)
         return {}
 
     @staticmethod
     def _trip_media_reply(media_result: dict[str, Any], trip: dict[str, Any], language: str) -> str:
-        trip_name = str(trip.get("trip_name") or trip.get("trip_id") or "this trip").strip()
+        trip_name = ToolCallingSessionRuntime._trip_display_name(trip, language) or str(trip.get("trip_id") or "").strip() or "this trip"
         media = list(media_result.get("media") or []) if isinstance(media_result, dict) else []
         if not media:
             if language.startswith("ar"):
@@ -3804,6 +3845,7 @@ class ToolCallingSessionRuntime:
         session.trip_query = ""
         session.selected_trip_id = ""
         session.selected_trip_name = ""
+        session.selected_trip_name_ar = ""
         session.booking_result = None
         self._clear_booking_dependent_state(session)
         preview = dict(session.preview or {})
@@ -5032,7 +5074,7 @@ class ToolCallingSessionRuntime:
     def _booking_draft_created_message(self, session: SessionState, booking_id: str) -> str:
         booking_result = session.booking_result if isinstance(session.booking_result, dict) else {}
         status = str(booking_result.get("booking_status") or session.booking_status or "Draft").strip()
-        trip_name = session.selected_trip_name or session.selected_trip_id
+        trip_name = self._session_trip_display_name(session) or session.selected_trip_id
         if session.language.startswith("ar"):
             return (
                 f"تم تسجيل طلب الحجز {booking_id} لرحلة {trip_name} وحالته {status}.\n"
@@ -5945,6 +5987,7 @@ class ToolCallingSessionRuntime:
         session.trip_query = ""
         session.selected_trip_id = ""
         session.selected_trip_name = ""
+        session.selected_trip_name_ar = ""
         self._clear_booking_dependent_state(session)
         preview = dict(session.preview or {})
         preview.pop("trip_result", None)

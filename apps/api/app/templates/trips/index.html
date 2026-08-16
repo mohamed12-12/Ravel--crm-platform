@@ -104,6 +104,11 @@
             <td class="mono">{{ trip.trip_id }}</td>
             <td>
                 <div class="primary">{{ trip.trip_name }}</div>
+                {% if trip.trip_name_ar %}
+                <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px" dir="rtl">{{ trip.trip_name_ar }}</div>
+                {% else %}
+                <span class="badge badge-red" title="Add the Arabic trip name so the AI agent can match and reply in Arabic">Missing Arabic Name</span>
+                {% endif %}
                 {% if trip.trip_leader %}
                 <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px">{{ trip.trip_leader }}</div>
                 {% endif %}
@@ -205,6 +210,11 @@
                 <div class="form-group col-span-2">
                     <label class="form-label">Trip Name *</label>
                     <input class="form-input" type="text" name="trip_name" required placeholder="e.g. Cappadocia Spring 2026">
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Arabic Trip Name *</label>
+                    <input class="form-input" type="text" name="trip_name_ar" dir="rtl" required placeholder="مثال: كابادوكيا ربيع 2026">
+                    <div class="form-hint">Required so the AI agent can match and reply to Arabic-speaking customers correctly.</div>
                 </div>
                 <div class="form-group">
                     <label class="form-label">Trip ID (auto if blank)</label>

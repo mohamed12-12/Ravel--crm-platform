@@ -94,6 +94,7 @@ def index():
     if q:
         query = query.filter(or_(
             Trip.trip_name.ilike(f'%{q}%'),
+            Trip.trip_name_ar.ilike(f'%{q}%'),
             Trip.trip_id.ilike(f'%{q}%'),
             Trip.trip_leader.ilike(f'%{q}%'),
         ))
@@ -220,6 +221,7 @@ def create():
 
     # Auto-generate trip ID if blank
     trip_name = data.get('trip_name', '').strip()
+    trip_name_ar = data.get('trip_name_ar', '').strip()
     trip_id = data.get('trip_id', '').strip()
     trip_type = data.get('type', '').strip()
     trip_year = None
@@ -233,6 +235,10 @@ def create():
 
     if db.session.get(Trip, trip_id):
         flash(f"Trip ID '{trip_id}' already exists.", 'error')
+        return redirect(url_for('trips.index'))
+
+    if not trip_name_ar:
+        flash("Arabic Trip Name is required so the AI agent can match and reply in Arabic.", 'error')
         return redirect(url_for('trips.index'))
 
     def to_date(v):
@@ -252,6 +258,7 @@ def create():
     trip = Trip(
         trip_id=trip_id,
         trip_name=trip_name,
+        trip_name_ar=trip_name_ar,
         type=trip_type,
         year=to_int(data.get('year')),
         trip_leader=data.get('trip_leader', ''),
@@ -303,6 +310,10 @@ def update(trip_id):
     trip = db.get_or_404(Trip, trip_id)
     data = request.form.to_dict()
 
+    if not data.get('trip_name_ar', '').strip():
+        flash("Arabic Trip Name is required so the AI agent can match and reply in Arabic.", 'error')
+        return redirect(url_for('trips.detail', trip_id=trip_id))
+
     def to_date(v):
         if not v:
             return None
@@ -318,6 +329,7 @@ def update(trip_id):
             return 0
 
     trip.trip_name = data.get('trip_name', trip.trip_name)
+    trip.trip_name_ar = data.get('trip_name_ar', trip.trip_name_ar).strip()
     trip.type = data.get('type', trip.type)
     trip.trip_leader = data.get('trip_leader', trip.trip_leader)
     trip.start_date = to_date(data.get('start_date')) or trip.start_date

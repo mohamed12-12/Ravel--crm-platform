@@ -57,6 +57,7 @@ class ReadOnlyCRMTools:
             for key in (
                 "trip_id",
                 "trip_name",
+                "trip_name_ar",
                 "destination",
                 "country",
                 "city",

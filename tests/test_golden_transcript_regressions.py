@@ -177,6 +177,43 @@ def test_naming_a_destination_before_any_identity_shows_trip_details_without_ask
     assert "whatsapp" not in reply.lower()
 
 
+# ---------------------------------------------------------------------------
+# Feature: a live customer wrote "شرم الشيخ" against a real trip whose ONLY
+# name on file was the English "Sharm-Elshekh" -- it matched (via the
+# earlier hyphen-tokenizer fix), but the reply then showed the English name
+# back to an Arabic-speaking customer ("اسم الرحلة: Sharm-Elshekh"), and a
+# customer writing in pure Arabic vocabulary the trip's English name doesn't
+# contain would not have matched at all. Trips now carry a mandatory
+# trip_name_ar field (see apps/api/app/models/trip.py) that both the
+# matcher and every customer-facing reply must use.
+# ---------------------------------------------------------------------------
+def test_arabic_query_matches_via_trip_name_ar_and_replies_show_the_arabic_name(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    runtime._read_only_tools = RecordingReadTools(
+        trips=[
+            {
+                "trip_id": "RT-LOC-26-RS2",
+                "trip_name": "Red Sea Getaway",
+                "trip_name_ar": "رحلة شرم الشيخ",
+                "type": "Local",
+                "trip_type": "local",
+                "start_date": "2026-09-10",
+                "end_date": "2026-09-14",
+                "public_price": "3000 EGP",
+                "public_description": "Confirmed Red Sea program.",
+                "available_single": 2,
+            },
+        ]
+    )
+    session = _send(runtime, "عايز رحلة شرم الشيخ")
+
+    reply = session.messages[-1]["text"]
+    assert session.selected_trip_id == "RT-LOC-26-RS2"
+    assert "شرم الشيخ" in reply
+    assert "Red Sea Getaway" not in reply
+
+
 def test_naming_an_unmatched_destination_before_identity_asks_to_clarify_not_for_phone(
     runtime: ToolCallingSessionRuntime,
 ) -> None:

@@ -45,6 +45,7 @@ def create_operational_tables(connection: sqlite3.Connection) -> None:
         CREATE TABLE trips (
             trip_id TEXT PRIMARY KEY,
             trip_name TEXT,
+            trip_name_ar TEXT,
             type TEXT,
             year INTEGER,
             trip_leader TEXT,

@@ -946,6 +946,7 @@ class PostgresAgentCRMTools:
             [
                 str(trip.get("trip_id") or ""),
                 str(trip.get("trip_name") or ""),
+                str(trip.get("trip_name_ar") or ""),
                 str(trip.get("type") or ""),
                 str(trip.get("trip_leader") or ""),
                 str(trip.get("public_description") or ""),

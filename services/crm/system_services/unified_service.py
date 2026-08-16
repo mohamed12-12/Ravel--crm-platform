@@ -3479,6 +3479,7 @@ class UnifiedCRMService:
             "sales_notes",
         ]
         optional_columns = [
+            "trip_name_ar",
             "itinerary",
             "inclusions",
             "exclusions",
@@ -4355,6 +4356,7 @@ class UnifiedCRMService:
             "row": 0,
             "trip_id": str(value("trip_id") or "").strip(),
             "trip_name": str(value("trip_name") or "").strip(),
+            "trip_name_ar": str(value("trip_name_ar") or "").strip(),
             "trip_type": str(value("type") or "").strip(),
             "year": self._as_int(value("year")),
             "start_date": self._iso_date(value("start_date")),

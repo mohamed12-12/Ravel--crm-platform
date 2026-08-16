@@ -328,6 +328,11 @@
                     <label class="form-label">Trip Name</label>
                     <input class="form-input" type="text" name="trip_name" value="{{ trip.trip_name }}" required>
                 </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Arabic Trip Name *</label>
+                    <input class="form-input" type="text" name="trip_name_ar" dir="rtl" value="{{ trip.trip_name_ar or '' }}" required placeholder="مثال: كابادوكيا ربيع 2026">
+                    <div class="form-hint">Required so the AI agent can match and reply to Arabic-speaking customers correctly.</div>
+                </div>
                 <div class="form-group">
                     <label class="form-label">Type</label>
                     <select class="form-select" name="type">

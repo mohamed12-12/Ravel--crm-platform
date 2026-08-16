@@ -101,6 +101,7 @@ class Phase2TripRedesignTests(unittest.TestCase):
             "/trips/",
             data={
                 "trip_name": "Auto ID Trip",
+                "trip_name_ar": "رحلة تجريبية",
                 "type": "Local",
                 "year": "2026",
                 "sales_status": "Open",
@@ -119,6 +120,7 @@ class Phase2TripRedesignTests(unittest.TestCase):
             "/trips/",
             data={
                 "trip_name": "Split Rooms",
+                "trip_name_ar": "غرف مقسمة",
                 "trip_id": "",
                 "type": "International",
                 "year": "2026",
@@ -148,6 +150,7 @@ class Phase2TripRedesignTests(unittest.TestCase):
             "/trips/",
             data={
                 "trip_name": "Program Trip",
+                "trip_name_ar": "رحلة البرنامج",
                 "trip_id": "RT-LOC-26-PROG",
                 "type": "Local",
                 "year": "2026",
@@ -170,6 +173,7 @@ class Phase2TripRedesignTests(unittest.TestCase):
             "/trips/RT-LOC-26-PROG",
             data={
                 "trip_name": "Program Trip Updated",
+                "trip_name_ar": "رحلة البرنامج المحدثة",
                 "type": "Local",
                 "sales_status": "Open",
                 "itinerary": "Day 1: Museum visit",
@@ -191,6 +195,7 @@ class Phase2TripRedesignTests(unittest.TestCase):
             "/trips/",
             data={
                 "trip_name": "Room Price Trip",
+                "trip_name_ar": "رحلة أسعار الغرف",
                 "trip_id": "RT-LOC-26-PRICE",
                 "type": "Local",
                 "year": "2026",
@@ -216,6 +221,7 @@ class Phase2TripRedesignTests(unittest.TestCase):
             "/trips/RT-LOC-26-PRICE",
             data={
                 "trip_name": "Room Price Trip Updated",
+                "trip_name_ar": "رحلة أسعار الغرف المحدثة",
                 "type": "Local",
                 "sales_status": "Open",
                 "public_price": "2100 EGP",
@@ -244,6 +250,57 @@ class Phase2TripRedesignTests(unittest.TestCase):
             self.assertEqual(trip.trip_name, "Room Price Trip Updated")
             self.assertEqual(trip.room_prices["Single"]["USD"], "95")
             self.assertEqual(trip.room_prices["Double"]["EGP"], "2200")
+
+    def test_create_without_arabic_name_is_rejected(self) -> None:
+        """The AI agent can only match/reply to Arabic-speaking customers
+        using a trip's Arabic name -- see trip_name_ar on the Trip model.
+        Creating a trip without it must be rejected rather than silently
+        leaving the field blank.
+        """
+        response = self.client.post(
+            "/trips/",
+            data={
+                "trip_name": "No Arabic Name Trip",
+                "type": "Local",
+                "year": "2026",
+                "sales_status": "Open",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            trip = Trip.query.filter_by(trip_name="No Arabic Name Trip").first()
+            self.assertIsNone(trip)
+
+    def test_update_clearing_arabic_name_is_rejected(self) -> None:
+        response = self.client.post(
+            "/trips/",
+            data={
+                "trip_name": "Has Arabic Name",
+                "trip_name_ar": "اسم عربي",
+                "trip_id": "RT-LOC-26-HASAR",
+                "type": "Local",
+                "year": "2026",
+                "sales_status": "Open",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+
+        update = self.client.post(
+            "/trips/RT-LOC-26-HASAR",
+            data={
+                "trip_name": "Has Arabic Name",
+                "trip_name_ar": "",
+                "type": "Local",
+                "sales_status": "Open",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(update.status_code, 302)
+        with self.app.app_context():
+            trip = db.session.get(Trip, "RT-LOC-26-HASAR")
+            self.assertEqual(trip.trip_name_ar, "اسم عربي")
 
 
 if __name__ == "__main__":
