@@ -695,6 +695,7 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
                 traveler_id="TR100",
                 traveler_name="Returning Traveler",
                 room_type="Double",
+                currency="EGP",
                 booking_status="Draft",
                 booking_source="Admin",
                 payment_status="Pending",
@@ -729,6 +730,43 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
             self.assertEqual(traveler.total_trips, 0)
             self.assertEqual(traveler.lifetime_revenue, 0)
 
+    def test_lifetime_revenue_ignores_a_booking_missing_currency(self) -> None:
+        """Bug: UnifiedCRMService.recalculate_traveler_stats (and the
+        Postgres path in app/services/traveler_stats.py) used to compute
+        lifetime_revenue from Trip.public_price alone, completely ignoring
+        booking.currency and room-specific pricing -- a duplicate of, and
+        inconsistent with, app/services/revenue.py's booking_revenue(),
+        which Revenue Analytics and the live per-traveler revenue summary
+        both use and which requires a recognized currency. That meant a
+        Completed/Fully Paid booking with no currency set (exactly what an
+        auto-created-from-lead booking starts as) could show nonzero
+        Lifetime Revenue while being completely invisible on the company
+        Revenue Analytics dashboard for the same reason. Both paths now
+        share booking_revenue() as the single source of truth, so a
+        booking with no currency correctly contributes $0 everywhere, not
+        just on the dashboard.
+        """
+        with self.app.app_context():
+            self.db.session.add(self.TripBooking(
+                booking_id="B-NOCUR-1",
+                trip_id="TRIP-100",
+                trip_name="Lifecycle Trip",
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type="Double",
+                currency=None,
+                booking_status="Completed",
+                booking_source="Admin",
+                payment_status="Fully Paid",
+            ))
+            self.db.session.commit()
+
+        self.service.recalculate_traveler_stats("TR100")
+
+        with self.app.app_context():
+            traveler = self.db.session.get(self.Traveler, "TR100")
+            self.assertEqual(traveler.lifetime_revenue or 0, 0)
+
     def test_traveler_detail_recalculates_stale_summary_from_bookings(self) -> None:
         with self.app.app_context():
             traveler = self.db.session.get(self.Traveler, "TR100")
@@ -744,6 +782,7 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
                     traveler_id="TR100",
                     traveler_name="Returning Traveler",
                     room_type="Single",
+                    currency="EGP",
                     group_size=3,
                     booking_status="Confirmed",
                     booking_source="Admin",

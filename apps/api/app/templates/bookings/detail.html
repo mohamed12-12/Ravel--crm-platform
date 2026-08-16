@@ -176,7 +176,7 @@
                 </div>
                 <div>
                     <div style="font-weight:700;color:var(--text-main)">{{ traveler.full_name }}</div>
-                    <div style="font-size:0.78rem;color:var(--text-muted)">{{ traveler.traveler_id }} · {{ traveler.status }} · {{ traveler.total_trips }} trips · ${{ '{:,.0f}'.format(traveler.lifetime_revenue or 0) }} USD lifetime</div>
+                    <div style="font-size:0.78rem;color:var(--text-muted)">{{ traveler.traveler_id }} · {{ traveler.status }} · {{ traveler.total_trips }} trips · {{ '{:,.0f}'.format(traveler.lifetime_revenue or 0) }} lifetime revenue</div>
                 </div>
             </div>
         </div>

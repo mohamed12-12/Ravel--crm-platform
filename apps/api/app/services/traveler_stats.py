@@ -14,10 +14,8 @@ db_health(); this mirrors that same backend check.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
 
 from flask import current_app
 
@@ -25,22 +23,7 @@ from app.extensions import db
 from app.models.booking import CEBooking, TripBooking
 from app.models.traveler import Traveler
 from app.models.trip import Trip
-
-_REVENUE_BOOKING_STATUSES = {"confirmed", "paid", "completed"}
-_REVENUE_PAYMENT_STATUSES = {"fully paid", "paid"}
-
-
-def _parse_money(value: Any) -> float:
-    text = str(value or "").strip()
-    if not text:
-        return 0.0
-    cleaned = re.sub(r"[^0-9.]", "", text.replace(",", ""))
-    if not cleaned:
-        return 0.0
-    try:
-        return float(cleaned)
-    except ValueError:
-        return 0.0
+from app.services.revenue import booking_revenue
 
 
 def _recalculate_postgres(traveler_id: str) -> None:
@@ -48,27 +31,33 @@ def _recalculate_postgres(traveler_id: str) -> None:
     if not traveler:
         return
 
-    rows = (
-        db.session.query(TripBooking, Trip.type, Trip.public_price)
-        .join(Trip, Trip.trip_id == TripBooking.trip_id)
-        .filter(TripBooking.traveler_id == traveler_id)
-        .all()
-    )
+    bookings = TripBooking.query.filter(TripBooking.traveler_id == traveler_id).all()
+    trip_ids = {b.trip_id for b in bookings if b.trip_id}
+    trips = {t.trip_id: t for t in Trip.query.filter(Trip.trip_id.in_(trip_ids)).all()} if trip_ids else {}
+
     local = 0
     intl = 0
     revenue = 0.0
-    for booking, trip_type, public_price in rows:
+    for booking in bookings:
         status = (booking.booking_status or "").strip().lower()
         if status == "cancelled":
             continue
-        normalized_type = (trip_type or "").strip().lower()
+        trip = trips.get(booking.trip_id)
+        normalized_type = (trip.type or "").strip().lower() if trip else ""
         if normalized_type == "local":
             local += 1
         elif normalized_type == "international":
             intl += 1
-        payment_status = (booking.payment_status or "").strip().lower()
-        if status in _REVENUE_BOOKING_STATUSES and payment_status in _REVENUE_PAYMENT_STATUSES:
-            revenue += _parse_money(public_price) * max(booking.group_size or 1, 1)
+        # booking_revenue() is the same rule Revenue Analytics and the live
+        # per-traveler revenue summary use -- room/currency-specific
+        # pricing, not just Trip.public_price, and it requires a currency
+        # this booking actually recognizes. Using anything else here is
+        # exactly how this figure used to silently drift from what the rest
+        # of the CRM shows for the same booking.
+        result = booking_revenue(booking, trip)
+        if result is not None:
+            _currency, amount = result
+            revenue += amount
 
     comm_events = (
         db.session.query(CEBooking)

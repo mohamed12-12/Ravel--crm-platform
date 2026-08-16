@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from openpyxl import load_workbook
@@ -22,6 +23,7 @@ from .field_mapping import (
     TRIPS_SHEET_NAME,
 )
 from .phone_normalization import normalize_phone_input
+from .revenue_rules import booking_revenue
 from .trip_program import build_trip_program
 from .trip_pricing import parse_room_prices
 
@@ -521,19 +523,41 @@ class UnifiedCRMService:
 
                 revenue_rows = connection.execute(
                     """
-                    SELECT b.group_size, t.public_price
+                    SELECT b.booking_status, b.payment_status, b.currency, b.room_type, b.group_size,
+                           t.trip_id AS trip_trip_id, t.public_price AS trip_public_price,
+                           t.room_prices_json AS trip_room_prices_json
                     FROM trip_bookings b
-                    JOIN trips t ON TRIM(b.trip_id) = TRIM(t.trip_id)
+                    LEFT JOIN trips t ON TRIM(b.trip_id) = TRIM(t.trip_id)
                     WHERE TRIM(b.traveler_id) = ?
-                      AND UPPER(TRIM(IFNULL(b.booking_status, ''))) IN ('CONFIRMED', 'PAID', 'COMPLETED')
-                      AND UPPER(TRIM(IFNULL(b.payment_status, ''))) IN ('FULLY PAID', 'PAID')
                     """,
                     (traveler_id.strip(),),
                 ).fetchall()
-                lifetime_revenue = sum(
-                    self._parse_money(row["public_price"]) * max(self._as_int(row["group_size"], default=1), 1)
-                    for row in revenue_rows
-                )
+                # booking_revenue() is the same rule Revenue Analytics and the
+                # live per-traveler revenue summary use (room/currency-specific
+                # pricing, requires a recognized currency) -- not a second,
+                # currency-blind calculation that only ever looked at
+                # Trip.public_price regardless of what currency the booking
+                # was actually recorded in.
+                lifetime_revenue = 0.0
+                for row in revenue_rows:
+                    booking_like = SimpleNamespace(
+                        booking_status=row["booking_status"],
+                        payment_status=row["payment_status"],
+                        currency=row["currency"],
+                        room_type=row["room_type"],
+                        group_size=row["group_size"],
+                    )
+                    trip_like = None
+                    if row["trip_trip_id"]:
+                        trip_dict = {
+                            "public_price": row["trip_public_price"],
+                            "room_prices_json": row["trip_room_prices_json"],
+                        }
+                        trip_like = SimpleNamespace(to_dict=lambda d=trip_dict: d)
+                    result = booking_revenue(booking_like, trip_like)
+                    if result is not None:
+                        _currency, amount = result
+                        lifetime_revenue += amount
 
                 # Update the database
                 connection.execute(
@@ -551,19 +575,6 @@ class UnifiedCRMService:
                 connection.commit()
             except sqlite3.OperationalError:
                 pass
-
-    @staticmethod
-    def _parse_money(value: Any) -> float:
-        text = str(value or "").strip()
-        if not text:
-            return 0.0
-        cleaned = re.sub(r"[^0-9.]", "", text.replace(",", ""))
-        if not cleaned:
-            return 0.0
-        try:
-            return float(cleaned)
-        except ValueError:
-            return 0.0
 
     def refresh_traveler_sheet_stats(self, traveler_id: str) -> bool:
         """Pull profile counters from the Travelers sheet for one traveler."""
