@@ -1632,6 +1632,21 @@ class ToolCallingSessionRuntime:
         ]
 
     @classmethod
+    def _trip_name_tokens(cls, value: str) -> list[str]:
+        """Like _trip_reference_tokens, but treats a hyphen as a word
+        separator rather than part of the word -- a trip NAME like
+        "Sharm-Elshekh" is a two-word phrase joined by a hyphen for display,
+        not one glued word, so a customer saying just "sharm" must still
+        match it via ordinary word-overlap scoring. Trip IDs (RT-LOC-26-900)
+        intentionally keep hyphens glued via _trip_reference_tokens instead
+        -- splitting those would make a bare year/type fragment ("26",
+        "loc") token-match every trip in that year/type, a much worse
+        false-positive than the one this fixes. This generalizes to any
+        hyphenated trip name in the catalog, not just one destination.
+        """
+        return cls._trip_reference_tokens(str(value or "").replace("-", " "))
+
+    @classmethod
     def _compact_trip_reference(cls, value: str) -> str:
         return re.sub(r"[\W_]+", "", cls._normalize_trip_reference(value), flags=re.UNICODE)
 
@@ -1666,7 +1681,7 @@ class ToolCallingSessionRuntime:
         if compact_name and compact_name in compact_query:
             return 95
 
-        name_tokens = set(cls._trip_reference_tokens(trip_name))
+        name_tokens = set(cls._trip_name_tokens(trip_name))
         id_tokens = set(cls._trip_reference_tokens(trip_id))
         searchable_tokens = name_tokens | id_tokens
         if not searchable_tokens:

@@ -191,6 +191,40 @@ def test_naming_an_unmatched_destination_before_identity_asks_to_clarify_not_for
 
 
 # ---------------------------------------------------------------------------
+# Bug: a customer typed just "sharm" (a partial mention) against a real
+# catalog trip literally named "Sharm-Elshekh". It did not match -- only the
+# full "sharm elshekh" did -- because _trip_reference_score tokenized the
+# hyphenated trip NAME as one glued token ("sharm-elshekh"), so "sharm" alone
+# had zero token overlap with it. Trip IDs (RT-LOC-26-900) intentionally
+# keep hyphens glued; trip NAMES must not, since a hyphen there is just a
+# display-friendly word separator. This generalizes to any hyphenated trip
+# name in the catalog, not a fix specific to Sharm El Sheikh.
+# ---------------------------------------------------------------------------
+def test_partial_mention_of_a_hyphenated_trip_name_still_matches(runtime: ToolCallingSessionRuntime) -> None:
+    runtime._read_only_tools = RecordingReadTools(
+        trips=[
+            {
+                "trip_id": "RT-LOC-26-900",
+                "trip_name": "Sharm-Elshekh",
+                "type": "Local",
+                "trip_type": "local",
+                "start_date": "2026-08-20",
+                "end_date": "2026-08-25",
+                "public_price": "2500 EGP",
+                "public_description": "amazing tripe",
+                "available_single": 2,
+            },
+        ]
+    )
+    session = _send(runtime, "sharm")
+
+    reply = session.messages[-1]["text"]
+    assert "Sharm-Elshekh" in reply
+    assert session.selected_trip_id == "RT-LOC-26-900"
+    assert session.stage == "public_trip_details"
+
+
+# ---------------------------------------------------------------------------
 # Bug: a real customer answered "collect_trip_type" (local inside Egypt or
 # international outside Egypt?) by naming their actual destination -- "شرم"
 # then "شرم الشيخ" then "ايواه شرم الشيخ" -- three times in a row. Sharm El
