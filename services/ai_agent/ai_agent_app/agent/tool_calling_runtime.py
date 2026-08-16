@@ -1726,8 +1726,20 @@ class ToolCallingSessionRuntime:
         score = int(45 + (coverage * 30) + (name_coverage * 20))
         if len(set(matched)) >= 2:
             score += 10
-        if len(set(query_tokens)) == 1 and len(next(iter(set(query_tokens)))) < 4:
-            score -= 20
+        if len(set(query_tokens)) == 1:
+            only_token = next(iter(set(query_tokens)))
+            # Arabic script omits short vowels, so real destination names are
+            # routinely 3 characters ("شرم", "دهب", "دبي", "قطر") -- the same
+            # length that is almost always a generic/filler word in Latin
+            # script ("sea", "spa", "new"). Penalizing by a single length
+            # cutoff calibrated for English silently rejected every short
+            # Arabic place name a customer might type alone; penalize by
+            # script instead, so this covers any short Arabic destination,
+            # not one hardcoded name.
+            is_arabic_token = bool(re.search(r"[\u0600-\u06ff]", only_token))
+            min_confident_length = 3 if is_arabic_token else 4
+            if len(only_token) < min_confident_length:
+                score -= 20
         return max(0, min(score, 89))
 
     @classmethod

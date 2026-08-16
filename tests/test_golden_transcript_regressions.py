@@ -300,6 +300,73 @@ def test_partial_mention_of_a_hyphenated_trip_name_still_matches(runtime: ToolCa
 
 
 # ---------------------------------------------------------------------------
+# Bug: a real customer typed only "شرم" (the short, common way Egyptians say
+# "Sharm el-Sheikh") against a real catalog trip whose name is bilingual and
+# has extra descriptive words, e.g. trip_name="Red Sea Getaway" (English) and
+# trip_name_ar="رحلة شرم الشيخ" (Arabic, with a leading filler word). This
+# scored only 59/100 -- below the 65 confident-match threshold -- purely
+# because _trip_reference_score penalized ANY single-token query shorter
+# than 4 characters by 20 points, a cutoff calibrated for English (where a
+# short word like "sea"/"spa" is almost always generic/filler). Arabic
+# script omits short vowels, so real destination names are routinely 3
+# characters ("شرم", "دهب", "دبي", "قطر") -- the penalty was silently
+# rejecting every short Arabic place name a customer might type alone, not
+# just Sharm. Fixed by scoping the length cutoff by script: 3 for Arabic
+# tokens, 4 for everything else. Generic short English words like "sea" must
+# still lose the tie-break below (a different, deliberate test), proving the
+# fix is script-scoped, not a blanket removal of the anti-false-positive
+# guard.
+# ---------------------------------------------------------------------------
+def test_bare_short_arabic_destination_word_matches_a_bilingual_trip_name(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    runtime._read_only_tools = RecordingReadTools(
+        trips=[
+            {
+                "trip_id": "RT-LOC-26-RS4",
+                "trip_name": "Red Sea Getaway",
+                "trip_name_ar": "رحلة شرم الشيخ",
+                "type": "Local",
+                "trip_type": "local",
+                "start_date": "2026-08-20",
+                "end_date": "2026-08-25",
+                "public_price": "3000 EGP",
+                "public_description": "Amazing Red Sea program.",
+                "available_single": 2,
+            },
+        ]
+    )
+    session = _send(runtime, "شرم")
+
+    reply = session.messages[-1]["text"]
+    assert session.selected_trip_id == "RT-LOC-26-RS4"
+    assert "شرم الشيخ" in reply
+
+
+def test_bare_short_english_word_still_does_not_confidently_match_unrelated_trip(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    runtime._read_only_tools = RecordingReadTools(
+        trips=[
+            {
+                "trip_id": "RT-LOC-26-RS5",
+                "trip_name": "Red Sea Getaway",
+                "type": "Local",
+                "trip_type": "local",
+                "start_date": "2026-08-20",
+                "end_date": "2026-08-25",
+                "public_price": "3000 EGP",
+                "public_description": "Amazing Red Sea program.",
+                "available_single": 2,
+            },
+        ]
+    )
+    session = _send(runtime, "sea")
+
+    assert session.selected_trip_id == ""
+
+
+# ---------------------------------------------------------------------------
 # Bug: a real customer answered "collect_trip_type" (local inside Egypt or
 # international outside Egypt?) by naming their actual destination -- "شرم"
 # then "شرم الشيخ" then "ايواه شرم الشيخ" -- three times in a row. Sharm El
