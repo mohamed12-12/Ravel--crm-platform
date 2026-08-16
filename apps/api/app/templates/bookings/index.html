@@ -91,8 +91,13 @@
             <td>
                 {% if b.payment_status == 'Fully Paid' %}<span class="badge badge-green">{{ b.payment_status }}</span>
                 {% elif b.payment_status == 'Deposit Paid' %}<span class="badge badge-yellow">{{ b.payment_status }}</span>
-                {% elif b.payment_status == 'Refunded' %}<span class="badge badge-red">{{ b.payment_status }}</span>
+                {% elif b.payment_status in ['Refunded', 'Full Refund', 'Partial Refund'] %}<span class="badge badge-red">{{ b.payment_status }}</span>
                 {% else %}<span class="badge badge-gray">{{ b.payment_status or 'Pending' }}</span>{% endif %}
+                {% if b.payment_status in ['Refunded', 'Full Refund', 'Partial Refund'] %}
+                <div style="font-size:0.7rem;color:var(--red);margin-top:0.2rem">
+                    {% if b.refund_amount is not none %}- {{ b.currency or '' }} {{ '{:,.2f}'.format(b.refund_amount) }}{% else %}Amount not recorded{% endif %}
+                </div>
+                {% endif %}
             </td>
             <td>{{ b.assigned_user.display_name if b.assigned_user else (b.assigned_to or 'Unassigned') }}</td>
             <td style="font-size:0.78rem;color:var(--text-muted)">{{ b.draft_created_at.strftime('%d %b %Y') if b.draft_created_at else '—' }}</td>

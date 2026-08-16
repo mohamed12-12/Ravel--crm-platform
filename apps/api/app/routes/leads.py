@@ -20,7 +20,10 @@ from app.services.assignments import (
     exact_legacy_user,
     resolve_user_id,
 )
-from app.services.booking_automation import auto_create_booking_from_lead
+from app.services.booking_automation import (
+    auto_create_booking_from_lead,
+    sync_lead_group_size_to_booking,
+)
 from app.extensions import db, socketio
 from sqlalchemy import or_
 from datetime import datetime, date, timezone
@@ -83,6 +86,67 @@ PIPELINE_TRANSITIONS = {
     'Handoff Needed': {'Contacted', 'Qualified', 'Waiting Customer Reply', 'Proposal Sent', 'Booking Draft', 'Won', 'Lost'},
 }
 EMPLOYEE_LEAD_STAGES = set(PIPELINE_STAGES)
+
+# Fields the Edit Lead form may submit, split by how update() handles them.
+#
+# _SIMPLE_LEAD_FIELDS actually drives the plain passthrough assignments in
+# update(), so it can never drift into stale documentation.
+# _CUSTOM_HANDLED_LEAD_FIELDS names the rest -- fields with bespoke handling
+# (validation, parsing, permissions) that update() reads explicitly.
+#
+# Together they are the contract behind
+# test_edit_lead_form_fields_are_all_handled_by_the_update_route: every
+# named input rendered in templates/leads/detail.html's Edit Lead form must
+# appear in one of these sets. Without that guard a field can be added to
+# the template, silently dropped by the route, and still report "Changes
+# saved" to the employee -- which is exactly how group_size shipped broken.
+_SIMPLE_LEAD_FIELDS = (
+    'customer_name',
+    'priority',
+    'lead_source',
+    'channel',
+    'preferred_trip_type',
+    'interested_trip_ids',
+    'notes',
+)
+
+_CUSTOM_HANDLED_LEAD_FIELDS = frozenset({
+    'csrf_token',
+    'expected_updated_at',
+    'employee_correction',
+    '_method',
+    'raw_phone',
+    'country_code',
+    'lead_stage',
+    'stage_change_reason',
+    'group_size',
+    'current_step',
+    'follow_up_status',
+    'follow_up_due_date',
+    'customer_response_status',
+    'mark_contacted',
+    'assigned_to_user_id',
+    'assigned_to',
+    'assignment_reason',
+    'booking_id',
+})
+
+HANDLED_LEAD_FORM_FIELDS = frozenset(_SIMPLE_LEAD_FIELDS) | _CUSTOM_HANDLED_LEAD_FIELDS
+
+
+def _parse_group_size(value: str | None) -> int:
+    """Parse an employee-entered group size. Raises ValueError with an
+    employee-facing message so callers can flash it directly."""
+    raw = str(value or '').strip()
+    if not raw:
+        raise ValueError('Group size is required.')
+    try:
+        size = int(float(raw))
+    except (TypeError, ValueError):
+        raise ValueError('Group size must be a whole number.')
+    if size < 1:
+        raise ValueError('Group size must be at least 1.')
+    return size
 
 PIPELINE_GROUPS = {
     'New Lead': ['New Lead', 'New', 'New Inquiry', 'Existing Traveler'],
@@ -530,8 +594,6 @@ def update(lead_id):
             flash(str(exc), 'error')
             return redirect(url_for('leads.detail', lead_id=lead_id))
 
-    lead.customer_name = data.get('customer_name', lead.customer_name)
-    
     new_phone = data.get('raw_phone', '').strip()
     if new_phone and new_phone != lead.raw_phone:
         # Check blacklist prior to updating existing lead's phone number
@@ -574,12 +636,15 @@ def update(lead_id):
             flash(str(exc), 'error')
             return redirect(url_for('leads.detail', lead_id=lead_id))
         lead.lead_stage = next_stage
-    lead.priority = data.get('priority', lead.priority)
-    lead.lead_source = data.get('lead_source', lead.lead_source)
-    lead.channel = data.get('channel', lead.channel)
-    lead.preferred_trip_type = data.get('preferred_trip_type', lead.preferred_trip_type)
-    lead.interested_trip_ids = data.get('interested_trip_ids', lead.interested_trip_ids)
-    lead.notes = data.get('notes', lead.notes)
+    for field in _SIMPLE_LEAD_FIELDS:
+        setattr(lead, field, data.get(field, getattr(lead, field)))
+    previous_group_size = lead.group_size or 1
+    if 'group_size' in data:
+        try:
+            lead.group_size = _parse_group_size(data.get('group_size'))
+        except ValueError as exc:
+            flash(str(exc), 'error')
+            return redirect(url_for('leads.detail', lead_id=lead_id))
     if data.get('current_step'):
         lead.current_step = data.get('current_step')
     lead.follow_up_status = data.get('follow_up_status', lead.follow_up_status)
@@ -634,7 +699,31 @@ def update(lead_id):
         auto_create_booking_from_lead(lead, trigger_source="employee", actor_label=actor, actor_user=current_user())
     except Exception:
         pass
-    flash('Changes saved', 'success')
+    group_size_sync = None
+    try:
+        group_size_sync = sync_lead_group_size_to_booking(
+            lead,
+            previous_group_size=previous_group_size,
+            actor_label=actor,
+        )
+    except Exception:
+        logger.error("Lead group size propagation failed lead_id=%s", lead_id, exc_info=True)
+        db.session.rollback()
+    if group_size_sync and group_size_sync.get("updated"):
+        flash(
+            f"Changes saved. Booking {group_size_sync['booking_id']} group size updated to "
+            f"{group_size_sync['group_size']}.",
+            'success',
+        )
+    elif group_size_sync and group_size_sync.get("skipped_reason") == "booking_closed":
+        flash(
+            f"Changes saved to the lead. Booking {group_size_sync['booking_id']} is "
+            f"{group_size_sync['booking_status']}, so its group size was left unchanged - "
+            "update the booking directly if it really needs to change.",
+            'warning',
+        )
+    else:
+        flash('Changes saved', 'success')
     return redirect(url_for('leads.detail', lead_id=lead_id))
 
 

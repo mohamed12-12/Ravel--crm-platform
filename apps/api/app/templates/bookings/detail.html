@@ -75,8 +75,14 @@
                 </div>
                 <div><div class="form-label">Flight Policy</div><div style="color:var(--text-main)">{{ commercial_context.flight_policy.summary }}</div></div>
                 <div><div class="form-label">Currency</div><div style="color:var(--text-main)">{{ booking.currency or '—' }}</div></div>
-                {% if booking.payment_status in ['Full Refund', 'Partial Refund'] and booking.refund_amount is not none %}
-                <div><div class="form-label">Refund Amount</div><div style="color:var(--text-main)">{{ booking.currency or '' }} {{ '{:,.2f}'.format(booking.refund_amount) }}</div></div>
+                {% if booking.payment_status in ['Full Refund', 'Partial Refund', 'Refunded'] %}
+                <div><div class="form-label">Refund Amount</div>
+                    {% if booking.refund_amount is not none %}
+                    <div style="color:var(--red);font-weight:700">- {{ booking.currency or '' }} {{ '{:,.2f}'.format(booking.refund_amount) }}</div>
+                    {% else %}
+                    <div style="color:var(--red)">Not recorded</div>
+                    {% endif %}
+                </div>
                 {% endif %}
                 <div><div class="form-label">Source</div><div style="color:var(--text-main)">{{ booking.booking_source or '—' }}</div></div>
                 <div><div class="form-label">Lead ID</div><div class="mono" style="color:var(--accent-2)">{{ booking.lead_id or '—' }}</div></div>
@@ -207,42 +213,58 @@
                 </div>
                 {% endif %}
 
-                <div class="form-group" style="margin-bottom:0.75rem">
-                    <label class="form-label">Trip</label>
-                    <select class="form-select" name="trip_id" id="bookingTripSelector">
-                        <option value="">-- No Trip Linked --</option>
-                        {% for t in trips_data %}
-                        <option value="{{ t.trip_id }}" {% if booking.trip_id == t.trip_id %}selected{% endif %}>{{ t.trip_name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="form-group col-span-2" id="bookingTripDetailsCard" style="display:none;background:var(--bg-base);border:1px solid var(--border);padding:0.65rem 0.75rem;border-radius:6px;font-size:0.8rem;margin-bottom:0.75rem">
-                    <div style="display:flex;justify-content:space-between;margin-bottom:0.2rem"><span style="color:var(--text-muted)">Type:</span><strong id="bookingTdType"></strong></div>
-                    <div style="display:flex;justify-content:space-between"><span style="color:var(--text-muted)">Remaining Rooms:</span><strong id="bookingTdRooms"></strong></div>
-                </div>
-                <div class="form-group" style="margin-bottom:0.75rem">
-                    <label class="form-label">Room Type</label>
-                    <select class="form-select" name="room_type" id="bookingRoomTypeSelector">
-                        <option value="">-- None --</option>
-                        {% for r in ['Single', 'Double', 'Triple'] %}
-                        <option value="{{ r }}" {% if booking.room_type == r %}selected{% endif %}>{{ r }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="form-group" style="margin-bottom:0.75rem">
-                    <label class="form-label">Currency</label>
-                    <select class="form-select" name="currency" id="bookingCurrencySelector">
-                        <option value="">-- None --</option>
-                        <option value="USD" {% if booking.currency == 'USD' %}selected{% endif %}>USD</option>
-                        <option value="EGP" {% if booking.currency == 'EGP' %}selected{% endif %}>EGP</option>
-                    </select>
-                </div>
-                <div id="bookingPricePreview" style="display:none;background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.82rem;color:var(--text-main);font-weight:600"></div>
-                <div class="form-group" style="margin-bottom:0.75rem">
-                    <label class="form-label">Flight Option</label>
-                    <input class="form-input" type="text" name="flight_option" value="{{ booking.flight_option or '' }}" placeholder="e.g. Included, Not Applicable">
-                </div>
+                <details {% if missing_fields %}open{% endif %} style="border:1px solid var(--border);border-radius:0.6rem;padding:0.7rem 0.85rem;margin-bottom:1rem;background:rgba(255,255,255,0.015)">
+                    <summary style="cursor:pointer;color:var(--text-main);font-size:0.85rem;font-weight:700">
+                        Booking Details
+                        <span style="color:var(--text-muted);font-weight:500;font-size:0.76rem">
+                            — {{ booking.trip_name or 'no trip' }}{% if booking.room_type %}, {{ booking.room_type }}{% endif %}{% if booking.currency %}, {{ booking.currency }}{% endif %}
+                        </span>
+                    </summary>
+                    <div style="padding-top:0.9rem">
+                        <div class="form-group" style="margin-bottom:0.75rem">
+                            <label class="form-label">Trip</label>
+                            <select class="form-select" name="trip_id" id="bookingTripSelector">
+                                <option value="">-- No Trip Linked --</option>
+                                {% for t in trips_data %}
+                                <option value="{{ t.trip_id }}" {% if booking.trip_id == t.trip_id %}selected{% endif %}>{{ t.trip_name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group col-span-2" id="bookingTripDetailsCard" style="display:none;background:var(--bg-base);border:1px solid var(--border);padding:0.65rem 0.75rem;border-radius:6px;font-size:0.8rem;margin-bottom:0.75rem">
+                            <div style="display:flex;justify-content:space-between;margin-bottom:0.2rem"><span style="color:var(--text-muted)">Type:</span><strong id="bookingTdType"></strong></div>
+                            <div style="display:flex;justify-content:space-between"><span style="color:var(--text-muted)">Remaining Rooms:</span><strong id="bookingTdRooms"></strong></div>
+                        </div>
+                        <div class="form-group" style="margin-bottom:0.75rem">
+                            <label class="form-label">Room Type</label>
+                            <select class="form-select" name="room_type" id="bookingRoomTypeSelector">
+                                <option value="">-- None --</option>
+                                {% for r in ['Single', 'Double', 'Triple'] %}
+                                <option value="{{ r }}" {% if booking.room_type == r %}selected{% endif %}>{{ r }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin-bottom:0.75rem">
+                            <label class="form-label">Currency</label>
+                            <select class="form-select" name="currency" id="bookingCurrencySelector">
+                                <option value="">-- None --</option>
+                                <option value="USD" {% if booking.currency == 'USD' %}selected{% endif %}>USD</option>
+                                <option value="EGP" {% if booking.currency == 'EGP' %}selected{% endif %}>EGP</option>
+                            </select>
+                        </div>
+                        <div id="bookingPricePreview" style="display:none;background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.82rem;color:var(--text-main);font-weight:600"></div>
+                        <div class="form-group" style="margin-bottom:0.75rem">
+                            <label class="form-label">Group Size</label>
+                            <input class="form-input" type="number" name="group_size" min="1" step="1" value="{{ booking.group_size or 1 }}">
+                            <div style="color:var(--text-muted);font-size:0.72rem;margin-top:0.35rem">Number of travelers on this booking. The room price is multiplied by this.</div>
+                        </div>
+                        <div class="form-group" style="margin-bottom:0">
+                            <label class="form-label">Flight Option</label>
+                            <input class="form-input" type="text" name="flight_option" value="{{ booking.flight_option or '' }}" placeholder="e.g. Included, Not Applicable">
+                        </div>
+                    </div>
+                </details>
 
+                <div style="font-size:0.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.07em;margin:0 0 0.7rem">Status &amp; Payment</div>
                 <div class="form-group" style="margin-bottom:0.75rem">
                     <label class="form-label">Booking Status</label>
                     <select class="form-select" name="booking_status">
@@ -255,15 +277,16 @@
                 {% if can_change_payment_status %}
                     <div class="form-group" style="margin-bottom:0.75rem">
                         <label class="form-label">Payment Status</label>
-                        <select class="form-select" name="payment_status">
+                        <select class="form-select" name="payment_status" id="bookingPaymentStatusSelector">
                             {% for s in payment_statuses %}
                             <option value="{{ s }}" {% if booking.payment_status == s %}selected{% endif %}>{{ s }}</option>
                             {% endfor %}
                         </select>
                     </div>
-                    <div class="form-group" style="margin-bottom:0.75rem">
+                    <div class="form-group" id="bookingRefundGroup" style="margin-bottom:0.75rem;display:none">
                         <label class="form-label">Refund Amount</label>
-                        <input class="form-input" type="number" name="refund_amount" min="0" step="0.01" value="{{ booking.refund_amount if booking.refund_amount is not none else '' }}">
+                        <input class="form-input" type="number" name="refund_amount" id="bookingRefundAmount" min="0" step="0.01" value="{{ booking.refund_amount if booking.refund_amount is not none else '' }}">
+                        <div style="color:var(--text-muted);font-size:0.72rem;margin-top:0.35rem">Required when the payment status is a refund.</div>
                     </div>
                 {% else %}
                     <div class="form-group" style="margin-bottom:0.75rem">
@@ -380,5 +403,27 @@ const bookingDetailSelector = initBookingRoomSelector({
     autoDefaultCurrency: true,
 });
 if (bookingDetailSelector) bookingDetailSelector.refresh();
+
+// Refund Amount is only meaningful for a refund payment status. Hidden AND
+// disabled when it does not apply, so the browser omits it from the POST
+// entirely rather than submitting a blank that would clear a stored value.
+// Server-side validation in bookings.py is still the authority -- this is
+// only there to stop employees seeing a box they can never usefully fill.
+(function () {
+    var REFUND_STATUSES = ['Full Refund', 'Partial Refund', 'Refunded'];
+    var paymentSelect = document.getElementById('bookingPaymentStatusSelector');
+    var refundGroup = document.getElementById('bookingRefundGroup');
+    var refundInput = document.getElementById('bookingRefundAmount');
+    if (!paymentSelect || !refundGroup || !refundInput) return;
+
+    function syncRefundVisibility() {
+        var isRefund = REFUND_STATUSES.indexOf(paymentSelect.value) !== -1;
+        refundGroup.style.display = isRefund ? 'block' : 'none';
+        refundInput.disabled = !isRefund;
+    }
+
+    paymentSelect.addEventListener('change', syncRefundVisibility);
+    syncRefundVisibility();
+})();
 </script>
 {% endblock %}

@@ -38,7 +38,12 @@ bookings_bp = Blueprint('bookings', __name__, url_prefix='/bookings')
 
 BOOKING_STATUSES = ['Draft', 'Waiting Customer', 'Pending Confirmation', 'Confirmed', 'Payment Pending', 'Paid', 'Completed', 'Cancelled']
 BOOKING_MANUAL_STATUS_OPTIONS = ['Draft', 'Completed', 'Cancelled']
-REFUND_PAYMENT_STATUSES = {'Full Refund', 'Partial Refund'}
+# Payment statuses that carry a refund amount. 'Refunded' is a legacy
+# spelling that is still a valid PAYMENT_STATUSES member and still
+# selectable in the UI -- leaving it out of this set meant choosing it
+# silently nulled an already-recorded refund amount (the value is only kept
+# when the effective payment status is in here).
+REFUND_PAYMENT_STATUSES = {'Full Refund', 'Partial Refund', 'Refunded'}
 PAYMENT_STATUSES = ['Pending', 'Deposit Paid', 'Fully Paid', 'Partial Refund', 'Full Refund', 'Refunded']
 PAYMENT_TRANSITIONS = {
     'Pending': {'Deposit Paid', 'Fully Paid', 'Partial Refund', 'Full Refund', 'Refunded'},
@@ -154,6 +159,53 @@ def _validate_completeness_for_status(
         + ". Please complete the booking information before marking it Completed / Fully Paid, "
         "or add a reason to confirm anyway."
     )
+
+
+def _parse_group_size(value: str | None) -> int:
+    """Parse an employee-entered group size. Raises ValueError with an
+    employee-facing message. Group size multiplies the room price in
+    revenue_rules.booking_revenue(), so a wrong value here silently
+    misstates revenue -- it is validated, never coerced silently."""
+    raw = str(value or '').strip()
+    if not raw:
+        raise ValueError('Group size is required.')
+    try:
+        size = int(float(raw))
+    except (TypeError, ValueError):
+        raise ValueError('Group size must be a whole number.')
+    if size < 1:
+        raise ValueError('Group size must be at least 1.')
+    return size
+
+
+def _validate_refund_amount_for_status(
+    *,
+    target_payment_status: str | None,
+    current_payment_status: str | None,
+    refund_amount: float | None,
+    refund_amount_submitted: bool,
+) -> None:
+    """A refund status with no amount recorded is never a legitimate state --
+    it leaves the CRM saying money was returned without saying how much, and
+    nothing else in the system can reconstruct it.
+
+    Only fires when the booking is actually moving *into* a refund status, or
+    when an amount was explicitly submitted. An unrelated edit (a follow-up
+    note, a reassignment) to a legacy booking already sitting in a refund
+    status with no amount is left alone -- same "only on the transition"
+    principle as _validate_completeness_for_status, so this never locks an
+    employee out of records they did not create.
+    """
+    target = str(target_payment_status or '').strip()
+    if target not in REFUND_PAYMENT_STATUSES:
+        return
+    entering_refund = target != str(current_payment_status or '').strip()
+    if not entering_refund and not refund_amount_submitted:
+        return
+    if refund_amount is None or refund_amount <= 0:
+        raise ValueError(
+            f'Enter the refund amount before saving a "{target}" payment status.'
+        )
 
 
 def _append_note(existing: str | None, note: str, actor: str) -> str | None:
@@ -437,10 +489,20 @@ def update_status(booking_id):
     room_type_submitted = 'room_type' in data
     flight_option_submitted = 'flight_option' in data
     currency_submitted = 'currency' in data
+    group_size_submitted = 'group_size' in data
     new_trip_id = (data.get('trip_id') or '').strip() if trip_id_submitted else None
     new_room_type = (data.get('room_type') or '').strip().title() if room_type_submitted else None
     new_flight_option = (data.get('flight_option') or '').strip() if flight_option_submitted else None
     new_currency = (data.get('currency') or '').strip().upper() if currency_submitted else None
+    new_group_size = None
+    if group_size_submitted:
+        try:
+            new_group_size = _parse_group_size(data.get('group_size'))
+        except ValueError as e:
+            if request.is_json:
+                return jsonify({'error': str(e)}), 400
+            flash(str(e), 'error')
+            return redirect(url_for('bookings.detail', booking_id=booking_id))
 
     trip_for_update = None
     if trip_id_submitted and new_trip_id:
@@ -529,8 +591,29 @@ def update_status(booking_id):
         flash(str(e), 'error')
         return redirect(url_for('bookings.detail', booking_id=booking_id))
 
-    detail_fields_changed = trip_id_submitted or room_type_submitted or flight_option_submitted or currency_submitted
+    try:
+        _validate_refund_amount_for_status(
+            target_payment_status=payment_for_service or booking.payment_status,
+            current_payment_status=booking.payment_status,
+            refund_amount=refund_amount,
+            refund_amount_submitted=refund_amount_present,
+        )
+    except ValueError as e:
+        if request.is_json:
+            return jsonify({'error': str(e)}), 400
+        flash(str(e), 'error')
+        return redirect(url_for('bookings.detail', booking_id=booking_id))
+
+    detail_fields_changed = (
+        trip_id_submitted
+        or room_type_submitted
+        or flight_option_submitted
+        or currency_submitted
+        or (group_size_submitted and new_group_size != (booking.group_size or 1))
+    )
     was_missing = booking.missing_info
+    previous_payment_status = booking.payment_status
+    previous_refund_amount = booking.refund_amount
     try:
         if status_for_service:
             UnifiedCRMService._validate_booking_transition(
@@ -568,6 +651,8 @@ def update_status(booking_id):
             booking.flight_option = new_flight_option or None
         if currency_submitted:
             booking.currency = new_currency or None
+        if group_size_submitted and new_group_size:
+            booking.group_size = new_group_size
         if detail_fields_changed:
             booking.recompute_missing_info()
         if assignment_requested:
@@ -587,6 +672,20 @@ def update_status(booking_id):
             booking.last_contact_at = datetime.now(timezone.utc).replace(microsecond=0)
             booking.customer_response_status = booking.customer_response_status or 'Contacted'
         booking.booking_notes = _append_note(booking.booking_notes, note_for_service, actor)
+        # Money changes must leave a record even when the employee types no
+        # note. BookingStatusHistory only captures booking_status changes
+        # (written above, inside `if status_for_service`), so a pure
+        # payment/refund edit would otherwise vanish -- including an amount
+        # being cleared. This is the audit trail for it.
+        audit_parts: list[str] = []
+        if payment_for_service:
+            audit_parts.append(f"Payment status: {previous_payment_status or 'Pending'} -> {booking.payment_status}")
+        if booking.refund_amount != previous_refund_amount:
+            before = f"{previous_refund_amount:,.2f}" if previous_refund_amount is not None else "none"
+            after = f"{booking.refund_amount:,.2f}" if booking.refund_amount is not None else "none"
+            audit_parts.append(f"Refund amount: {before} -> {after}")
+        if audit_parts:
+            booking.booking_notes = _append_note(booking.booking_notes, "; ".join(audit_parts), actor)
         db.session.commit()
         if booking.traveler_id and (status_for_service or payment_for_service or detail_fields_changed):
             try:

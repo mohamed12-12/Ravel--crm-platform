@@ -43,6 +43,12 @@ BOOKING_DRAFT_STAGE_ALIASES = {
 
 _ACTIVE_BOOKING_STATUSES = ("Draft", "Confirmed", "Pending")
 
+# A booking in one of these states is financially closed. Quietly rewriting
+# its group size from a later lead edit would rewrite already-recognized (or
+# already-reversed) revenue behind the employee's back, so propagation stops
+# here and the two records are allowed to differ.
+_CLOSED_BOOKING_STATUSES = {"cancelled", "completed"}
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -194,3 +200,89 @@ def auto_create_booking_from_lead(
 
     db.session.commit()
     return {"booking_id": booking_id, "created": True, "missing_info": True, "missing_fields": missing_fields}
+
+
+def _find_lead_booking(lead: Lead) -> TripBooking | None:
+    """The booking this lead owns, using the same resolution order
+    auto_create_booking_from_lead uses when deciding whether to reuse an
+    existing booking rather than make a second one."""
+    if lead.booking_id:
+        booking = db.session.get(TripBooking, lead.booking_id)
+        if booking is not None:
+            return booking
+    return (
+        TripBooking.query.filter_by(lead_id=lead.lead_id)
+        .order_by(TripBooking.draft_created_at.desc(), TripBooking.booking_id.desc())
+        .first()
+    )
+
+
+def sync_lead_group_size_to_booking(
+    lead: Lead,
+    *,
+    previous_group_size: int | None = None,
+    actor_label: str = "",
+) -> dict[str, Any] | None:
+    """Push a Lead's group size onto its linked booking after an employee
+    edits it.
+
+    Group size multiplies the room price in
+    services/crm/system_services/revenue_rules.py's booking_revenue(), so a
+    booking left on a stale group size under-reports revenue everywhere it
+    appears. auto_create_booking_from_lead only ever sets group_size when it
+    creates a brand-new booking -- it short-circuits on an existing one --
+    and it also returns early unless the lead sits in a Booking Draft stage,
+    so it cannot be the propagation path for a lead that has already moved
+    on to Won. Hence this separate, stage-independent helper, called
+    explicitly from the lead update route.
+
+    Returns None when there is nothing to do (no booking, unchanged value,
+    or a financially closed booking); otherwise a summary dict.
+    """
+    new_group_size = max(int(lead.group_size or 1), 1)
+    if previous_group_size is not None and int(previous_group_size or 1) == new_group_size:
+        return None
+
+    booking = _find_lead_booking(lead)
+    if booking is None:
+        return None
+
+    current = max(int(booking.group_size or 1), 1)
+    if current == new_group_size:
+        return None
+
+    booking_status = str(booking.booking_status or "").strip().lower()
+    if booking_status in _CLOSED_BOOKING_STATUSES:
+        return {
+            "booking_id": booking.booking_id,
+            "updated": False,
+            "skipped_reason": "booking_closed",
+            "booking_status": booking.booking_status,
+        }
+
+    booking.group_size = new_group_size
+    stamp = _utc_now().replace(microsecond=0).isoformat(sep=" ")
+    who = actor_label or "system"
+    note = (
+        f"[{stamp} by {who}] Group size updated from {current} to "
+        f"{new_group_size} to match lead {lead.lead_id}."
+    )
+    booking.booking_notes = f"{booking.booking_notes.rstrip()}\n{note}" if booking.booking_notes else note
+    db.session.commit()
+
+    if booking.traveler_id:
+        # Group size feeds revenue, so the traveler's stored totals are now
+        # stale until this runs.
+        from app.services.traveler_stats import recalculate_traveler_stats
+
+        try:
+            recalculate_traveler_stats(booking.traveler_id)
+        except Exception:
+            db.session.rollback()
+
+    return {
+        "booking_id": booking.booking_id,
+        "updated": True,
+        "previous_group_size": current,
+        "group_size": new_group_size,
+    }

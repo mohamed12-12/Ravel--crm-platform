@@ -532,6 +532,207 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
             self.assertEqual(booking.payment_status, "Fully Paid")
             self.assertFalse(booking.missing_info)
 
+    def test_group_size_is_editable_on_the_booking_and_updates_revenue(self) -> None:
+        with self.app.app_context():
+            self.db.session.add(self.TripBooking(
+                booking_id="B-GROUP-1",
+                trip_id="TRIP-100",
+                trip_name="Lifecycle Trip",
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type="Double",
+                currency="EGP",
+                group_size=1,
+                booking_status="Confirmed",
+                booking_source="Admin",
+                payment_status="Fully Paid",
+            ))
+            self.db.session.commit()
+            self.service.recalculate_traveler_stats("TR100")
+            traveler = self.db.session.get(self.Traveler, "TR100")
+            self.assertEqual(traveler.lifetime_revenue, 1000)
+
+        response = self.client.post("/bookings/B-GROUP-1/status", data={"group_size": "3"})
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-GROUP-1")
+            self.assertEqual(booking.group_size, 3)
+            # Group size multiplies the room price, so the traveler's stored
+            # revenue must follow immediately, not drift until something else
+            # happens to trigger a recalculation.
+            traveler = self.db.session.get(self.Traveler, "TR100")
+            self.assertEqual(traveler.lifetime_revenue, 3000)
+
+    def test_invalid_booking_group_size_is_rejected(self) -> None:
+        with self.app.app_context():
+            self.db.session.add(self.TripBooking(
+                booking_id="B-GROUP-2",
+                trip_id="TRIP-100",
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type="Double",
+                currency="EGP",
+                group_size=2,
+                booking_status="Draft",
+                booking_source="Admin",
+                payment_status="Pending",
+            ))
+            self.db.session.commit()
+
+        response = self.client.post("/bookings/B-GROUP-2/status", data={"group_size": "0"})
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            self.assertEqual(self.db.session.get(self.TripBooking, "B-GROUP-2").group_size, 2)
+
+    def test_refunded_status_keeps_the_recorded_refund_amount(self) -> None:
+        """'Refunded' is a selectable payment status but used to be absent
+        from REFUND_PAYMENT_STATUSES, so choosing it silently nulled the
+        amount that had just been recorded."""
+        with self.app.app_context():
+            self.db.session.add(self.TripBooking(
+                booking_id="B-REFUND-1",
+                trip_id="TRIP-100",
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type="Double",
+                currency="EGP",
+                booking_status="Confirmed",
+                booking_source="Admin",
+                payment_status="Fully Paid",
+            ))
+            self.db.session.commit()
+
+        response = self.client.post(
+            "/bookings/B-REFUND-1/status",
+            data={
+                "payment_status": "Refunded",
+                "refund_amount": "250.75",
+                "employee_correction": "1",
+                "booking_notes": "Customer cancelled, full amount returned.",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-REFUND-1")
+            self.assertEqual(booking.payment_status, "Refunded")
+            self.assertEqual(booking.refund_amount, 250.75)
+
+    def test_refund_status_without_an_amount_is_blocked(self) -> None:
+        with self.app.app_context():
+            self.db.session.add(self.TripBooking(
+                booking_id="B-REFUND-2",
+                trip_id="TRIP-100",
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type="Double",
+                currency="EGP",
+                booking_status="Confirmed",
+                booking_source="Admin",
+                payment_status="Fully Paid",
+            ))
+            self.db.session.commit()
+
+        response = self.client.post(
+            "/bookings/B-REFUND-2/status",
+            data={"payment_status": "Full Refund", "refund_amount": ""},
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Enter the refund amount", response.get_data(as_text=True))
+
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-REFUND-2")
+            self.assertEqual(booking.payment_status, "Fully Paid")
+            self.assertIsNone(booking.refund_amount)
+
+    def test_unrelated_edit_to_a_legacy_refund_booking_is_not_blocked(self) -> None:
+        """The refund-amount requirement fires on the transition into a
+        refund status, not on every later save -- otherwise a legacy record
+        with no amount could never be touched again."""
+        with self.app.app_context():
+            self.db.session.add(self.TripBooking(
+                booking_id="B-REFUND-3",
+                trip_id="TRIP-100",
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type="Double",
+                currency="EGP",
+                booking_status="Confirmed",
+                booking_source="Admin",
+                payment_status="Full Refund",
+                refund_amount=None,
+            ))
+            self.db.session.commit()
+
+        response = self.client.post(
+            "/bookings/B-REFUND-3/status",
+            data={"next_action": "Call the customer back"},
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            booking = self.db.session.get(self.TripBooking, "B-REFUND-3")
+            self.assertEqual(booking.next_action, "Call the customer back")
+            self.assertEqual(booking.payment_status, "Full Refund")
+
+    def test_payment_and_refund_changes_are_recorded_without_an_employee_note(self) -> None:
+        """A pure payment/refund change writes no BookingStatusHistory row,
+        so without this auto-note money could move with no record at all."""
+        with self.app.app_context():
+            self.db.session.add(self.TripBooking(
+                booking_id="B-REFUND-4",
+                trip_id="TRIP-100",
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type="Double",
+                currency="EGP",
+                booking_status="Confirmed",
+                booking_source="Admin",
+                payment_status="Fully Paid",
+            ))
+            self.db.session.commit()
+
+        response = self.client.post(
+            "/bookings/B-REFUND-4/status",
+            data={"payment_status": "Partial Refund", "refund_amount": "120"},
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            notes = self.db.session.get(self.TripBooking, "B-REFUND-4").booking_notes or ""
+            self.assertIn("Payment status: Fully Paid -> Partial Refund", notes)
+            self.assertIn("Refund amount: none -> 120.00", notes)
+
+    def test_refund_amount_is_visible_on_booking_detail_and_traveler_profile(self) -> None:
+        with self.app.app_context():
+            self.db.session.add(self.TripBooking(
+                booking_id="B-REFUND-5",
+                trip_id="TRIP-100",
+                trip_name="Lifecycle Trip",
+                traveler_id="TR100",
+                traveler_name="Returning Traveler",
+                room_type="Double",
+                currency="EGP",
+                booking_status="Confirmed",
+                booking_source="Admin",
+                payment_status="Partial Refund",
+                refund_amount=175.50,
+            ))
+            self.db.session.commit()
+
+        detail = self.client.get("/bookings/B-REFUND-5")
+        self.assertEqual(detail.status_code, 200)
+        self.assertIn("175.50", detail.get_data(as_text=True))
+
+        profile = self.client.get("/travelers/TR100")
+        self.assertEqual(profile.status_code, 200)
+        profile_body = profile.get_data(as_text=True)
+        self.assertIn("175.50", profile_body)
+        self.assertIn("Refunded:", profile_body)
+
     def test_needs_info_filter_returns_only_incomplete_bookings(self) -> None:
         with self.app.app_context():
             self.db.session.add(self.TripBooking(

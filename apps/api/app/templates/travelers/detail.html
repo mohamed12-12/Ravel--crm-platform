@@ -370,9 +370,14 @@
                             <td style="font-size:0.82rem">{{ booking.room_type or '—' }}</td>
                             <td style="font-size:0.82rem">{{ booking.draft_created_at.strftime('%d %b %Y') if booking.draft_created_at else '—' }}</td>
                             <td>
-                                <span class="badge {% if booking.payment_status == 'Fully Paid' %}badge-green{% elif booking.payment_status == 'Deposit Paid' %}badge-yellow{% elif booking.payment_status == 'Refunded' %}badge-red{% else %}badge-blue{% endif %}" style="font-size:0.68rem">
+                                <span class="badge {% if booking.payment_status == 'Fully Paid' %}badge-green{% elif booking.payment_status == 'Deposit Paid' %}badge-yellow{% elif booking.payment_status in ['Refunded', 'Full Refund', 'Partial Refund'] %}badge-red{% else %}badge-blue{% endif %}" style="font-size:0.68rem">
                                     {{ booking.payment_status or 'Pending' }}
                                 </span>
+                                {% if booking.payment_status in ['Refunded', 'Full Refund', 'Partial Refund'] %}
+                                <div style="font-size:0.7rem;color:var(--red);margin-top:0.2rem">
+                                    {% if booking.refund_amount is not none %}Refunded: {{ booking.currency or '' }} {{ '{:,.2f}'.format(booking.refund_amount) }}{% else %}Refund amount not recorded{% endif %}
+                                </div>
+                                {% endif %}
                             </td>
                             <td style="text-align:right">
                                 <span class="badge {% if booking.booking_status == 'Confirmed' %}badge-green{% elif booking.booking_status == 'Cancelled' %}badge-red{% else %}badge-yellow{% endif %}">

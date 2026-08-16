@@ -112,6 +112,137 @@ class Phase4LeadRedesignTests(unittest.TestCase):
             lead = self.db.session.get(self.Lead, "L-100")
             self.assertEqual(lead.lead_stage, "New Lead")
 
+    def test_edit_lead_form_fields_are_all_handled_by_the_update_route(self) -> None:
+        """Guard against the whole class of bug that hid the group_size
+        defect: a field rendered in the Edit Lead form, never read by
+        leads.update(), silently discarded -- and the employee still told
+        "Changes saved".
+
+        Every named input/select/textarea in the rendered Edit Lead form
+        must appear in leads.py's HANDLED_LEAD_FORM_FIELDS. That constant is
+        not documentation: _SIMPLE_LEAD_FIELDS actually drives the
+        passthrough assignments in the route, so it cannot silently drift
+        out of sync with what the route really does.
+        """
+        import re as _re
+
+        from app.routes.leads import HANDLED_LEAD_FORM_FIELDS
+
+        response = self.client.get("/leads/L-100")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+
+        form_html = body.split('id="editLead"', 1)[1].split("</form>", 1)[0]
+        rendered_fields = set(_re.findall(r'name="([^"]+)"', form_html))
+        self.assertIn("group_size", rendered_fields, "test is not reading the right form")
+
+        unhandled = sorted(rendered_fields - set(HANDLED_LEAD_FORM_FIELDS))
+        self.assertEqual(
+            unhandled,
+            [],
+            f"Edit Lead renders field(s) that leads.update() never reads: {unhandled}. "
+            "Handle them in the route (and list them in HANDLED_LEAD_FORM_FIELDS), "
+            "or remove them from the form -- otherwise the employee's edit is "
+            "silently dropped while the page still reports success.",
+        )
+
+    def test_editing_lead_group_size_persists(self) -> None:
+        response = self.client.post(
+            "/leads/L-100",
+            data={"customer_name": "Sales Lead", "group_size": "4"},
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            lead = self.db.session.get(self.Lead, "L-100")
+            self.assertEqual(lead.group_size, 4)
+
+    def test_invalid_lead_group_size_is_rejected(self) -> None:
+        with self.app.app_context():
+            lead = self.db.session.get(self.Lead, "L-100")
+            lead.group_size = 3
+            self.db.session.commit()
+
+        response = self.client.post(
+            "/leads/L-100",
+            data={"customer_name": "Sales Lead", "group_size": "0"},
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Group size must be at least 1", response.get_data(as_text=True))
+        with self.app.app_context():
+            lead = self.db.session.get(self.Lead, "L-100")
+            self.assertEqual(lead.group_size, 3)
+
+    def test_lead_group_size_propagates_to_the_linked_booking(self) -> None:
+        with self.app.app_context():
+            lead = self.db.session.get(self.Lead, "L-100")
+            lead.traveler_id = "TR900"
+            lead.group_size = 1
+            lead.booking_id = "B-SYNC-1"
+            self.db.session.add(self.TripBooking(
+                booking_id="B-SYNC-1",
+                trip_id="TR-LEAD-1",
+                trip_name="Lead Trip",
+                traveler_id="TR900",
+                traveler_name="Existing Traveler",
+                room_type="Double",
+                currency="EGP",
+                group_size=1,
+                booking_status="Draft",
+                payment_status="Pending",
+                lead_id="L-100",
+            ))
+            self.db.session.commit()
+
+        response = self.client.post(
+            "/leads/L-100",
+            data={"customer_name": "Sales Lead", "group_size": "5"},
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            self.assertEqual(self.db.session.get(self.Lead, "L-100").group_size, 5)
+            booking = self.db.session.get(self.TripBooking, "B-SYNC-1")
+            self.assertEqual(booking.group_size, 5)
+            # The propagation must leave a record, not happen invisibly.
+            self.assertIn("Group size updated from 1 to 5", booking.booking_notes or "")
+
+    def test_lead_group_size_does_not_rewrite_a_closed_booking(self) -> None:
+        with self.app.app_context():
+            lead = self.db.session.get(self.Lead, "L-100")
+            lead.traveler_id = "TR900"
+            lead.group_size = 1
+            lead.booking_id = "B-SYNC-2"
+            self.db.session.add(self.TripBooking(
+                booking_id="B-SYNC-2",
+                trip_id="TR-LEAD-1",
+                trip_name="Lead Trip",
+                traveler_id="TR900",
+                traveler_name="Existing Traveler",
+                room_type="Double",
+                currency="EGP",
+                group_size=1,
+                booking_status="Completed",
+                payment_status="Fully Paid",
+                lead_id="L-100",
+            ))
+            self.db.session.commit()
+
+        response = self.client.post(
+            "/leads/L-100",
+            data={"customer_name": "Sales Lead", "group_size": "6"},
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        with self.app.app_context():
+            # The lead still records what the customer asked for...
+            self.assertEqual(self.db.session.get(self.Lead, "L-100").group_size, 6)
+            # ...but a financially closed booking is never silently rewritten.
+            booking = self.db.session.get(self.TripBooking, "B-SYNC-2")
+            self.assertEqual(booking.group_size, 1)
+        self.assertIn("left unchanged", response.get_data(as_text=True))
+
     def test_existing_traveler_new_interest_preserves_traveler_id(self) -> None:
         response = self.client.post(
             "/leads/",
