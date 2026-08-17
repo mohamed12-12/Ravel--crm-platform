@@ -477,6 +477,116 @@ class BookingLedgerTests(unittest.TestCase):
         self.assertEqual(counts["skipped_currency_mismatch"], 1)
         self.assertTrue(any("skipped rather than guessed" in w for w in warnings))
 
+    # === reading the legacy workbook =====================================
+
+    def _write_workbook(self, deposit_rows: list[tuple]) -> Path:
+        """A miniature of the real workbook: row 1 groups the two deposit
+        blocks, row 2 carries the real headers, data starts at row 3."""
+        import openpyxl
+
+        book = openpyxl.Workbook()
+        sheet = book.active
+        sheet.title = "Trip Bookings"
+        sheet.append(["", "", "", "", "", "", "First Deposit", "", "", "", "Second Deposit", "", "", ""])
+        sheet.append([
+            "Booking ID", "Trip ID", "Trip Name", "Traveler ID", "Traveler Name", "Room Type",
+            "Currency", "Amount", "Date", "Payment Method",
+            "Currency", "Amount", "Date", "Payment Method",
+        ])
+        for row in deposit_rows:
+            sheet.append(list(row))
+        path = self.tmpdir / "legacy.xlsx"
+        book.save(path)
+        book.close()
+        return path
+
+    def _read_workbook(self, deposit_rows: list[tuple]):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        import importlib
+
+        module = importlib.import_module("backfill_booking_ledger")
+        importlib.reload(module)
+        return module.read_workbook_deposits(self._write_workbook(deposit_rows))
+
+    def test_an_unreadable_amount_is_reported_instead_of_vanishing(self) -> None:
+        """The real workbook has a Second Deposit amount of "300 cash to
+        menna". It is evidence that money moved, written by someone with no
+        number column to put it in. Guessing 300 is forbidden -- but dropping
+        it as silently as an empty cell is how a real payment disappears.
+        """
+        deposits, notes = self._read_workbook([
+            ("B-LG-1", "", "", "", "", "", "USD", 500, None, "cash",
+             "USD", "300 cash to menna", None, "cash"),
+        ])
+        # The readable half still imports; only the unreadable half is held back.
+        self.assertEqual([d["amount"] for d in deposits["B-LG-1"]], [500.0])
+        self.assertEqual(len(notes), 1)
+        self.assertIn("300 cash to menna", notes[0])
+        self.assertIn("B-LG-1", notes[0])
+        self.assertIn("record it by hand", notes[0])
+
+    def test_an_empty_amount_cell_is_not_reported_as_a_problem(self) -> None:
+        """Absence of a deposit is the normal case for 819 of 850 bookings.
+        Reporting each one would bury the handful that matter."""
+        deposits, notes = self._read_workbook([
+            ("B-LG-1", "", "", "", "", "", "", None, None, "", "", None, None, ""),
+        ])
+        self.assertEqual(deposits, {})
+        self.assertEqual(notes, [])
+
+    def test_a_written_zero_is_counted_but_never_named_individually(self) -> None:
+        """Five of the six unimportable cells in the real workbook are a plain
+        0 in Second Deposit -- "there wasn't one". Listing each by booking id
+        would bury the single line that does need a human."""
+        deposits, notes = self._read_workbook([
+            ("B-LG-1", "", "", "", "", "", "USD", 0, None, "cash", "USD", 0, None, ""),
+            ("B-LG-2", "", "", "", "", "", "USD", 0, None, "cash", "USD", None, None, ""),
+        ])
+        self.assertEqual(deposits, {})
+        self.assertEqual(len(notes), 1)
+        self.assertIn("3 deposit amount(s) are recorded as zero", notes[0])
+        self.assertIn("absence of a payment", notes[0])
+        self.assertNotIn("B-LG-1", notes[0])
+
+    def test_a_zero_never_becomes_a_transaction(self) -> None:
+        """The rule the whole legacy policy rests on, checked at the reader."""
+        deposits, _notes = self._read_workbook([
+            ("B-LG-1", "", "", "", "", "", "USD", 0, None, "cash", "USD", -50, None, "cash"),
+        ])
+        self.assertEqual(deposits, {})
+
+    def test_deposits_for_bookings_this_database_does_not_have_are_counted(self) -> None:
+        """The workbook covers all 850 historical bookings; a given database
+        may hold a subset. Without this count, "50 found / 8 written" reads as
+        a failure rather than as the two datasets differing."""
+        self._seed_booking()
+        deposits = {
+            "B-LG-1": [{"ordinal": 1, "amount": 400.0, "currency": "USD",
+                        "occurred_on": date(2026, 2, 10), "method": "cash"}],
+            "B-NOT-MIGRATED": [{"ordinal": 1, "amount": 900.0, "currency": "USD",
+                                "occurred_on": date(2026, 2, 10), "method": "cash"},
+                               {"ordinal": 2, "amount": 100.0, "currency": "USD",
+                                "occurred_on": None, "method": "cash"}],
+        }
+        _module, planned, counts, _warnings, _written = self._run_backfill(deposits=deposits)
+        self.assertEqual(len(planned), 1)
+        self.assertEqual(counts["deposits_for_unknown_bookings"], 2)
+        self.assertEqual(counts["unknown_bookings_with_deposits"], 1)
+
+    def test_the_scripts_output_survives_a_windows_console(self) -> None:
+        """A box-drawing character in the totals line raised UnicodeEncodeError
+        on cp1252 *after* the counts printed and *before* the skipped-row
+        warnings -- losing the output the script exists to produce."""
+        path = Path(__file__).resolve().parent.parent / "scripts" / "backfill_booking_ledger.py"
+        source = path.read_text(encoding="utf-8")
+        offenders = [
+            f"{number}: {line.strip()}"
+            for number, line in enumerate(source.splitlines(), start=1)
+            if "print(" in line and any(ord(char) > 127 for char in line)
+        ]
+        self.assertEqual(offenders, [], f"non-ASCII in printed output: {offenders}")
+        source.encode("cp1252")  # the whole script, not just the lines checked above
+
     def test_the_backfill_is_idempotent(self) -> None:
         self._seed_booking(payment_status="Partial Refund", refund_amount=120.0)
         self._run_backfill(apply=True)

@@ -31,8 +31,24 @@ nothing. Nothing is ever updated or deleted -- not a booking, not a refund
 amount, not an existing transaction.
 
     venv/bin/python scripts/backfill_booking_ledger.py
-    venv/bin/python scripts/backfill_booking_ledger.py --workbook "docs/private/.../RT - Travelers Database.xlsx"
+    venv/bin/python scripts/backfill_booking_ledger.py --workbook "docs/private/migration-artifacts/RT - Travelers Database.xlsx"
     venv/bin/python scripts/backfill_booking_ledger.py --apply
+
+Getting the workbook onto a server
+----------------------------------
+`docs/` is gitignored in full, so the workbook is deliberately absent from
+GitHub and `git pull` will never create it. It carries real customers' payment
+details and should stay out of the repository. Copy it across out of band and
+delete it once the backfill has been applied:
+
+    scp "docs/private/migration-artifacts/RT - Travelers Database.xlsx" \
+        <host>:/home/ec2-user/rahma-crm-platform/docs/private/migration-artifacts/
+
+Only one copy in circulation carries the deposit data. Verify before using it:
+the correct workbook reports "bookings with at least one real deposit: 31" and
+"real deposit rows found: 50". An older copy of the same name, and the
+phase5.ready/phase5.demo workbooks, have empty deposit columns and would
+silently backfill nothing at all.
 """
 from __future__ import annotations
 
@@ -70,6 +86,16 @@ def _parse_amount(value) -> float | None:
     return amount if amount > 0 else None
 
 
+def _is_numeric(value: str) -> bool:
+    """Whether the cell holds a number at all -- separating "0" (there was no
+    deposit) from "300 cash to menna" (there was, and it needs a human)."""
+    try:
+        float(_clean(value).replace(",", "").replace("$", ""))
+    except ValueError:
+        return False
+    return True
+
+
 def _parse_date(value) -> date | None:
     if value is None or _clean(value) == "":
         return None
@@ -85,18 +111,32 @@ def _parse_date(value) -> date | None:
     return None
 
 
-def read_workbook_deposits(workbook_path: Path) -> dict[str, list[dict]]:
-    """Real deposits keyed by booking id, from the legacy source workbook.
+def read_workbook_deposits(workbook_path: Path) -> tuple[dict[str, list[dict]], list[str]]:
+    """Real deposits keyed by booking id, plus notes on cells left behind.
 
     Row 1 groups the columns as "First Deposit" / "Second Deposit"; row 2 has
     Currency, Amount, Date, Payment Method for each. Duplicate header names
     are why the original migration saw "Amount #2" -- here the blocks are read
     positionally instead, which also recovers the second block's own currency
     that the original migration ignored.
+
+    Three different things can sit in an amount cell, and they are not
+    interchangeable:
+
+      empty                  no deposit. The normal case, silent.
+      0                      no deposit, written down. Counted, not listed.
+      "300 cash to menna"    a real payment, recorded by someone who had no
+                             number column to put it in. Returned as a note.
+
+    None of them produce a transaction -- guessing an amount is precisely what
+    this migration must never do. But dropping the third as silently as the
+    first is how a real payment disappears, so it comes back for a human.
     """
     import openpyxl
 
     deposits: dict[str, list[dict]] = {}
+    notes: list[str] = []
+    zeroes = 0
     workbook = openpyxl.load_workbook(workbook_path, read_only=True, data_only=True)
     try:
         if WORKBOOK_SHEET not in workbook.sheetnames:
@@ -124,6 +164,19 @@ def read_workbook_deposits(workbook_path: Path) -> dict[str, list[dict]]:
                     continue
                 amount = _parse_amount(row[c_amount])
                 if amount is None:
+                    raw = _clean(row[c_amount])
+                    if raw and not _is_numeric(raw):
+                        # Text where a number belongs: someone recorded a real
+                        # payment in the only cell they had. Worth a human's
+                        # attention. A plain 0 is not -- it just means there
+                        # was no second deposit, and listing all of those would
+                        # bury the handful of lines that matter.
+                        notes.append(
+                            f"{booking_id}: deposit {ordinal} amount is {raw!r}, not a number. "
+                            "Skipped rather than guessed -- record it by hand if it is real."
+                        )
+                    elif raw:
+                        zeroes += 1
                     continue
                 deposits.setdefault(booking_id, []).append({
                     "ordinal": ordinal,
@@ -134,7 +187,12 @@ def read_workbook_deposits(workbook_path: Path) -> dict[str, list[dict]]:
                 })
     finally:
         workbook.close()
-    return deposits
+    if zeroes:
+        notes.append(
+            f"{zeroes} deposit amount(s) are recorded as zero, which is the absence of a "
+            "payment rather than a payment of nothing. No transaction created for any of them."
+        )
+    return deposits, notes
 
 
 def plan_backfill(deposits_by_booking: dict[str, list[dict]], infer_fully_paid: bool) -> tuple[list[dict], Counter, list[str]]:
@@ -159,6 +217,18 @@ def plan_backfill(deposits_by_booking: dict[str, list[dict]], infer_fully_paid: 
     trips = {trip.trip_id: trip for trip in Trip.query.all()}
     bookings = TripBooking.query.order_by(TripBooking.booking_id.asc()).all()
     counts["bookings_examined"] = len(bookings)
+
+    # The workbook holds every booking the business has ever taken; this
+    # database may hold a subset. Deposits for a booking that was never
+    # migrated cannot be attached to anything, and without this count the
+    # difference between "50 deposits found" and "8 written" looks like a bug.
+    known_ids = {booking.booking_id for booking in bookings}
+    counts["deposits_for_unknown_bookings"] = sum(
+        len(rows) for booking_id, rows in deposits_by_booking.items() if booking_id not in known_ids
+    )
+    counts["unknown_bookings_with_deposits"] = sum(
+        1 for booking_id in deposits_by_booking if booking_id not in known_ids
+    )
 
     for booking in bookings:
         currency = _clean(booking.currency).upper()
@@ -311,15 +381,24 @@ def main() -> int:
     app = create_app()
 
     deposits: dict[str, list[dict]] = {}
+    workbook_notes: list[str] = []
     if args.workbook:
         workbook_path = Path(args.workbook)
         if not workbook_path.exists():
             print(f"Workbook not found: {workbook_path}")
+            print(
+                "\nThe workbook is private and gitignored, so `git pull` never brings it to a\n"
+                "server -- it has to be copied across out of band. See the 'Getting the workbook\n"
+                "onto a server' section at the top of this script for the scp command."
+            )
             return 1
-        deposits = read_workbook_deposits(workbook_path)
+        deposits, workbook_notes = read_workbook_deposits(workbook_path)
         print(f"Workbook: {workbook_path}")
         print(f"  bookings with at least one real deposit: {len(deposits)}")
-        print(f"  real deposit rows found: {sum(len(v) for v in deposits.values())}\n")
+        print(f"  real deposit rows found: {sum(len(v) for v in deposits.values())}")
+        if workbook_notes:
+            print(f"  amount cells that could not be read: {len(workbook_notes)}")
+        print()
     else:
         print("No --workbook given: category A (real historical deposits) will be skipped.\n")
 
@@ -361,14 +440,28 @@ def main() -> int:
             )
         if counts["C_skipped_unpriceable"]:
             print(f"     ({counts['C_skipped_unpriceable']} Fully Paid bookings cannot be priced)")
-        print(f"  ── total                       {len(planned):>5}")
+        # ASCII only: Windows consoles default to cp1252, and a box-drawing
+        # character here raised UnicodeEncodeError *after* the counts printed
+        # but *before* the skipped-row warnings below -- losing exactly the
+        # output an operator runs this for.
+        print(f"  -- total                       {len(planned):>5}")
 
-        if warnings:
-            print(f"\n{len(warnings)} row(s) skipped rather than guessed:")
-            for warning in warnings[:20]:
+        if counts["deposits_for_unknown_bookings"]:
+            print(
+                f"\n{counts['deposits_for_unknown_bookings']} workbook deposit row(s) across "
+                f"{counts['unknown_bookings_with_deposits']} booking(s) belong to bookings that do "
+                "not exist\nin this database, so they cannot be attached to anything. That is why "
+                "fewer rows are\nplanned than the workbook contains -- not a failure, but check it "
+                "is the database you meant."
+            )
+
+        skipped = warnings + workbook_notes
+        if skipped:
+            print(f"\n{len(skipped)} row(s) skipped rather than guessed:")
+            for warning in skipped[:20]:
                 print(f"  {warning}")
-            if len(warnings) > 20:
-                print(f"  ... and {len(warnings) - 20} more")
+            if len(skipped) > 20:
+                print(f"  ... and {len(skipped) - 20} more")
 
         if not args.apply:
             print("\nDry run. Nothing was written. Re-run with --apply to commit these rows.")
