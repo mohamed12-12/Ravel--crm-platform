@@ -29,6 +29,7 @@ from app.security import (
     current_user_id,
     has_permission,
 )
+from app.services.booking_audit import record_booking_created, record_booking_note
 from app.services.traveler_stats import recalculate_traveler_stats
 from services.crm.system_services.trip_pricing import ROOM_PRICE_TYPES
 
@@ -441,6 +442,17 @@ def create():
                 actor=current_user(),
                 reason='Automatic round-robin sales assignment on booking creation',
             )
+        if created_booking:
+            # The row above was inserted through UnifiedCRMService's own
+            # sqlite3 connection, so the ORM never saw an INSERT and the
+            # session-level audit listener has nothing to react to. Every
+            # other creation path flushes a TripBooking and is covered
+            # automatically -- this one has to say so itself.
+            record_booking_created(
+                created_booking,
+                source=data.get('booking_source', 'Admin'),
+                notes=f"Booking created in the CRM for {traveler.full_name}.",
+            )
         db.session.commit()
         flash(f"Booking {booking_id} created successfully.", 'success')
         return redirect(url_for('bookings.detail', booking_id=booking_id))
@@ -672,6 +684,11 @@ def update_status(booking_id):
             booking.last_contact_at = datetime.now(timezone.utc).replace(microsecond=0)
             booking.customer_response_status = booking.customer_response_status or 'Contacted'
         booking.booking_notes = _append_note(booking.booking_notes, note_for_service, actor)
+        # Only the note the employee actually typed becomes a timeline entry.
+        # The audit line appended just below is written by the system and
+        # already has its own structured events from the session listener, so
+        # recording it here too would say the same thing twice.
+        record_booking_note(booking, note_for_service, actor=actor)
         # Money changes must leave a record even when the employee types no
         # note. BookingStatusHistory only captures booking_status changes
         # (written above, inside `if status_for_service`), so a pure
@@ -789,29 +806,9 @@ def delete(booking_id):
     return redirect(url_for('bookings.index'))
 
 
-def _sync_booking_event(booking: TripBooking, *, event_type: str, event_label: str, notes: str = '') -> None:
-    try:
-        service = UnifiedCRMService()
-        event = service.create_booking_event(
-            event_type=event_type,
-            event_label=event_label,
-            traveler_id=booking.traveler_id or '',
-            lead_id=booking.lead_id or '',
-            booking_id=booking.booking_id,
-            trip_id=booking.trip_id or '',
-            interaction_id=booking.interaction_id or '',
-            channel=booking.booking_source or 'system-ui',
-            actor='system-ui',
-            notes=notes,
-        )
-        service.sync_agent_write_to_sheet(
-            traveler_id=booking.traveler_id or '',
-            lead_id=booking.lead_id or '',
-            interaction_id=booking.interaction_id or '',
-            booking_id=booking.booking_id,
-            trip_id=booking.trip_id or '',
-            event_ids=[event['event_id']],
-        )
-    except Exception:
-        # UI writes must not fail after the DB commit because sheet sync is retryable.
-        pass
+# A _sync_booking_event() helper used to live here: it wrote booking events
+# through UnifiedCRMService's raw sqlite3 connection instead of the ORM, and
+# nothing ever called it. Removed rather than wired up -- it targets a
+# different connection from the one bookings.detail reads the timeline back
+# out of, so events written that way were invisible on the page they existed
+# for. app/services/booking_audit.py is the single audit path now.

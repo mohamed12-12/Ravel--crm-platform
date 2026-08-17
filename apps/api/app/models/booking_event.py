@@ -24,6 +24,22 @@ class BookingEventTrail(db.Model):
     notes = db.Column(db.Text)
     metadata_json = db.Column(db.Text)
 
+    # Declared purely so the unit of work knows an event INSERT depends on
+    # its subject rows. The foreign key *columns* above are invisible to
+    # SQLAlchemy's flush ordering -- only relationships create that
+    # dependency -- so an event recorded in the same flush that creates its
+    # booking could be inserted first and violate the constraint on any
+    # backend that actually enforces one (Postgres always; SQLite only with
+    # PRAGMA foreign_keys=ON). Many-to-one and backref-free on purpose: the
+    # parents gain no collection, so deleting a traveler or booking still
+    # behaves exactly as before, and the routes keep clearing event rows
+    # explicitly.
+    booking = db.relationship('TripBooking', foreign_keys=[booking_id])
+    traveler = db.relationship('Traveler', foreign_keys=[traveler_id])
+    trip = db.relationship('Trip', foreign_keys=[trip_id])
+    lead = db.relationship('Lead', foreign_keys=[lead_id])
+    interaction = db.relationship('Interaction', foreign_keys=[interaction_id])
+
     def metadata_dict(self):
         if not self.metadata_json:
             return {}

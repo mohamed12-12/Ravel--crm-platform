@@ -13,7 +13,7 @@ services/crm/README.md for how the two relate.
 """
 from __future__ import annotations
 
-import json
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -22,13 +22,15 @@ from sqlalchemy import text
 
 from app.extensions import db
 from app.models.booking import TripBooking
-from app.models.booking_event import BookingEventTrail
 from app.models.booking_status_history import BookingStatusHistory
 from app.models.lead import Lead
 from app.models.traveler import Traveler
 from app.models.trip import Trip
 from app.models.user import User
 from app.services.assignments import apply_assignment, auto_assign_booking
+from app.services.booking_audit import record_booking_event
+
+logger = logging.getLogger(__name__)
 
 # Every lead_stage spelling (current + legacy aliases, see leads.py's
 # PIPELINE_GROUPS['Booking Draft']) that means "this lead reached Booking
@@ -141,6 +143,31 @@ def auto_create_booking_from_lead(
         booking_notes=booking_notes,
         missing_info=True,
     )
+    # Recorded *before* the booking joins the session on purpose. The audit
+    # listener in app/services/booking_audit.py adds a generic "Booking
+    # created" event for any TripBooking it sees being inserted without one
+    # already pending, and anything that queries the database between the two
+    # statements (assignment lookups, id generation) triggers an autoflush
+    # that would carry the booking through on its own. Registering the
+    # richer event first means the listener sees it and stands down.
+    try:
+        record_booking_event(
+            booking,
+            event_type="booking_auto_created",
+            event_label="Booking auto-created",
+            notes="Booking auto-created upon reaching Booking Draft stage",
+            metadata={
+                "booking_id": booking_id,
+                "trigger_source": trigger_source,
+                "missing_info": True,
+                "missing_fields": missing_fields,
+            },
+            actor=actor_label or trigger_source,
+            channel=lead.channel or None,
+        )
+    except Exception:
+        # Audit-trail entry must not fail the booking creation.
+        logger.warning("Could not record the auto-creation event for %s", booking_id, exc_info=True)
     db.session.add(booking)
     traveler.last_booking_id = booking_id
     lead.booking_id = booking_id
@@ -169,35 +196,6 @@ def auto_create_booking_from_lead(
             actor=actor_user,
             reason="Automatic round-robin sales assignment on auto-created booking",
         )
-    try:
-        event_id = _next_prefixed_id("booking_event_trail", "event_id", "EVT", 8)
-        db.session.add(
-            BookingEventTrail(
-                event_id=event_id,
-                occurred_at=_utc_now(),
-                event_type="booking_auto_created",
-                event_label="Booking auto-created",
-                traveler_id=traveler.traveler_id or None,
-                lead_id=lead.lead_id,
-                booking_id=booking_id,
-                trip_id=trip.trip_id if trip else None,
-                channel=lead.channel or None,
-                actor=actor_label or trigger_source,
-                notes="Booking auto-created upon reaching Booking Draft stage",
-                metadata_json=json.dumps(
-                    {
-                        "booking_id": booking_id,
-                        "trigger_source": trigger_source,
-                        "missing_info": True,
-                        "missing_fields": missing_fields,
-                    }
-                ),
-            )
-        )
-    except Exception:
-        # Audit-trail entry must not fail the booking creation.
-        pass
-
     db.session.commit()
     return {"booking_id": booking_id, "created": True, "missing_info": True, "missing_fields": missing_fields}
 

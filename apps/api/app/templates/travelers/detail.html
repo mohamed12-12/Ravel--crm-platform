@@ -476,8 +476,13 @@
                             <strong style="font-size:0.85rem;color:var(--text-main)">{{ event.event_label or event.event_type }}</strong>
                             <span style="font-size:0.72rem;color:var(--text-muted);white-space:nowrap">{{ event.occurred_at.strftime('%d %b %Y %H:%M') if event.occurred_at else 'Pending time' }}</span>
                         </div>
+                        {# Now that every status, payment, refund and field change lands
+                           here, a bare label per row says nothing -- show the values. #}
+                        {% if event.notes %}
+                        <div style="font-size:0.78rem;color:var(--text-dim);margin-top:0.25rem;white-space:pre-line">{{ event.notes }}</div>
+                        {% endif %}
                         <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem">
-                            {{ event.event_id }}{% if event.booking_id %} - {{ event.booking_id }}{% endif %}
+                            {{ event.actor or 'system' }} · {{ event.event_id }}{% if event.booking_id %} · {{ event.booking_id }}{% endif %}
                         </div>
                     </div>
                     {% endfor %}

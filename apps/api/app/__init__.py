@@ -617,6 +617,14 @@ def create_app(config_name=None):
     from .models.user import User
     from .models.assignment_history import AssignmentHistory
     from .models.user_audit import UserAuditLog
+
+    # Booking timeline auditing hangs off the session itself rather than the
+    # routes, so every write path -- CRM UI, booking automation, agent bridge
+    # -- records history without having to opt in. See
+    # app/services/booking_audit.py.
+    from .services.booking_audit import register_booking_audit_listeners
+    register_booking_audit_listeners()
+
     @login_manager.user_loader
     def load_user(user_id):
         return db.session.get(User, int(user_id))
