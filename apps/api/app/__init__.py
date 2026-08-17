@@ -359,6 +359,70 @@ def _ensure_booking_history_columns(app: Flask) -> None:
                 )
             )
 
+def _ensure_booking_transactions_table(app: Flask) -> None:
+    """Create the payment ledger on legacy SQLite files.
+
+    Same treatment booking_status_history gets: the Alembic migration is the
+    real definition, but this repo's SQLite deployments are also reached
+    through runtime schema checks, and a missing table here would 500 the
+    booking page rather than degrade quietly.
+    """
+    uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
+    if not uri.startswith("sqlite"):
+        return
+
+    with app.app_context():
+        inspector = db.inspect(db.engine)
+        if "booking_transactions" in inspector.get_table_names():
+            return
+
+        with db.engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS booking_transactions (
+                        transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        public_ref VARCHAR(24),
+                        booking_id VARCHAR(50) NOT NULL,
+                        traveler_id VARCHAR(20),
+                        entry_type VARCHAR(16) NOT NULL,
+                        amount FLOAT NOT NULL,
+                        currency VARCHAR(3) NOT NULL,
+                        occurred_on DATE NOT NULL,
+                        date_precision VARCHAR(16) NOT NULL DEFAULT 'exact',
+                        method VARCHAR(40),
+                        reference VARCHAR(120),
+                        reason TEXT,
+                        notes TEXT,
+                        source VARCHAR(32) NOT NULL DEFAULT 'crm_ui',
+                        is_inferred BOOLEAN NOT NULL DEFAULT 0,
+                        reverses_id INTEGER,
+                        idempotency_key VARCHAR(200),
+                        created_by_user_id INTEGER,
+                        created_at DATETIME NOT NULL,
+                        CONSTRAINT ck_booking_transactions_amount_positive CHECK (amount > 0),
+                        CONSTRAINT ck_booking_transactions_entry_type
+                            CHECK (entry_type IN ('payment', 'refund')),
+                        FOREIGN KEY(booking_id) REFERENCES trip_bookings (booking_id),
+                        FOREIGN KEY(traveler_id) REFERENCES travelers (traveler_id),
+                        FOREIGN KEY(reverses_id) REFERENCES booking_transactions (transaction_id),
+                        FOREIGN KEY(created_by_user_id) REFERENCES users (id)
+                    )
+                    """
+                )
+            )
+            for statement in (
+                "CREATE INDEX IF NOT EXISTS ix_booking_transactions_booking_id ON booking_transactions (booking_id)",
+                "CREATE INDEX IF NOT EXISTS ix_booking_transactions_traveler_id ON booking_transactions (traveler_id)",
+                "CREATE INDEX IF NOT EXISTS ix_booking_transactions_created_at ON booking_transactions (created_at)",
+                "CREATE INDEX IF NOT EXISTS ix_booking_transactions_reverses_id ON booking_transactions (reverses_id)",
+                "CREATE INDEX IF NOT EXISTS ix_booking_transactions_booking_entry ON booking_transactions (booking_id, entry_type)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_booking_transactions_public_ref ON booking_transactions (public_ref)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_booking_transactions_idempotency_key ON booking_transactions (idempotency_key)",
+            ):
+                connection.execute(text(statement))
+
+
 def _ensure_traveler_documents_table(app: Flask) -> None:
     uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
     if not uri.startswith("sqlite"):
@@ -625,6 +689,13 @@ def create_app(config_name=None):
     from .services.booking_audit import register_booking_audit_listeners
     register_booking_audit_listeners()
 
+    # The payment ledger is append-only: the guard rejects any attempt to
+    # update or delete a recorded transaction, so a correction has to be a
+    # reversal rather than a quiet rewrite of financial history.
+    from .models.booking_transaction import BookingTransaction
+    from .services.booking_ledger import register_booking_ledger_listeners
+    register_booking_ledger_listeners()
+
     @login_manager.user_loader
     def load_user(user_id):
         return db.session.get(User, int(user_id))
@@ -637,6 +708,7 @@ def create_app(config_name=None):
     _ensure_employee_followup_columns(app)
     _ensure_relational_assignment_schema(app)
     _ensure_booking_history_columns(app)
+    _ensure_booking_transactions_table(app)
     _ensure_traveler_documents_table(app)
     _ensure_trip_media_table(app)
     _normalize_sqlite_temporal_values(app)

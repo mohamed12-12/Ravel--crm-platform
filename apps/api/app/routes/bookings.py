@@ -655,6 +655,7 @@ def update_status(booking_id):
         group_size=new_group_size if (group_size_submitted and new_group_size) else booking.group_size,
         payment_status=payment_for_service or booking.payment_status,
         already_refunded=booking.refund_amount,
+        booking_id=booking.booking_id,
     )
     try:
         _validate_refund_amount_for_status(

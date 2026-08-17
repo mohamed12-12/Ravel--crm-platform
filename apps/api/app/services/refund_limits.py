@@ -32,11 +32,14 @@ expressed against the field the CRM actually has.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 from services.crm.system_services.revenue_rules import REVENUE_CURRENCIES, parse_money
 from services.crm.system_services.trip_pricing import price_for_room_and_currency
+
+logger = logging.getLogger(__name__)
 
 # The only payment status that pins the amount received to a number. Kept as a
 # mapping rather than an `if` so a future "Deposit Paid = 25%" business rule
@@ -137,12 +140,25 @@ def booking_contract_value(
 def resolve_amount_paid(
     payment_status: str | None,
     booking_value: float | None,
+    booking_id: str = "",
 ) -> tuple[float | None, bool]:
     """(amount paid, whether that figure is actually recorded).
 
-    The single point to replace once real payment records exist. Everything
-    else in this module consumes its output.
+    The payment ledger answers this exactly when it has entries for the
+    booking, which is the whole reason it exists. Most bookings will not have
+    any: the data to reconstruct their payments does not exist, and inventing
+    it was deliberately out of scope. Those fall through to the original
+    status-based reasoning, so nothing changes for them.
     """
+    if booking_id:
+        try:
+            from app.services.booking_ledger import has_ledger, ledger_totals
+
+            if has_ledger(booking_id):
+                return ledger_totals(booking_id).total_paid, True
+        except Exception:  # pragma: no cover - never let the ledger break a refund
+            logger.warning("Could not read the payment ledger for %s", booking_id, exc_info=True)
+
     status = str(payment_status or "").strip().lower()
     fraction = _PAID_FRACTION_BY_STATUS.get(status)
     if fraction is not None and booking_value is not None:
@@ -158,19 +174,21 @@ def refund_allowance(
     group_size: int | None = 1,
     payment_status: str | None = None,
     already_refunded: float | None = None,
+    booking_id: str = "",
 ) -> RefundAllowance:
     """Work out the refund ceiling for one booking's effective field values.
 
     Takes loose values rather than a booking object so the update route can ask
     "what would the ceiling be if this save went through", using the trip, room
     type, currency and party size the employee is submitting rather than the
-    ones currently stored.
+    ones currently stored. `booking_id` is the exception -- identity never
+    changes mid-save, and the ledger is keyed on it.
     """
     normalized_currency = str(currency or "").strip().upper()
     value = booking_contract_value(
         trip, room_type=room_type, currency=normalized_currency, group_size=group_size
     )
-    paid, paid_is_recorded = resolve_amount_paid(payment_status, value)
+    paid, paid_is_recorded = resolve_amount_paid(payment_status, value, booking_id)
 
     if paid is not None:
         maximum: float | None = paid
@@ -204,6 +222,7 @@ def refund_allowance_for_booking(booking: Any, trip: Any = None) -> RefundAllowa
         group_size=getattr(booking, "group_size", 1),
         payment_status=getattr(booking, "payment_status", None),
         already_refunded=getattr(booking, "refund_amount", None),
+        booking_id=getattr(booking, "booking_id", "") or "",
     )
 
 
