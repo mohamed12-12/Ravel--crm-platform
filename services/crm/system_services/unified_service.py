@@ -524,6 +524,7 @@ class UnifiedCRMService:
                 revenue_rows = connection.execute(
                     """
                     SELECT b.booking_status, b.payment_status, b.currency, b.room_type, b.group_size,
+                           b.refund_amount,
                            t.trip_id AS trip_trip_id, t.public_price AS trip_public_price,
                            t.room_prices_json AS trip_room_prices_json
                     FROM trip_bookings b
@@ -537,7 +538,10 @@ class UnifiedCRMService:
                 # pricing, requires a recognized currency) -- not a second,
                 # currency-blind calculation that only ever looked at
                 # Trip.public_price regardless of what currency the booking
-                # was actually recorded in.
+                # was actually recorded in. It returns revenue net of refunds,
+                # so refund_amount has to be selected above and carried here:
+                # omit it and this path quietly reports gross while every
+                # other surface reports net.
                 lifetime_revenue = 0.0
                 for row in revenue_rows:
                     booking_like = SimpleNamespace(
@@ -546,6 +550,7 @@ class UnifiedCRMService:
                         currency=row["currency"],
                         room_type=row["room_type"],
                         group_size=row["group_size"],
+                        refund_amount=row["refund_amount"],
                     )
                     trip_like = None
                     if row["trip_trip_id"]:

@@ -37,15 +37,27 @@
 </style>
 
 <div class="rev-grid">
+    {# Every figure on this page is net of refunds. Gross and refunds are shown
+       beneath the headline so the netting is visible rather than implied. #}
     <div class="kpi-card">
-        <div class="kpi-label">Total Revenue (USD)</div>
+        <div class="kpi-label">Total Net Revenue (USD)</div>
         <div class="kpi-value">${{ '%.2f'|format(total.USD) }}</div>
-        <div class="kpi-sub">All-time, confirmed &amp; paid</div>
+        <div class="kpi-sub">
+            All-time, after refunds
+            {% if total.USD_refunds > 0 %}
+            <br>${{ '%.2f'|format(total.USD_gross) }} gross − ${{ '%.2f'|format(total.USD_refunds) }} refunded
+            {% endif %}
+        </div>
     </div>
     <div class="kpi-card">
-        <div class="kpi-label">Total Revenue (EGP)</div>
+        <div class="kpi-label">Total Net Revenue (EGP)</div>
         <div class="kpi-value">{{ '%.2f'|format(total.EGP) }}</div>
-        <div class="kpi-sub">All-time, confirmed &amp; paid</div>
+        <div class="kpi-sub">
+            All-time, after refunds
+            {% if total.EGP_refunds > 0 %}
+            <br>{{ '%.2f'|format(total.EGP_gross) }} gross − {{ '%.2f'|format(total.EGP_refunds) }} refunded
+            {% endif %}
+        </div>
     </div>
     <div class="kpi-card">
         <div class="kpi-label">This Year ({{ current_year }})</div>
@@ -66,7 +78,7 @@
 <div class="card rev-section" style="border:1px solid rgba(220,50,50,0.35)">
     <div class="rev-section-header">
         <span class="rev-section-title" style="color:var(--red)">Needs Attention</span>
-        <span style="color:var(--text-muted);font-size:0.8rem">Completed / Fully Paid bookings not contributing real revenue yet</span>
+        <span style="color:var(--text-muted);font-size:0.8rem">Recognized bookings not contributing real revenue yet</span>
     </div>
     <table class="rev-table">
         <thead><tr><th>Booking ID</th><th>Traveler</th><th>Reason</th><th></th></tr></thead>

@@ -23,7 +23,7 @@ from app.models.traveler import Traveler
 from app.models.traveler_document import TravelerDocument
 from services.crm.system_services import UnifiedCRMService
 from services.crm.system_services.phone_normalization import normalize_phone_input
-from app.services.revenue import booking_revenue
+from app.services.revenue import booking_revenue_breakdown
 from services.data_authority import load_data_authority
 from app.security import can_view_all_records, current_user_id, has_permission
 from app.services.traveler_stats import recalculate_traveler_stats
@@ -55,28 +55,69 @@ def _revenue_display(usd_total: float, egp_total: float) -> str:
     return " / ".join(parts) if parts else "$0.00"
 
 
-def _build_revenue_summary_from_totals(usd_total: float, egp_total: float, preferred_currency: str) -> dict[str, str]:
+def _build_revenue_summary_from_totals(
+    usd_total: float,
+    egp_total: float,
+    preferred_currency: str,
+    usd_refunds: float = 0.0,
+    egp_refunds: float = 0.0,
+) -> dict[str, str]:
+    """Figures for the profile's revenue hero.
+
+    usd_total/egp_total are NET of refunds. The labels say so, and the gross
+    and refund components travel with them, because a bare "Lifetime Revenue"
+    that silently nets off refunds is the kind of number people reconcile
+    against and cannot make balance.
+    """
     preferred = str(preferred_currency or "USD").strip().upper()
-    if preferred == "EGP":
-        primary = {"label": "Lifetime Revenue (EGP)", "value": _format_revenue_amount(egp_total, "EGP"), "currency": "EGP"}
-        secondary = {"label": "Lifetime Revenue (USD)", "value": _format_revenue_amount(usd_total, "USD"), "currency": "USD"}
-    else:
-        primary = {"label": "Lifetime Revenue (USD)", "value": _format_revenue_amount(usd_total, "USD"), "currency": "USD"}
-        secondary = {"label": "Lifetime Revenue (EGP)", "value": _format_revenue_amount(egp_total, "EGP"), "currency": "EGP"}
+
+    def side(currency: str, net: float, refunds: float) -> dict[str, object]:
+        return {
+            "label": f"Net Revenue ({currency})",
+            "value": _format_revenue_amount(net, currency),
+            "currency": currency,
+            "gross": _format_revenue_amount(net + refunds, currency),
+            "refunds": _format_revenue_amount(refunds, currency),
+            "has_refunds": refunds > 0,
+        }
+
+    usd = side("USD", usd_total, usd_refunds)
+    egp = side("EGP", egp_total, egp_refunds)
+    primary, secondary = (egp, usd) if preferred == "EGP" else (usd, egp)
     return {
         "primary_label": primary["label"],
         "primary_value": primary["value"],
         "primary_currency": primary["currency"],
+        "primary_gross": primary["gross"],
+        "primary_refunds": primary["refunds"],
+        "primary_has_refunds": primary["has_refunds"],
         "secondary_label": secondary["label"],
         "secondary_value": secondary["value"],
         "secondary_currency": secondary["currency"],
-        "exchange_note": "Aggregated from paid trip bookings by booking currency",
+        "secondary_gross": secondary["gross"],
+        "secondary_refunds": secondary["refunds"],
+        "secondary_has_refunds": secondary["has_refunds"],
+        "exchange_note": "Recognized bookings less refunds, by booking currency",
+    }
+
+
+def _empty_revenue_totals() -> dict[str, float]:
+    """Net per currency, with the gross and refund components kept alongside.
+
+    "USD"/"EGP" stay the net figures so every existing reader of this dict
+    keeps working and now reports revenue after refunds; the _gross/_refunds
+    entries are what let the profile show why net differs from gross.
+    """
+    return {
+        "USD": 0.0, "EGP": 0.0,
+        "USD_gross": 0.0, "EGP_gross": 0.0,
+        "USD_refunds": 0.0, "EGP_refunds": 0.0,
     }
 
 
 def _attach_booking_revenue_totals(travelers: list[Traveler]) -> dict[str, dict[str, float]]:
     traveler_ids = [t.traveler_id for t in travelers if t.traveler_id]
-    totals = {traveler_id: {"USD": 0.0, "EGP": 0.0} for traveler_id in traveler_ids}
+    totals = {traveler_id: _empty_revenue_totals() for traveler_id in traveler_ids}
     if not traveler_ids:
         return {}
 
@@ -86,16 +127,20 @@ def _attach_booking_revenue_totals(travelers: list[Traveler]) -> dict[str, dict[
     trip_ids = {booking.trip_id for booking in bookings if booking.trip_id}
     trips = {trip.trip_id: trip for trip in Trip.query.filter(Trip.trip_id.in_(trip_ids)).all()} if trip_ids else {}
     for booking in bookings:
-        result = booking_revenue(booking, trips.get(booking.trip_id))
-        if result is None:
+        breakdown = booking_revenue_breakdown(booking, trips.get(booking.trip_id))
+        if breakdown is None:
             continue
-        currency, amount = result
-        totals.setdefault(booking.traveler_id, {"USD": 0.0, "EGP": 0.0})[currency] += amount
+        bucket = totals.setdefault(booking.traveler_id, _empty_revenue_totals())
+        bucket[breakdown.currency] += breakdown.net
+        bucket[f"{breakdown.currency}_gross"] += breakdown.gross
+        bucket[f"{breakdown.currency}_refunds"] += breakdown.refunds
 
     for traveler in travelers:
-        revenue = totals.get(traveler.traveler_id, {"USD": 0.0, "EGP": 0.0})
+        revenue = totals.get(traveler.traveler_id, _empty_revenue_totals())
         traveler.total_revenue_usd = revenue["USD"]
         traveler.total_revenue_egp = revenue["EGP"]
+        traveler.total_refunds_usd = revenue["USD_refunds"]
+        traveler.total_refunds_egp = revenue["EGP_refunds"]
         traveler.revenue_display = _revenue_display(revenue["USD"], revenue["EGP"])
     return totals
 
@@ -421,11 +466,15 @@ def detail(traveler_id):
     if trip_ids:
         trips = Trip.query.filter(Trip.trip_id.in_(trip_ids)).all()
         trip_type_map = {t.trip_id: t.type for t in trips}
-    revenue_totals = _attach_booking_revenue_totals([traveler]).get(traveler.traveler_id, {"USD": 0.0, "EGP": 0.0})
+    revenue_totals = _attach_booking_revenue_totals([traveler]).get(
+        traveler.traveler_id, _empty_revenue_totals()
+    )
     revenue_summary = _build_revenue_summary_from_totals(
         revenue_totals["USD"],
         revenue_totals["EGP"],
         traveler.preferred_currency or "",
+        usd_refunds=revenue_totals["USD_refunds"],
+        egp_refunds=revenue_totals["EGP_refunds"],
     )
 
     return render_template(

@@ -42,15 +42,26 @@
                  the other currency alongside it -- both always visible, never hidden
                  behind a single blended number. -->
             <div style="min-width:260px">
-                <div style="font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.09em;margin-bottom:0.55rem;text-align:right">Lifetime Revenue</div>
+                <div style="font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.09em;margin-bottom:0.55rem;text-align:right">Lifetime Net Revenue</div>
                 <div style="display:flex;gap:0.6rem;justify-content:flex-end;flex-wrap:wrap">
+                    {# Net after refunds. Where a refund exists the gross and the amount
+                       returned are shown underneath, so the figure can be reconciled
+                       rather than just believed. #}
                     <div style="text-align:center;padding:0.75rem 1.15rem;background:rgba(0,208,146,0.12);border-radius:10px;border:1px solid rgba(0,208,146,0.32);min-width:112px">
                         <div style="font-size:1.4rem;font-weight:800;color:#00d092;white-space:nowrap">{{ revenue_summary.primary_value }}</div>
                         <div style="font-size:0.64rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-top:0.2rem">{{ revenue_summary.primary_currency }}</div>
+                        {% if revenue_summary.primary_has_refunds %}
+                        <div style="font-size:0.62rem;color:var(--text-muted);margin-top:0.3rem;white-space:nowrap">{{ revenue_summary.primary_gross }} gross</div>
+                        <div style="font-size:0.62rem;color:#f2777a;white-space:nowrap">−{{ revenue_summary.primary_refunds }} refunded</div>
+                        {% endif %}
                     </div>
                     <div style="text-align:center;padding:0.75rem 1.15rem;background:rgba(56,185,141,0.07);border-radius:10px;border:1px solid rgba(56,185,141,0.2);min-width:112px">
                         <div style="font-size:1.4rem;font-weight:800;color:#38b98d;white-space:nowrap">{{ revenue_summary.secondary_value }}</div>
                         <div style="font-size:0.64rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-top:0.2rem">{{ revenue_summary.secondary_currency }}</div>
+                        {% if revenue_summary.secondary_has_refunds %}
+                        <div style="font-size:0.62rem;color:var(--text-muted);margin-top:0.3rem;white-space:nowrap">{{ revenue_summary.secondary_gross }} gross</div>
+                        <div style="font-size:0.62rem;color:#f2777a;white-space:nowrap">−{{ revenue_summary.secondary_refunds }} refunded</div>
+                        {% endif %}
                     </div>
                 </div>
                 {% if revenue_summary.exchange_note %}

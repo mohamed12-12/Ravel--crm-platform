@@ -279,11 +279,13 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         # a fixed USD_TO_EGP_RATE, so there is deliberately no "1 USD = X EGP"
         # conversion line any more -- these assertions track that current design.
         # Rendered as two side-by-side currency boxes (preferred currency
-        # first) rather than one primary/secondary text line.
-        self.assertIn("Lifetime Revenue", body)
+        # first) rather than one primary/secondary text line. The figure is
+        # net of refunds and the heading says so -- a bare "Revenue" that
+        # silently nets off refunds is a number nobody can reconcile.
+        self.assertIn("Lifetime Net Revenue", body)
         self.assertIn("0.00 EGP", body)
         self.assertIn("$0.00", body)
-        self.assertIn("Aggregated from paid trip bookings by booking currency", body)
+        self.assertIn("Recognized bookings less refunds, by booking currency", body)
         self.assertIn("Preferred Payment Currency", body)
 
         update_response = client.put(
