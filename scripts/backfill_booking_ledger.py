@@ -334,8 +334,9 @@ def main() -> int:
             # server at the time.
             print("\nThe database schema is out of date for this code.")
             print(f"  {str(exc.orig).strip()}")
-            print("\nRun the migrations first, from apps/api:")
-            print("  venv/bin/flask db upgrade")
+            print("\nCheck the database's migration state first, from the repo root:")
+            print("  venv/bin/python scripts/manage_migrations.py current")
+            print("  venv/bin/python scripts/manage_migrations.py upgrade")
             return 1
 
         if counts["bookings_examined"] == 0:
