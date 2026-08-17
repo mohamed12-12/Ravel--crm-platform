@@ -1,15 +1,24 @@
 #!/usr/bin/env python
 """List bookings whose stored refund exceeds what the refund rule now allows.
 
-Read-only by design. The refund ceiling introduced in
-app/services/refund_limits.py applies to new saves only -- historical refunds
-are left exactly as recorded, because a number someone entered deliberately is
-evidence, not a bug to be silently corrected. This report is how you find them
-so a human can decide what, if anything, each one needs.
+The refund ceiling introduced in app/services/refund_limits.py applies to new
+saves only -- historical refunds are left exactly as recorded, because a number
+someone entered deliberately is evidence, not a bug to be silently corrected.
+This report is how you find them so a human can decide what, if anything, each
+one needs. It never writes to a booking, a refund, or the event trail.
 
-Run against whatever DATABASE_URL the CRM itself uses:
+Run it with the CRM's own interpreter, from the repository root:
 
-    python scripts/report_legacy_refund_exceptions.py
+    venv/bin/python scripts/report_legacy_refund_exceptions.py
+
+The plain `python` on the server is the system one and has no dependencies
+installed, so it fails immediately with ModuleNotFoundError: sqlalchemy.
+
+**Check the database line it prints first.** app/config.py falls back to a
+local dev SQLite file when DATABASE_URL is unset, and a report run against an
+empty database prints a clean bill of health that means nothing. This script
+prints the database it opened and how many bookings it examined so that case
+is obvious rather than silent; pass --database-url to be explicit.
 
 Add --json for machine-readable output.
 """
@@ -17,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -27,9 +37,13 @@ for candidate in (str(REPO_ROOT), str(API_ROOT)):
         sys.path.insert(0, candidate)
 
 
-def collect_exceptions() -> list[dict]:
+def collect_exceptions() -> tuple[list[dict], dict]:
+    """Returns (findings, scan summary).
+
+    The summary is not decoration: without it, a run against the wrong or an
+    empty database is indistinguishable from a genuinely clean one.
+    """
     from app import create_app
-    from app.extensions import db
     from app.models.booking import TripBooking
     from app.models.trip import Trip
     from app.services.refund_limits import format_money, refund_allowance_for_booking
@@ -37,8 +51,13 @@ def collect_exceptions() -> list[dict]:
     app = create_app()
     findings: list[dict] = []
     with app.app_context():
+        summary = {
+            "database": str(app.config.get("SQLALCHEMY_DATABASE_URI") or "(unset)"),
+            "bookings_total": TripBooking.query.count(),
+        }
         trips = {trip.trip_id: trip for trip in Trip.query.all()}
         bookings = TripBooking.query.filter(TripBooking.refund_amount.isnot(None)).all()
+        summary["bookings_with_refund"] = len(bookings)
         for booking in bookings:
             allowance = refund_allowance_for_booking(booking, trips.get(booking.trip_id))
             if allowance.maximum_refund is None:
@@ -71,21 +90,45 @@ def collect_exceptions() -> list[dict]:
                         f"maximum of {format_money(allowance.maximum_refund, allowance.currency)}"
                     ),
                 })
-    return findings
+    return findings, summary
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description="Report bookings whose stored refund exceeds the refund ceiling.",
+        epilog="Run with the CRM's own interpreter: venv/bin/python scripts/report_legacy_refund_exceptions.py",
+    )
     parser.add_argument("--json", action="store_true", help="emit JSON instead of text")
+    parser.add_argument(
+        "--database-url",
+        default="",
+        help="override DATABASE_URL for this run, rather than relying on the shell or .env",
+    )
     args = parser.parse_args()
 
-    findings = collect_exceptions()
+    if args.database_url:
+        os.environ["DATABASE_URL"] = args.database_url
+
+    findings, summary = collect_exceptions()
     if args.json:
-        print(json.dumps(findings, indent=2, default=str))
+        print(json.dumps({"summary": summary, "findings": findings}, indent=2, default=str))
         return 0
 
     breaches = [f for f in findings if f["verdict"] == "exceeds_ceiling"]
     unverifiable = [f for f in findings if f["verdict"] == "unverifiable"]
+
+    print(f"Database: {summary['database']}")
+    print(
+        f"Examined {summary['bookings_total']} booking(s); "
+        f"{summary['bookings_with_refund']} carry a refund amount.\n"
+    )
+    if summary["bookings_total"] == 0:
+        print(
+            "No bookings at all were found. That almost certainly means this ran "
+            "against the wrong database rather than that the CRM is empty -- check "
+            "the line above and re-run with --database-url if it is not the CRM's."
+        )
+        return 1
 
     if not breaches:
         print("No stored refund exceeds the refund ceiling.")
@@ -100,7 +143,7 @@ def main() -> int:
         print(f"\n{len(unverifiable)} booking(s) carry a refund that cannot be checked:")
         for finding in unverifiable:
             print(f"  {finding['booking_id']}  {finding['refund_amount']} {finding['currency']}  {finding['reason']}")
-    print("\nNothing was modified.")
+    print("\nNo booking, refund or timeline record was modified.")
     return 0
 
 
