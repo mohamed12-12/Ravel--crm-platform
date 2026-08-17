@@ -23,6 +23,7 @@ if str(API_ROOT) not in sys.path:
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from services.crm.system_services.db_uri import safe_database_uri  # noqa: E402
 from services.crm.system_services.phone_normalization import normalize_phone_input  # noqa: E402
 
 
@@ -1222,7 +1223,7 @@ def write_report(path: Path, summary: MigrationSummary, quarantine: list[dict[st
         f"- Mode: {'dry-run' if summary.dry_run else 'execute'}",
         f"- Scope: {summary.scope}",
         f"- Workbook: `{summary.workbook}`",
-        f"- Database URI: `{summary.database_uri}`",
+        f"- Database URI: `{safe_database_uri(summary.database_uri)}`",
         f"- Quarantined rows: {len(quarantine)}",
         "",
     ]

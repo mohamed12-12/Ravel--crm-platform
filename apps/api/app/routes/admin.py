@@ -475,14 +475,22 @@ def db_health():
     stale SQLite counts while the app is actually serving Postgres data.
     Query the live SQLAlchemy session instead in that case, mirroring the
     backend check in app/routes/crm.py's _agent_runtime().
+
+    The connection string is masked before it leaves the process. In
+    production it carries the live Postgres password, and this endpoint
+    returned it in plain text -- into browser caches, proxy logs, and any
+    screenshot or pasted ticket. Which backend and which host is what this
+    endpoint is for; the credential never was.
     """
+    from services.crm.system_services.db_uri import safe_database_uri
+
     uri = current_app.config.get("SQLALCHEMY_DATABASE_URI", "")
     if str(uri).startswith("sqlite:///"):
         diagnostics = get_database_diagnostics()
         active_db = diagnostics["db_path"]
         counts = diagnostics["counts"]
     else:
-        active_db = uri
+        active_db = safe_database_uri(uri)
         counts = {
             "travelers": Traveler.query.count(),
             "trips": Trip.query.count(),
@@ -493,7 +501,7 @@ def db_health():
     return jsonify(
         {
             "status": "ok",
-            "sqlalchemyDatabaseUri": uri,
+            "sqlalchemyDatabaseUri": safe_database_uri(uri),
             "activeDbPath": active_db,
             "counts": counts,
         }

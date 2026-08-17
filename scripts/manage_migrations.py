@@ -34,6 +34,9 @@ for candidate in (str(REPO_ROOT), str(API_ROOT)):
         sys.path.insert(0, candidate)
 
 
+from services.crm.system_services.db_uri import safe_database_uri  # noqa: E402
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -54,7 +57,7 @@ def main() -> int:
 
     app = create_app()
     with app.app_context():
-        print(f"Database: {app.config.get('SQLALCHEMY_DATABASE_URI')}\n")
+        print(f"Database: {safe_database_uri(app.config.get('SQLALCHEMY_DATABASE_URI'))}\n")
         if args.command == "current":
             current(verbose=True)
             print("\n(If nothing is listed above, this database has no Alembic revision "

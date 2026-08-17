@@ -56,6 +56,9 @@ def _clean(value) -> str:
     return "" if value is None else str(value).strip()
 
 
+from services.crm.system_services.db_uri import safe_database_uri  # noqa: E402
+
+
 def _parse_amount(value) -> float | None:
     text = _clean(value).replace(",", "").replace("$", "")
     if not text:
@@ -321,7 +324,7 @@ def main() -> int:
         print("No --workbook given: category A (real historical deposits) will be skipped.\n")
 
     with app.app_context():
-        print(f"Database: {app.config.get('SQLALCHEMY_DATABASE_URI')}")
+        print(f"Database: {safe_database_uri(app.config.get('SQLALCHEMY_DATABASE_URI'))}")
 
         from sqlalchemy.exc import OperationalError
 

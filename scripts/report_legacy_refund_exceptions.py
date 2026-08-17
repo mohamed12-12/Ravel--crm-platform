@@ -47,12 +47,13 @@ def collect_exceptions() -> tuple[list[dict], dict]:
     from app.models.booking import TripBooking
     from app.models.trip import Trip
     from app.services.refund_limits import format_money, refund_allowance_for_booking
+    from services.crm.system_services.db_uri import safe_database_uri
 
     app = create_app()
     findings: list[dict] = []
     with app.app_context():
         summary = {
-            "database": str(app.config.get("SQLALCHEMY_DATABASE_URI") or "(unset)"),
+            "database": safe_database_uri(app.config.get("SQLALCHEMY_DATABASE_URI")),
             "bookings_total": TripBooking.query.count(),
         }
         trips = {trip.trip_id: trip for trip in Trip.query.all()}
