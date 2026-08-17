@@ -922,7 +922,12 @@ class Phase3BookingLifecycleTests(unittest.TestCase):
             traveler = self.db.session.get(self.Traveler, "TR100")
             self.assertEqual(traveler.lifetime_revenue, 1000)
 
-        self.service.update_booking_status("B-103", new_status="Cancelled", new_payment_status="Deposit Paid")
+        # Only the cancellation matters here -- this test is about a cancelled
+        # booking dropping out of the traveler's counters. It used to also
+        # move the payment status backwards from Fully Paid to Deposit Paid,
+        # which the CRM route has always refused and this service path now
+        # refuses too.
+        self.service.update_booking_status("B-103", new_status="Cancelled")
 
         with self.app.app_context():
             traveler = self.db.session.get(self.Traveler, "TR100")

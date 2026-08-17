@@ -22,6 +22,7 @@ import math
 from dataclasses import dataclass
 from datetime import datetime
 
+from .payment_rules import REFUND_PAYMENT_STATUSES
 from .trip_pricing import price_for_room_and_currency
 
 REVENUE_BOOKING_STATUSES = {"confirmed", "paid", "completed"}
@@ -31,9 +32,9 @@ REVENUE_BOOKING_STATUSES = {"confirmed", "paid", "completed"}
 REVENUE_PAYMENT_STATUSES = {"fully paid", "paid"}
 # Payment statuses meaning "was paid, then some or all of it was returned".
 # These earn gross revenue too -- the money did arrive -- and then have the
-# refund taken back off. Mirrors app/routes/bookings.py's
-# REFUND_PAYMENT_STATUSES, lower-cased for comparison here.
-REFUNDED_PAYMENT_STATUSES = {"partial refund", "full refund", "refunded"}
+# refund taken back off. Derived from payment_rules rather than restated, so
+# adding a refund spelling there can never leave revenue recognition behind.
+REFUNDED_PAYMENT_STATUSES = {status.lower() for status in REFUND_PAYMENT_STATUSES}
 # The set that actually gates recognition. Splitting it this way is the whole
 # fix: a booking used to vanish from revenue entirely the moment its payment
 # status became a refund, so a 1,000 booking with a 120 refund reported 0

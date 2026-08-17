@@ -23,6 +23,7 @@ from .field_mapping import (
     TRIPS_SHEET_NAME,
 )
 from .phone_normalization import normalize_phone_input
+from .payment_rules import validate_payment_transition
 from .revenue_rules import booking_revenue
 from .trip_program import build_trip_program
 from .trip_pricing import parse_room_prices
@@ -2024,6 +2025,19 @@ class UnifiedCRMService:
                 raise ValueError(f"Booking was not found: {booking_id}")
 
             old_status = str(booking["booking_status"] or "Draft").strip() or "Draft"
+            # Validate BOTH statuses before writing either. This path used to
+            # check the booking status and apply the payment status with no
+            # check at all, so it could move a booking backwards from Fully
+            # Paid to Deposit Paid -- something the CRM route has always
+            # refused. Same rules, same override convention, one definition in
+            # payment_rules.py.
+            if new_payment_status:
+                validate_payment_transition(
+                    booking["payment_status"],
+                    new_payment_status,
+                    allow_employee_correction=allow_employee_correction,
+                    correction_note=notes,
+                )
             if new_status:
                 self._validate_booking_transition(
                     old_status,

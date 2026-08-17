@@ -207,6 +207,10 @@
             <form action="{{ url_for('bookings.update_status', booking_id=booking.booking_id) }}" method="POST">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="expected_history_count" value="{{ history_count }}">
+                {# Covers the payment fields that expected_history_count cannot see,
+                   so two employees editing a refund at once no longer silently
+                   overwrite each other. #}
+                <input type="hidden" name="expected_payment_state" value="{{ expected_payment_state }}">
                 <input type="hidden" name="employee_correction" value="1">
 
                 {% if missing_fields %}
@@ -433,7 +437,10 @@ if (bookingDetailSelector) bookingDetailSelector.refresh();
 // Server-side validation in bookings.py is still the authority -- this is
 // only there to stop employees seeing a box they can never usefully fill.
 (function () {
-    var REFUND_STATUSES = ['Full Refund', 'Partial Refund', 'Refunded'];
+    // Supplied by the server from payment_rules.REFUND_PAYMENT_STATUSES rather
+    // than restated here -- this list used to be a third hard-coded copy that
+    // could drift out of step with the route and the revenue rules.
+    var REFUND_STATUSES = {{ refund_payment_statuses | tojson }};
     var paymentSelect = document.getElementById('bookingPaymentStatusSelector');
     var refundGroup = document.getElementById('bookingRefundGroup');
     var refundInput = document.getElementById('bookingRefundAmount');

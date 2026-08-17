@@ -38,6 +38,8 @@ from app.services.refund_limits import (
     validate_refund_total,
 )
 from app.services.traveler_stats import recalculate_traveler_stats
+from services.crm.system_services import payment_rules
+from services.crm.system_services.payment_rules import payment_state_token, validate_payment_transition
 from services.crm.system_services.trip_pricing import ROOM_PRICE_TYPES
 
 logger = logging.getLogger(__name__)
@@ -46,21 +48,14 @@ bookings_bp = Blueprint('bookings', __name__, url_prefix='/bookings')
 
 BOOKING_STATUSES = ['Draft', 'Waiting Customer', 'Pending Confirmation', 'Confirmed', 'Payment Pending', 'Paid', 'Completed', 'Cancelled']
 BOOKING_MANUAL_STATUS_OPTIONS = ['Draft', 'Completed', 'Cancelled']
-# Payment statuses that carry a refund amount. 'Refunded' is a legacy
-# spelling that is still a valid PAYMENT_STATUSES member and still
-# selectable in the UI -- leaving it out of this set meant choosing it
-# silently nulled an already-recorded refund amount (the value is only kept
-# when the effective payment status is in here).
-REFUND_PAYMENT_STATUSES = {'Full Refund', 'Partial Refund', 'Refunded'}
-PAYMENT_STATUSES = ['Pending', 'Deposit Paid', 'Fully Paid', 'Partial Refund', 'Full Refund', 'Refunded']
-PAYMENT_TRANSITIONS = {
-    'Pending': {'Deposit Paid', 'Fully Paid', 'Partial Refund', 'Full Refund', 'Refunded'},
-    'Deposit Paid': {'Fully Paid', 'Partial Refund', 'Full Refund', 'Refunded'},
-    'Fully Paid': {'Partial Refund', 'Full Refund', 'Refunded'},
-    'Partial Refund': {'Full Refund'},
-    'Full Refund': set(),
-    'Refunded': set(),
-}
+# The payment vocabulary now lives in services/crm/system_services/payment_rules.py
+# so this route and UnifiedCRMService enforce one identical set of rules --
+# the service used to have no payment validation at all. Re-exported under
+# the original names because this module is where the rest of the app (and
+# the tests) have always looked for them.
+REFUND_PAYMENT_STATUSES = payment_rules.REFUND_PAYMENT_STATUSES
+PAYMENT_STATUSES = payment_rules.PAYMENT_STATUSES
+PAYMENT_TRANSITIONS = payment_rules.PAYMENT_TRANSITIONS
 
 
 def _allowed_status_options(current_status: str | None) -> list[str]:
@@ -93,14 +88,24 @@ def _parse_datetime_local(value: str | None):
     return None
 
 
-def _parse_refund_amount(value: str | None) -> float | None:
-    raw = (value or '').strip()
-    if not raw:
+def _parse_refund_amount(value) -> float | None:
+    # Form posts arrive as strings, but this endpoint also accepts JSON, where
+    # a client sends a real number -- and `(value or '').strip()` raised
+    # AttributeError on it, turning a valid API call into a 500.
+    if value is None:
         return None
-    try:
-        amount = float(raw)
-    except (TypeError, ValueError):
+    if isinstance(value, bool):
         raise ValueError('Refund amount must be a valid number.')
+    if isinstance(value, (int, float)):
+        amount = float(value)
+    else:
+        raw = str(value).strip()
+        if not raw:
+            return None
+        try:
+            amount = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError('Refund amount must be a valid number.')
     # float() happily accepts 'nan' and 'inf'. NaN is the dangerous one: every
     # comparison against it is False, so a NaN refund slips past both the
     # negative check below and the ceiling check later, and lands in the
@@ -112,25 +117,7 @@ def _parse_refund_amount(value: str | None) -> float | None:
     return amount
 
 
-def _validate_payment_transition(
-    current_status: str | None,
-    new_status: str | None,
-    *,
-    allow_employee_correction: bool = False,
-    correction_note: str = '',
-) -> None:
-    current = (current_status or 'Pending').strip() or 'Pending'
-    target = (new_status or '').strip()
-    if not target or target == current:
-        return
-    if target not in PAYMENT_TRANSITIONS.get(current, set()):
-        if allow_employee_correction and target in PAYMENT_STATUSES:
-            if not correction_note.strip():
-                raise ValueError(
-                    'Add a reason before making a non-standard payment status change.'
-                )
-            return
-        raise ValueError(f"Invalid payment status transition: {current} -> {target}")
+_validate_payment_transition = validate_payment_transition
 
 
 def _validate_completeness_for_status(
@@ -390,6 +377,8 @@ def detail(booking_id):
                            missing_fields=booking.compute_missing_fields(),
                            refund_allowance=refund_allowance_for_booking(booking, trip),
                            format_money=format_money,
+                           expected_payment_state=payment_state_token(booking.payment_status, booking.refund_amount),
+                           refund_payment_statuses=sorted(REFUND_PAYMENT_STATUSES),
                            trips_data=trips_data,
                            assigned_user=booking.assigned_user,
                            is_overdue=_is_overdue,
@@ -501,17 +490,40 @@ def update_status(booking_id):
         str(data.get('employee_correction') or '').strip().lower() in {'1', 'true', 'yes'}
         and not request.is_json
     )
+    def _conflict(message: str):
+        if request.is_json:
+            return jsonify({'error': message}), 409
+        flash(message, 'error')
+        return redirect(url_for('bookings.detail', booking_id=booking_id))
+
     expected_history_count = data.get('expected_history_count')
     if expected_history_count not in (None, ''):
         actual_history_count = BookingStatusHistory.query.filter_by(booking_id=booking_id).count()
         try:
-            if int(expected_history_count) != actual_history_count:
-                raise ValueError("Booking was updated by another employee")
-        except ValueError as e:
-            if request.is_json:
-                return jsonify({'error': str(e)}), 409
-            flash(str(e), 'error')
-            return redirect(url_for('bookings.detail', booking_id=booking_id))
+            submitted_history_count = int(expected_history_count)
+        except (TypeError, ValueError):
+            # A malformed token is a broken client, not a concurrent edit.
+            # Reporting it as "another employee changed this" sent people off
+            # to reload a page that was never stale.
+            return _conflict('Could not verify this booking was up to date. Reload the page and try again.')
+        if submitted_history_count != actual_history_count:
+            return _conflict('Booking was updated by another employee')
+
+    # booking_status_history only gains a row when booking_status changes, so
+    # the count above cannot see a concurrent payment or refund edit at all --
+    # two employees refunding the same booking both passed it and the later
+    # save silently overwrote the earlier one. This second token covers the
+    # money fields specifically. Optional, like the count: a JSON client that
+    # omits it keeps working exactly as before.
+    expected_payment_state = data.get('expected_payment_state')
+    if expected_payment_state not in (None, ''):
+        current_payment_state = payment_state_token(booking.payment_status, booking.refund_amount)
+        if str(expected_payment_state) != current_payment_state:
+            return _conflict(
+                'The payment details for this booking changed while you were editing. '
+                'Reload the page to see the current amounts before saving.'
+            )
+
     if new_status and new_status not in BOOKING_STATUSES:
         flash('Invalid status transition', 'error')
         return redirect(url_for('bookings.detail', booking_id=booking_id))
