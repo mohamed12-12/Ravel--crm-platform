@@ -1,5 +1,6 @@
 # app/routes/bookings.py
 import logging
+import math
 
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, abort, current_app
 from app.models.booking import TripBooking
@@ -30,6 +31,12 @@ from app.security import (
     has_permission,
 )
 from app.services.booking_audit import record_booking_created, record_booking_note
+from app.services.refund_limits import (
+    format_money,
+    refund_allowance,
+    refund_allowance_for_booking,
+    validate_refund_total,
+)
 from app.services.traveler_stats import recalculate_traveler_stats
 from services.crm.system_services.trip_pricing import ROOM_PRICE_TYPES
 
@@ -93,6 +100,12 @@ def _parse_refund_amount(value: str | None) -> float | None:
     try:
         amount = float(raw)
     except (TypeError, ValueError):
+        raise ValueError('Refund amount must be a valid number.')
+    # float() happily accepts 'nan' and 'inf'. NaN is the dangerous one: every
+    # comparison against it is False, so a NaN refund slips past both the
+    # negative check below and the ceiling check later, and lands in the
+    # database as a number no report can add up.
+    if not math.isfinite(amount):
         raise ValueError('Refund amount must be a valid number.')
     if amount < 0:
         raise ValueError('Refund amount cannot be negative.')
@@ -185,6 +198,7 @@ def _validate_refund_amount_for_status(
     current_payment_status: str | None,
     refund_amount: float | None,
     refund_amount_submitted: bool,
+    allowance=None,
 ) -> None:
     """A refund status with no amount recorded is never a legitimate state --
     it leaves the CRM saying money was returned without saying how much, and
@@ -196,6 +210,13 @@ def _validate_refund_amount_for_status(
     status with no amount is left alone -- same "only on the transition"
     principle as _validate_completeness_for_status, so this never locks an
     employee out of records they did not create.
+
+    The same trigger governs `allowance`'s upper bound, which is what keeps
+    this backward compatible: a legacy booking whose stored refund already
+    exceeds today's ceiling stays fully editable for everything else, and is
+    only challenged when someone actually touches the refund figure. Existing
+    refunds are reported, never rewritten -- see
+    scripts/report_legacy_refund_exceptions.py.
     """
     target = str(target_payment_status or '').strip()
     if target not in REFUND_PAYMENT_STATUSES:
@@ -207,6 +228,8 @@ def _validate_refund_amount_for_status(
         raise ValueError(
             f'Enter the refund amount before saving a "{target}" payment status.'
         )
+    if allowance is not None:
+        validate_refund_total(refund_amount, allowance)
 
 
 def _append_note(existing: str | None, note: str, actor: str) -> str | None:
@@ -365,6 +388,8 @@ def detail(booking_id):
                            can_assign=has_permission('assign_work'),
                            can_change_payment_status=_can_change_payment_status(),
                            missing_fields=booking.compute_missing_fields(),
+                           refund_allowance=refund_allowance_for_booking(booking, trip),
+                           format_money=format_money,
                            trips_data=trips_data,
                            assigned_user=booking.assigned_user,
                            is_overdue=_is_overdue,
@@ -603,12 +628,29 @@ def update_status(booking_id):
         flash(str(e), 'error')
         return redirect(url_for('bookings.detail', booking_id=booking_id))
 
+    # Price the refund against the booking as it will be *after* this save,
+    # not as it is stored now: the same form can change the trip, room type,
+    # currency or party size in the request that records the refund, and
+    # validating against the stale figures would use the wrong ceiling.
+    if trip_id_submitted:
+        effective_trip = trip_for_update
+    else:
+        effective_trip = db.session.get(Trip, booking.trip_id) if booking.trip_id else None
+    effective_allowance = refund_allowance(
+        trip=effective_trip,
+        room_type=(new_room_type if room_type_submitted else booking.room_type) or '',
+        currency=(new_currency if currency_submitted else booking.currency) or '',
+        group_size=new_group_size if (group_size_submitted and new_group_size) else booking.group_size,
+        payment_status=payment_for_service or booking.payment_status,
+        already_refunded=booking.refund_amount,
+    )
     try:
         _validate_refund_amount_for_status(
             target_payment_status=payment_for_service or booking.payment_status,
             current_payment_status=booking.payment_status,
             refund_amount=refund_amount,
             refund_amount_submitted=refund_amount_present,
+            allowance=effective_allowance,
         )
     except ValueError as e:
         if request.is_json:

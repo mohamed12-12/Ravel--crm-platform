@@ -295,8 +295,21 @@
                     </div>
                     <div class="form-group" id="bookingRefundGroup" style="margin-bottom:0.75rem;display:none">
                         <label class="form-label">Refund Amount</label>
-                        <input class="form-input" type="number" name="refund_amount" id="bookingRefundAmount" min="0" step="0.01" value="{{ booking.refund_amount if booking.refund_amount is not none else '' }}">
-                        <div style="color:var(--text-muted);font-size:0.72rem;margin-top:0.35rem">Required when the payment status is a refund.</div>
+                        <input class="form-input" type="number" name="refund_amount" id="bookingRefundAmount" min="0" step="0.01"
+                               {% if refund_allowance.is_enforceable %}max="{{ '%.2f'|format(refund_allowance.maximum_refund) }}"{% endif %}
+                               value="{{ booking.refund_amount if booking.refund_amount is not none else '' }}">
+                        <div style="color:var(--text-muted);font-size:0.72rem;margin-top:0.35rem">
+                            Required when the payment status is a refund. This is the <strong>total</strong> refunded for
+                            this booking, not an extra instalment.
+                            {% if refund_allowance.is_enforceable %}
+                            <br>Maximum {{ format_money(refund_allowance.maximum_refund, refund_allowance.currency) }} —
+                            {% if refund_allowance.amount_paid_is_recorded %}the amount recorded as paid.{% else %}the total value of this booking.{% endif %}
+                            {% if refund_allowance.already_refunded > 0 %}
+                            {{ format_money(refund_allowance.already_refunded, refund_allowance.currency) }} already recorded,
+                            leaving {{ format_money(refund_allowance.remaining_refundable, refund_allowance.currency) }}.
+                            {% endif %}
+                            {% endif %}
+                        </div>
                     </div>
                 {% else %}
                     <div class="form-group" style="margin-bottom:0.75rem">
