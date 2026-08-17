@@ -166,7 +166,19 @@ def plan_backfill(deposits_by_booking: dict[str, list[dict]], infer_fully_paid: 
         )
 
         # --- A: real deposits from the workbook -------------------------
-        real_deposits = deposits_by_booking.get(booking.booking_id) or []
+        # A zero or missing amount is the absence of a payment, not a payment
+        # of nothing, and must never become a placeholder row. read_workbook_
+        # deposits already drops these, but the guard belongs here too: this
+        # function trusts whatever mapping it is handed, and without it a zero
+        # reaches the database and surfaces as a CHECK violation mid-run
+        # rather than a clean skip.
+        real_deposits = [
+            deposit for deposit in (deposits_by_booking.get(booking.booking_id) or [])
+            if deposit.get("amount") is not None and float(deposit["amount"]) > 0
+        ]
+        counts["skipped_non_positive_deposit"] += len(
+            deposits_by_booking.get(booking.booking_id) or []
+        ) - len(real_deposits)
         for deposit in real_deposits:
             deposit_currency = deposit["currency"] or currency
             if not deposit_currency:
@@ -310,7 +322,21 @@ def main() -> int:
 
     with app.app_context():
         print(f"Database: {app.config.get('SQLALCHEMY_DATABASE_URI')}")
-        planned, counts, warnings = plan_backfill(deposits, args.infer_fully_paid)
+
+        from sqlalchemy.exc import OperationalError
+
+        try:
+            planned, counts, warnings = plan_backfill(deposits, args.infer_fully_paid)
+        except OperationalError as exc:
+            # Almost always a database that has not had `flask db upgrade` run
+            # against it. The raw SQLAlchemy traceback buries that in sixty
+            # lines of stack, which is no use to whoever is running this on a
+            # server at the time.
+            print("\nThe database schema is out of date for this code.")
+            print(f"  {str(exc.orig).strip()}")
+            print("\nRun the migrations first, from apps/api:")
+            print("  venv/bin/flask db upgrade")
+            return 1
 
         if counts["bookings_examined"] == 0:
             print(

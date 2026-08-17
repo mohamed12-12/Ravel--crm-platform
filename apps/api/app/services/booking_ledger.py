@@ -32,7 +32,16 @@ class LedgerImmutableError(RuntimeError):
 
 @dataclass(frozen=True)
 class LedgerTotals:
-    """What a booking's ledger says, in the booking's own currency."""
+    """What a booking's ledger says, in the booking's own currency.
+
+    **An empty ledger means "no payment evidence was recorded", not "the
+    customer paid zero".** The two are indistinguishable if you read
+    `total_paid` alone -- it is 0.0 in both cases -- and treating the first as
+    the second would invent a settled debt for most of the bookings in this
+    system, because the historical data to reconstruct their payments does not
+    exist. Check `total_paid_is_known` (or `has_ledger()`) before drawing any
+    conclusion from a zero.
+    """
 
     currency: str
     total_paid: float
@@ -45,6 +54,11 @@ class LedgerTotals:
 
     @property
     def has_entries(self) -> bool:
+        return self.entry_count > 0
+
+    @property
+    def total_paid_is_known(self) -> bool:
+        """Whether `total_paid` is a fact or merely the absence of evidence."""
         return self.entry_count > 0
 
 

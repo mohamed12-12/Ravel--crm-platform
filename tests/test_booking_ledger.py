@@ -485,6 +485,137 @@ class BookingLedgerTests(unittest.TestCase):
         with self.app.app_context():
             self.assertEqual(self.BookingTransaction.query.count(), 1)
 
+    # === legacy data policy =============================================
+    # Approved rule: treat legacy payment data as unknown unless there is
+    # explicit, trustworthy evidence. Never manufacture an amount, and never
+    # write a zero as a placeholder for one.
+
+    def test_an_empty_ledger_means_no_evidence_not_a_zero_payment(self) -> None:
+        """The distinction the whole legacy policy rests on. total_paid reads
+        0.0 either way, so anything drawing a conclusion from it must check
+        whether that zero is a fact first."""
+        self._seed_booking()
+        totals = self._totals()
+        self.assertEqual(totals.total_paid, 0.0)
+        self.assertFalse(totals.total_paid_is_known)
+
+        self._add(amount=250.0)
+        known = self._totals()
+        self.assertEqual(known.total_paid, 250.0)
+        self.assertTrue(known.total_paid_is_known)
+
+    def test_a_zero_refund_amount_creates_no_transaction(self) -> None:
+        """A stored 0.0 is the absence of a refund, not a refund of nothing."""
+        self._seed_booking(booking_id="B-LG-ZERO", payment_status="Fully Paid", refund_amount=0.0)
+        _module, planned, _counts, _warnings, written = self._run_backfill(apply=True)
+        self.assertEqual(planned, [])
+        self.assertEqual(written, 0)
+        with self.app.app_context():
+            self.assertEqual(self.BookingTransaction.query.count(), 0)
+
+    def test_a_zero_or_negative_workbook_deposit_creates_no_transaction(self) -> None:
+        self._seed_booking()
+        deposits = {
+            "B-LG-1": [
+                {"ordinal": 1, "amount": 0.0, "currency": "USD",
+                 "occurred_on": date(2026, 2, 10), "method": "cash"},
+                {"ordinal": 2, "amount": -50.0, "currency": "USD",
+                 "occurred_on": date(2026, 2, 11), "method": "cash"},
+            ]
+        }
+        _module, planned, counts, _warnings, written = self._run_backfill(
+            deposits=deposits, apply=True
+        )
+        self.assertEqual(planned, [])
+        self.assertEqual(written, 0)
+        # Skipped cleanly at the planning stage, not left for the database
+        # CHECK to reject mid-run.
+        self.assertEqual(counts["skipped_non_positive_deposit"], 2)
+
+    def test_a_zero_amount_cannot_be_written_even_deliberately(self) -> None:
+        """Belt and braces: the database refuses it regardless of caller."""
+        from sqlalchemy.exc import IntegrityError
+
+        self._seed_booking()
+        with self.app.app_context():
+            self.db.session.add(
+                self.BookingTransaction(
+                    booking_id="B-LG-1", entry_type="refund", amount=0.0,
+                    currency="USD", occurred_on=date(2026, 3, 1),
+                    source="migration_legacy_refund",
+                )
+            )
+            with self.assertRaises(IntegrityError):
+                self.db.session.commit()
+            self.db.session.rollback()
+
+    def test_the_backfill_modifies_no_booking_row_at_all(self) -> None:
+        """Across every category at once, including the ones that do produce
+        transactions. The legacy fields stay exactly as they were."""
+        self._seed_booking(booking_id="B-MIX-PAID", payment_status="Fully Paid")
+        self._seed_booking(booking_id="B-MIX-REFUND", payment_status="Partial Refund", refund_amount=120.0)
+        self._seed_booking(booking_id="B-MIX-PENDING", payment_status="Pending")
+        self._seed_booking(booking_id="B-MIX-DEPOSIT", payment_status="Deposit Paid")
+
+        def snapshot():
+            with self.app.app_context():
+                return {
+                    booking.booking_id: (
+                        booking.payment_status, booking.refund_amount,
+                        booking.booking_status, booking.currency, booking.group_size,
+                    )
+                    for booking in self.TripBooking.query.all()
+                }
+
+        before = snapshot()
+        deposits = {
+            "B-MIX-PAID": [
+                {"ordinal": 1, "amount": 400.0, "currency": "USD",
+                 "occurred_on": date(2026, 2, 10), "method": "transfer"},
+            ]
+        }
+        self._run_backfill(deposits=deposits, apply=True)
+        self.assertEqual(snapshot(), before)
+
+    def test_only_bookings_with_evidence_get_a_ledger(self) -> None:
+        """The intended shape of the migrated data: evidence in, silence out."""
+        self._seed_booking(booking_id="B-EV-WORKBOOK", payment_status="Fully Paid")
+        self._seed_booking(booking_id="B-EV-REFUND", payment_status="Partial Refund", refund_amount=75.0)
+        self._seed_booking(booking_id="B-EV-PAID-NOEVIDENCE", payment_status="Fully Paid")
+        self._seed_booking(booking_id="B-EV-PENDING", payment_status="Pending")
+        self._seed_booking(booking_id="B-EV-DEPOSIT", payment_status="Deposit Paid")
+
+        deposits = {
+            "B-EV-WORKBOOK": [
+                {"ordinal": 1, "amount": 650.0, "currency": "USD",
+                 "occurred_on": date(2026, 1, 20), "method": "cash"},
+            ]
+        }
+        self._run_backfill(deposits=deposits, apply=True)
+
+        with self.app.app_context():
+            with_ledger = {
+                booking_id for (booking_id,) in
+                self.db.session.query(self.BookingTransaction.booking_id).distinct().all()
+            }
+        self.assertEqual(with_ledger, {"B-EV-WORKBOOK", "B-EV-REFUND"})
+        # A Fully Paid booking with no evidence is left alone entirely: no
+        # transaction, and its status is untouched.
+        with self.app.app_context():
+            untouched = self.db.session.get(self.TripBooking, "B-EV-PAID-NOEVIDENCE")
+            self.assertEqual(untouched.payment_status, "Fully Paid")
+            self.assertFalse(self.ledger.has_ledger("B-EV-PAID-NOEVIDENCE"))
+
+    def test_category_c_stays_off_even_alongside_real_evidence(self) -> None:
+        """The flag gates category C specifically, not the whole backfill."""
+        self._seed_booking(booking_id="B-C-PAID", payment_status="Fully Paid")
+        self._seed_booking(booking_id="B-C-REFUND", payment_status="Partial Refund", refund_amount=60.0)
+        _module, planned, counts, _warnings, _written = self._run_backfill(apply=True)
+
+        self.assertEqual(counts["C_status_inferred_payments"], 0)
+        self.assertGreaterEqual(counts["C_available_not_written"], 1)
+        self.assertEqual({row["booking_id"] for row in planned}, {"B-C-REFUND"})
+
     def test_a_dry_run_writes_nothing(self) -> None:
         self._seed_booking(payment_status="Partial Refund", refund_amount=120.0)
         _module, planned, _counts, _warnings, written = self._run_backfill()
