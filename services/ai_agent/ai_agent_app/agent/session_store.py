@@ -99,6 +99,17 @@ class DurableSessionStore:
     def is_sqlite(self) -> bool:
         return self.engine.dialect.name == "sqlite"
 
+    # New in this column set: traveler_id/lead_id/raw_phone, added so the CRM
+    # can find which conversation belongs to which traveler by a plain SQL
+    # query instead of parsing every row's JSON payload. Alembic owns the CRM
+    # schema change; ensure_schema() keeps standalone agent deployments and
+    # older local SQLite files self-healing.
+    _IDENTITY_COLUMNS: dict[str, str] = {
+        "traveler_id": "VARCHAR(20)",
+        "lead_id": "VARCHAR(50)",
+        "raw_phone": "VARCHAR(32)",
+    }
+
     def ensure_schema(self) -> None:
         if self._schema_ready:
             return
@@ -113,16 +124,58 @@ class DurableSessionStore:
             updated_at TIMESTAMP,
             locked_until TIMESTAMP,
             lock_owner VARCHAR(80),
-            last_message_key VARCHAR(160)
+            last_message_key VARCHAR(160),
+            traveler_id VARCHAR(20),
+            lead_id VARCHAR(50),
+            raw_phone VARCHAR(32)
         )
         """
         with self.engine.begin() as connection:
             connection.execute(text(ddl))
+            self._ensure_identity_columns(connection)
             if not self.is_sqlite:
                 connection.execute(
                     text("CREATE INDEX IF NOT EXISTS ix_ai_agent_sessions_locked_until ON ai_agent_sessions (locked_until)")
                 )
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_ai_agent_sessions_traveler_id ON ai_agent_sessions (traveler_id)")
+            )
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_ai_agent_sessions_lead_id ON ai_agent_sessions (lead_id)")
+            )
         self._schema_ready = True
+
+    def _ensure_identity_columns(self, connection) -> None:
+        """Add traveler_id/lead_id/raw_phone to a table created before they
+        existed. `CREATE TABLE IF NOT EXISTS` above is a no-op against an
+        existing table, so a deployment with rows already in it needs this
+        explicit per-column guard -- ALTER TABLE has no portable
+        IF-NOT-EXISTS across the sqlite3 versions this also has to run
+        against, so the existing columns are checked first instead.
+        """
+        if self.is_sqlite:
+            existing = {
+                row[1]
+                for row in connection.execute(text("PRAGMA table_info(ai_agent_sessions)")).fetchall()
+            }
+        else:
+            # Filtered to the connection's own search_path (current_schemas),
+            # not every schema in the database -- production sets
+            # search_path=ravel via DATABASE_URL, and an unfiltered table_name
+            # match could otherwise pick up an unrelated same-named table.
+            existing = {
+                row[0]
+                for row in connection.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = 'ai_agent_sessions' "
+                        "AND table_schema = ANY(current_schemas(false))"
+                    )
+                ).fetchall()
+            }
+        for column, column_type in self._IDENTITY_COLUMNS.items():
+            if column not in existing:
+                connection.execute(text(f"ALTER TABLE ai_agent_sessions ADD COLUMN {column} {column_type}"))
 
     def clear(self) -> None:
         self.ensure_schema()
@@ -154,6 +207,14 @@ class DurableSessionStore:
         payload = _json_dumps(self._session_payload(session))
         agent_payload = _json_dumps(self._agent_state_payload(agent_state or AgentState(goal="help the traveler plan a trip")))
         now = _utc_now()
+        # NULL rather than "" when unresolved -- an empty string in an indexed
+        # column would otherwise group every not-yet-identified session under
+        # one matchable value instead of correctly matching nothing.
+        identity_params = {
+            "traveler_id": str(session.traveler_id or "").strip() or None,
+            "lead_id": str(session.lead_id or "").strip() or None,
+            "raw_phone": str(session.raw_phone or "").strip() or None,
+        }
         with self.engine.begin() as connection:
             existing = connection.execute(
                 text("SELECT version FROM ai_agent_sessions WHERE session_id = :session_id"),
@@ -165,10 +226,12 @@ class DurableSessionStore:
                         """
                         INSERT INTO ai_agent_sessions (
                             session_id, schema_version, payload, agent_state, version,
-                            created_at, updated_at, locked_until, lock_owner, last_message_key
+                            created_at, updated_at, locked_until, lock_owner, last_message_key,
+                            traveler_id, lead_id, raw_phone
                         ) VALUES (
                             :session_id, :schema_version, :payload, :agent_state, 1,
-                            :created_at, :updated_at, NULL, NULL, :last_message_key
+                            :created_at, :updated_at, NULL, NULL, :last_message_key,
+                            :traveler_id, :lead_id, :raw_phone
                         )
                         """
                     ),
@@ -180,6 +243,7 @@ class DurableSessionStore:
                         "created_at": now,
                         "updated_at": now,
                         "last_message_key": last_message_key,
+                        **identity_params,
                     },
                 )
                 return 1
@@ -198,7 +262,10 @@ class DurableSessionStore:
                         schema_version = :schema_version,
                         version = :version,
                         updated_at = :updated_at,
-                        last_message_key = :last_message_key
+                        last_message_key = :last_message_key,
+                        traveler_id = :traveler_id,
+                        lead_id = :lead_id,
+                        raw_phone = :raw_phone
                     WHERE session_id = :session_id
                     """
                 ),
@@ -210,6 +277,7 @@ class DurableSessionStore:
                     "version": new_version,
                     "updated_at": now,
                     "last_message_key": last_message_key,
+                    **identity_params,
                 },
             )
             return new_version

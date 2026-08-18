@@ -24,6 +24,7 @@ from app.services.booking_automation import (
     auto_create_booking_from_lead,
     sync_lead_group_size_to_booking,
 )
+from app.services.conversations import get_conversations_for_lead
 from app.extensions import db, socketio
 from sqlalchemy import or_
 from datetime import datetime, date, timezone
@@ -395,6 +396,7 @@ def detail(lead_id):
     if lead.traveler_id:
         interactions = Interaction.query.filter_by(traveler_id=lead.traveler_id)\
             .order_by(Interaction.timestamp.desc()).limit(20).all()
+    conversations = get_conversations_for_lead(lead.lead_id, lead.traveler_id)
     try:
         UnifiedCRMService().ensure_operational_schema()
     except Exception:
@@ -420,6 +422,7 @@ def detail(lead_id):
                            passport_file_name=passport_file_name,
                            commercial_context=commercial_context,
                            interactions=interactions,
+                           conversations=conversations,
                            event_trail=event_trail,
                            assigned_history=assigned_history,
                            employees=active_assignees(),

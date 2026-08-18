@@ -497,6 +497,19 @@ class ToolCallingSessionRuntime:
             if open_lead:
                 session._open_lead_id = str(open_lead.get("lead_id") or "")
                 session._open_lead_trip_type = str(open_lead.get("preferred_trip_type") or "")
+        # Persist the resolved identity onto the session itself (not just this
+        # turn's context dict) so DurableSessionStore.save() can write it into
+        # ai_agent_sessions.traveler_id/lead_id -- otherwise the CRM has no way
+        # to find which conversation belongs to which traveler without parsing
+        # every session's JSON payload. Only ever set, never cleared: a later
+        # turn whose final_result/preview happens not to carry the id forward
+        # must not regress an already-known identity back to blank.
+        resolved_traveler_id = linked_ids["traveler_id"] or str(known_traveler.get("traveler_id") or "")
+        if resolved_traveler_id:
+            session.traveler_id = resolved_traveler_id
+        resolved_lead_id = linked_ids["lead_id"] or session._open_lead_id
+        if resolved_lead_id:
+            session.lead_id = resolved_lead_id
         return {
             "session_id": session.id,
             "language": session.language,

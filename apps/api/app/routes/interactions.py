@@ -1,9 +1,8 @@
 # app/routes/interactions.py
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, abort
 from app.models.interaction import Interaction
-from app.models.traveler import Traveler
 from app.extensions import db
-from sqlalchemy import or_
+from app.services.conversations import get_conversation, list_conversation_groups
 from datetime import datetime, timezone
 import uuid
 
@@ -16,23 +15,21 @@ def index():
     page = request.args.get('page', 1, type=int)
     per_page = 30
 
-    query = Interaction.query
-    if q:
-        query = query.filter(or_(
-            Interaction.interaction_id.ilike(f'%{q}%'),
-            Interaction.traveler_id.ilike(f'%{q}%'),
-            Interaction.customer_name.ilike(f'%{q}%'),
-            Interaction.intent.ilike(f'%{q}%'),
-        ))
-
-    pagination = query.order_by(Interaction.timestamp.desc()).paginate(
-        page=page, per_page=per_page, error_out=False)
+    conversation_page = list_conversation_groups(q=q, page=page, per_page=per_page)
 
     return render_template('interactions/index.html',
-                           interactions=pagination.items,
-                           pagination=pagination,
-                           total_count=pagination.total,
+                           conversation_groups=conversation_page.items,
+                           pagination=conversation_page,
+                           total_count=conversation_page.total,
                            q=q)
+
+
+@interactions_bp.route('/sessions/<session_id>')
+def session_detail(session_id):
+    conversation = get_conversation(session_id)
+    if not conversation:
+        abort(404)
+    return render_template('interactions/session.html', conversation=conversation)
 
 
 @interactions_bp.route('/', methods=['POST'])

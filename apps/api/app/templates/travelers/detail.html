@@ -531,33 +531,26 @@
 
             <div class="card">
                 <div class="card-header">
-                    <h3 class="card-title">AI Agent Interaction Audit Log</h3>
-                    <span style="font-size:0.75rem;color:var(--text-muted)">Total: {{ interactions|length }} events</span>
+                    <h3 class="card-title">AI Agent Conversations</h3>
+                    <span style="font-size:0.75rem;color:var(--text-muted)">Total: {{ conversations|length }} sessions</span>
                 </div>
                 <div style="display:flex;flex-direction:column;gap:0.75rem;max-height:350px;overflow-y:auto;padding-right:0.5rem">
-                    {% for interaction in interactions %}
-                    <div style="background:rgba(0,0,0,0.25);border:1px solid var(--border);border-radius:0.75rem;padding:0.85rem 1rem;display:flex;flex-direction:column;gap:0.4rem">
+                    {% for conversation in conversations %}
+                    <a href="{{ url_for('interactions.session_detail', session_id=conversation.session_id) }}" style="background:rgba(0,0,0,0.25);border:1px solid var(--border);border-radius:0.75rem;padding:0.85rem 1rem;display:flex;flex-direction:column;gap:0.4rem;text-decoration:none;color:inherit">
                         <div style="display:flex;justify-content:space-between;align-items:center">
                             <div style="display:flex;align-items:center;gap:0.5rem">
-                                <span class="badge {% if interaction.direction == 'inbound' %}badge-blue{% else %}badge-purple{% endif %}" style="font-size:0.7rem">
-                                    {{ interaction.direction|upper if interaction.direction else 'INBOUND' }}
-                                </span>
-                                <strong style="font-size:0.85rem;color:var(--text-main)">{{ interaction.intent or 'General Inquiry' }}</strong>
+                                <span class="badge badge-green" style="font-size:0.7rem">{{ conversation.turn_count }} turns</span>
+                                <strong style="font-size:0.85rem;color:var(--text-main)">{{ conversation.stage or 'Conversation' }}</strong>
                             </div>
-                            <span style="font-size:0.75rem;color:var(--text-muted)">{{ interaction.timestamp.strftime('%d %b %Y %H:%M') if interaction.timestamp else '—' }}</span>
+                            <span style="font-size:0.75rem;color:var(--text-muted)">{{ conversation.last_activity_label or 'Time not recorded' }}</span>
                         </div>
-                        <div class="mono" style="font-size:0.72rem;color:var(--text-muted)">ID: {{ interaction.interaction_id }}</div>
+                        <div class="mono" style="font-size:0.72rem;color:var(--text-muted)">Session: {{ conversation.session_id }}</div>
                         <p style="font-size:0.85rem;color:var(--text-dim);margin:0;line-height:1.4">
-                            {{ interaction.action_taken or 'Message received via WhatsApp.' }}
+                            {{ conversation.last_message_text[:220] if conversation.last_message_text else 'No transcript messages found.' }}{% if conversation.last_message_text|length > 220 %}...{% endif %}
                         </p>
-                        {% if interaction.agent_notes %}
-                        <div style="background:rgba(0,208,146,0.10);border-left:2px solid var(--accent);padding:0.4rem 0.6rem;border-radius:0 0.4rem 0.4rem 0;font-size:0.78rem;color:var(--accent);margin-top:0.25rem">
-                            <strong>Agent Note:</strong> {{ interaction.agent_notes }}
-                        </div>
-                        {% endif %}
-                    </div>
+                    </a>
                     {% else %}
-                    <p style="font-size:0.85rem;color:var(--text-muted);text-align:center;padding:2rem">No conversational interactions logged.</p>
+                    <p style="font-size:0.85rem;color:var(--text-muted);text-align:center;padding:2rem">No agent conversations linked to this traveler yet.</p>
                     {% endfor %}
                 </div>
             </div>

@@ -247,28 +247,29 @@
         </div>
         {% endif %}
 
-        <!-- Interactions -->
+        <!-- Conversations -->
         <div class="card">
             <div class="card-header">
-                <span class="card-title">Interactions ({{ interactions|length }})</span>
+                <span class="card-title">Agent Conversations ({{ conversations|length }})</span>
             </div>
-            {% if interactions %}
+            {% if conversations %}
             <div style="display:flex;flex-direction:column;gap:0.75rem">
-            {% for i in interactions %}
-            <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:0.85rem 1rem">
+            {% for conversation in conversations %}
+            <a href="{{ url_for('interactions.session_detail', session_id=conversation.session_id) }}" style="display:block;background:var(--bg-base);border:1px solid var(--border);border-radius:0.6rem;padding:0.85rem 1rem;text-decoration:none;color:inherit">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.35rem">
-                    <span class="badge {% if i.direction == 'inbound' %}badge-blue{% else %}badge-green{% endif %}">{{ i.direction }}</span>
-                    <span style="font-size:0.7rem;color:var(--text-muted)">{{ i.created_at.strftime('%d %b %Y %H:%M') if i.created_at else '—' }}</span>
+                    <span class="badge badge-green">{{ conversation.turn_count }} turns</span>
+                    <span style="font-size:0.7rem;color:var(--text-muted)">{{ conversation.last_activity_label or 'Time not recorded' }}</span>
                 </div>
-                {% if i.message_text %}
-                <div style="color:var(--text-dim);font-size:0.82rem;margin-bottom:0.35rem">{{ i.message_text[:200] }}{% if i.message_text|length > 200 %}…{% endif %}</div>
-                {% endif %}
-                {% if i.intent %}<div style="font-size:0.72rem;color:var(--text-muted)">Intent: {{ i.intent }}</div>{% endif %}
-            </div>
+                <div class="mono" style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.35rem">Session: {{ conversation.session_id }}</div>
+                <div style="color:var(--text-dim);font-size:0.82rem;margin-bottom:0.35rem;overflow-wrap:anywhere">
+                    {{ conversation.last_message_text[:200] if conversation.last_message_text else 'No transcript messages found.' }}{% if conversation.last_message_text|length > 200 %}...{% endif %}
+                </div>
+                {% if conversation.stage %}<div style="font-size:0.72rem;color:var(--text-muted)">Stage: {{ conversation.stage }}</div>{% endif %}
+            </a>
             {% endfor %}
             </div>
             {% else %}
-            <p style="color:var(--text-muted);font-size:0.83rem">No interactions recorded.</p>
+            <p style="color:var(--text-muted);font-size:0.83rem">No agent conversations linked to this lead yet.</p>
             {% endif %}
         </div>
     </div>
@@ -309,7 +310,7 @@
                 </div>
                 <div style="display:flex;justify-content:space-between">
                     <span style="color:var(--text-muted)">Interactions</span>
-                    <span>{{ lead.interaction_count or interactions|length }}</span>
+                    <span>{{ conversations|length }}</span>
                 </div>
                 <div style="display:flex;justify-content:space-between">
                     <span style="color:var(--text-muted)">Traveler ID</span>

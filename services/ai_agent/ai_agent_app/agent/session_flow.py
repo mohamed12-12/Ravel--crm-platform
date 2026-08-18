@@ -82,6 +82,15 @@ class SessionState:
     tools_used: list[str] = field(default_factory=list)
     fallback_used: bool = False
     customer_name: str = ""
+    # The traveler/lead this session resolves to, once known -- kept in sync
+    # every turn by tool_calling_runtime._build_context() from whatever
+    # richer source (preview.traveler, final_result, write_result) is
+    # available that turn. Exists as a plain top-level field (rather than
+    # only inside `preview`/`final_result`) so DurableSessionStore can write
+    # it into its own indexed SQL columns for the CRM to query conversations
+    # by traveler/lead without parsing every session's JSON payload.
+    traveler_id: str = ""
+    lead_id: str = ""
     birthday: str = ""
     gender: str = ""
     nationality: str = ""

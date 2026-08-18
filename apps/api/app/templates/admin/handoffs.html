@@ -985,6 +985,11 @@
         </div>
         <span class="footer-id">#{{ item.handoff_id }}</span>
     </div>
+    {% if item.session_id %}
+    <a href="{{ url_for('interactions.session_detail', session_id=item.session_id) }}" onclick="event.stopPropagation()" class="btn-secondary" style="margin-top:0.75rem;display:inline-flex;width:100%;justify-content:center;text-decoration:none;font-size:0.78rem;padding:0.45rem 0.65rem;border-radius:8px">
+        View Transcript
+    </a>
+    {% endif %}
 
     <!-- Hover Action Shortcuts -->
     <div class="card-actions-overlay">

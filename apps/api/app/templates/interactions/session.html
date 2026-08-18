@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Conversation {{ conversation.session_id }} - Nanovate CRM{% endblock %}
+{% block topbar_title %}Conversation Transcript{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ url_for('interactions.index') }}" class="btn btn-ghost btn-sm">All Conversations</a>
+{% if conversation.traveler_id %}
+<a href="{{ url_for('travelers.detail', traveler_id=conversation.traveler_id) }}" class="btn btn-ghost btn-sm">Traveler</a>
+{% endif %}
+{% if conversation.lead_id %}
+<a href="{{ url_for('leads.detail', lead_id=conversation.lead_id) }}" class="btn btn-ghost btn-sm">Lead</a>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div style="display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:1.25rem;align-items:start">
+    <div class="card" style="padding:0;overflow:hidden">
+        <div style="padding:1rem 1.25rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+            <div>
+                <div class="mono" style="font-size:0.78rem;color:var(--accent-2)">{{ conversation.session_id }}</div>
+                <div style="font-size:0.78rem;color:var(--text-muted);margin-top:0.25rem">
+                    {{ conversation.created_label or 'Start time not recorded' }}{% if conversation.updated_label %} - updated {{ conversation.updated_label }}{% endif %}
+                </div>
+            </div>
+            <div style="display:flex;gap:0.45rem;flex-wrap:wrap">
+                {% if conversation.traveler_id %}<span class="badge badge-green">{{ conversation.traveler_id }}</span>{% endif %}
+                {% if conversation.lead_id %}<span class="badge badge-blue">{{ conversation.lead_id }}</span>{% endif %}
+                {% if conversation.stage %}<span class="badge badge-purple">{{ conversation.stage }}</span>{% endif %}
+            </div>
+        </div>
+
+        <div style="padding:1.25rem;display:flex;flex-direction:column;gap:0.85rem">
+            {% for message in conversation.messages %}
+            {% set outbound = message.direction == 'outbound' %}
+            <div style="display:flex;justify-content:{% if outbound %}flex-end{% else %}flex-start{% endif %}">
+                <div style="max-width:min(680px,82%);background:{% if outbound %}rgba(0,208,146,0.11){% else %}var(--bg-base){% endif %};border:1px solid {% if outbound %}rgba(0,208,146,0.24){% else %}var(--border){% endif %};border-radius:8px;padding:0.75rem 0.9rem">
+                    <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.35rem;flex-wrap:wrap">
+                        <span class="badge {% if message.direction == 'inbound' %}badge-blue{% elif outbound %}badge-green{% else %}badge-gray{% endif %}">{{ message.actor }}</span>
+                        <span class="mono" style="font-size:0.68rem;color:var(--text-muted)">Turn {{ message.turn }}</span>
+                        <span style="font-size:0.68rem;color:var(--text-muted)">{{ message.timestamp_label or 'message time not recorded' }}</span>
+                    </div>
+                    <div style="font-size:0.9rem;line-height:1.55;color:var(--text-main);white-space:pre-wrap;overflow-wrap:anywhere">{{ message.text }}</div>
+                </div>
+            </div>
+            {% else %}
+            <div style="text-align:center;padding:3rem;color:var(--text-muted);font-size:0.86rem">This session has no message bodies in its payload.</div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <aside class="card">
+        <div class="card-header"><h3 class="card-title">Session Metadata</h3></div>
+        <div style="display:flex;flex-direction:column;gap:0.75rem;font-size:0.8rem">
+            <div>
+                <div class="form-label">Phone</div>
+                <div class="mono" style="color:var(--text-main)">{{ conversation.raw_phone or 'Not captured' }}</div>
+            </div>
+            <div>
+                <div class="form-label">Turns</div>
+                <div style="color:var(--text-main)">{{ conversation.turn_count }}</div>
+            </div>
+            <div>
+                <div class="form-label">Current Stage</div>
+                <div style="color:var(--text-main);overflow-wrap:anywhere">{{ conversation.stage or 'Not recorded' }}</div>
+            </div>
+            <div>
+                <div class="form-label">Outcome</div>
+                <div style="color:var(--text-main);overflow-wrap:anywhere">{{ conversation.outcome or 'Not recorded' }}</div>
+            </div>
+        </div>
+    </aside>
+</div>
+{% endblock %}

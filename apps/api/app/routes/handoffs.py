@@ -3,6 +3,7 @@ from flask import Blueprint, render_template, request, jsonify
 from app.extensions import db, socketio
 from app.models.handoff import HandoffQueue
 from app.models.traveler import Traveler
+from app.services.conversations import session_id_from_handoff_notes
 from datetime import datetime, timezone
 import uuid
 
@@ -36,6 +37,7 @@ def index():
         data['traveler_name'] = name or "Unknown Traveler"
         data['traveler_phone'] = phone or "N/A"
         data['display_notes'] = _display_handoff_notes(data.get('notes'))
+        data['session_id'] = session_id_from_handoff_notes(data.get('notes'), data.get('idempotency_key'))
         
         # Standardize status for the board
         status = h.status

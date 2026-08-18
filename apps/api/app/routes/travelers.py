@@ -24,6 +24,7 @@ from app.models.traveler_document import TravelerDocument
 from services.crm.system_services import UnifiedCRMService
 from services.crm.system_services.phone_normalization import normalize_phone_input
 from app.services.revenue import booking_revenue_breakdown
+from app.services.conversations import get_conversations_for_traveler
 from services.data_authority import load_data_authority
 from app.security import can_view_all_records, current_user_id, has_permission
 from app.services.traveler_stats import recalculate_traveler_stats
@@ -442,6 +443,7 @@ def detail(traveler_id):
     passport_document = passport_documents[0]["document"] if passport_documents else None
     passport_document_exists = passport_documents[0]["exists"] if passport_documents else False
     interactions = Interaction.query.filter_by(traveler_id=traveler_id).order_by(Interaction.timestamp.desc()).all()
+    conversations = get_conversations_for_traveler(traveler_id)
     handoffs = HandoffQueue.query.filter_by(traveler_id=traveler_id).order_by(HandoffQueue.created_at.desc()).all()
     event_filters = [BookingEventTrail.traveler_id == traveler_id]
     lead_ids = [lead.lead_id for lead in leads if lead.lead_id]
@@ -486,6 +488,7 @@ def detail(traveler_id):
         passport_document_exists=passport_document_exists,
         trip_type_map=trip_type_map,
         interactions=interactions,
+        conversations=conversations,
         handoffs=handoffs,
         event_trail=event_trail,
     )

@@ -1,69 +1,63 @@
 {% extends "base.html" %}
-{% block title %}Interactions — Nanovate CRM{% endblock %}
-{% block topbar_title %}Interaction Log{% endblock %}
+{% block title %}Conversations - Nanovate CRM{% endblock %}
+{% block topbar_title %}Conversation Inbox{% endblock %}
 
 {% block content %}
 <form method="GET" action="{{ url_for('interactions.index') }}" class="search-bar">
     <div class="search-input-wrap">
         <span class="search-icon"></span>
-        <input class="form-input" type="text" name="q" value="{{ q }}" placeholder="Search by traveler ID, name, intent…">
+        <input class="form-input" type="text" name="q" value="{{ q }}" placeholder="Search by traveler, lead, phone, stage, or message">
     </div>
     <button type="submit" class="btn btn-ghost">Search</button>
     {% if q %}<a href="{{ url_for('interactions.index') }}" class="btn btn-ghost">Clear</a>{% endif %}
 </form>
 
-<div style="margin-bottom:0.75rem;font-size:0.78rem;color:var(--text-muted)">{{ total_count }} total interactions</div>
+<div style="margin-bottom:0.75rem;font-size:0.78rem;color:var(--text-muted)">{{ total_count }} traveler conversation group(s)</div>
 
-{% if interactions %}
+{% if conversation_groups %}
 <div style="display:flex;flex-direction:column;gap:0.65rem">
-{% for i in interactions %}
+{% for group in conversation_groups %}
 <div class="card" style="padding:1rem 1.25rem">
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.5rem">
-        <div style="display:flex;align-items:center;gap:0.65rem;flex-wrap:wrap">
-            <span class="mono" style="color:var(--accent-2);font-size:0.75rem">{{ i.interaction_id }}</span>
-            {% if i.channel %}<span class="badge badge-blue">{{ i.channel }}</span>{% endif %}
-            {% if i.intent %}<span class="badge badge-purple">{{ i.intent }}</span>{% endif %}
-            {% if i.handoff_required %}<span class="badge badge-red">Handoff</span>{% endif %}
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-bottom:0.65rem">
+        <div style="display:flex;align-items:center;gap:0.55rem;flex-wrap:wrap">
+            {% if group.traveler_id %}
+            <a href="{{ url_for('travelers.detail', traveler_id=group.traveler_id) }}" class="mono" style="color:var(--accent-2);font-size:0.75rem">{{ group.traveler_id }}</a>
+            {% else %}
+            <span class="mono" style="color:var(--accent-2);font-size:0.75rem">{{ group.key }}</span>
+            {% endif %}
+            {% if group.lead_id %}<span class="badge badge-blue">{{ group.lead_id }}</span>{% endif %}
+            {% if group.stage %}<span class="badge badge-purple">{{ group.stage }}</span>{% endif %}
         </div>
-        <span style="font-size:0.72rem;color:var(--text-muted)">
-            {{ i.timestamp.strftime('%d %b %Y %H:%M') if i.timestamp else '—' }}
-        </span>
+        <span style="font-size:0.72rem;color:var(--text-muted)">{{ group.last_activity_label or 'Time not recorded' }}</span>
     </div>
 
-    <div style="display:flex;gap:1rem;align-items:flex-start;flex-wrap:wrap">
-        <div style="flex:1;min-width:200px">
-            {% if i.customer_name or i.traveler_id %}
-            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.35rem">
-                
-                {% if i.customer_name %}<strong style="color:var(--text-main)">{{ i.customer_name }}</strong>{% endif %}
-                {% if i.traveler_id %}
-                · <a href="{{ url_for('travelers.detail', traveler_id=i.traveler_id) }}" style="color:var(--accent-2)">{{ i.traveler_id }}</a>
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:1rem;align-items:start">
+        <div style="min-width:0">
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.35rem">
+                {% if group.raw_phone %}{{ group.raw_phone }}{% else %}No phone captured{% endif %}
+                {% if group.outcome %} - {{ group.outcome }}{% endif %}
+            </div>
+            <div style="font-size:0.88rem;color:var(--text-main);line-height:1.5;overflow-wrap:anywhere">
+                {% if group.last_message_text %}
+                    <span class="badge {% if group.last_message_direction == 'inbound' %}badge-blue{% else %}badge-green{% endif %}" style="margin-right:0.45rem">{{ group.last_message_direction or 'message' }}</span>
+                    {{ group.last_message_text[:260] }}{% if group.last_message_text|length > 260 %}...{% endif %}
+                {% else %}
+                    No transcript messages found in this group's session payloads.
                 {% endif %}
-                {% if i.raw_phone %} · {{ i.raw_phone }}{% endif %}
             </div>
-            {% endif %}
-
-            {% if i.action_taken %}
-            <div style="background:var(--bg-base);border-left:2px solid var(--accent);border-radius:0 0.4rem 0.4rem 0;padding:0.55rem 0.75rem;font-size:0.82rem;color:var(--text-dim);line-height:1.5;margin-bottom:0.35rem">
-                <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Action</div>
-                {{ i.action_taken[:250] }}{% if i.action_taken|length > 250 %}…{% endif %}
-            </div>
-            {% endif %}
-
-            {% if i.agent_notes %}
-            <div style="background:rgba(0,208,146,0.06);border-left:2px solid var(--accent);border-radius:0 0.4rem 0.4rem 0;padding:0.55rem 0.75rem;font-size:0.82rem;color:var(--text-dim);line-height:1.5">
-                <div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Agent Notes</div>
-                {{ i.agent_notes[:200] }}{% if i.agent_notes|length > 200 %}…{% endif %}
-            </div>
-            {% endif %}
         </div>
-
-        <div style="flex-shrink:0;font-size:0.72rem;color:var(--text-muted);display:flex;flex-direction:column;gap:0.2rem;min-width:120px">
-            {% if i.trip_type %}<div>Trip: {{ i.trip_type }}</div>{% endif %}
-            {% if i.status_snapshot %}<div>Status: {{ i.status_snapshot }}</div>{% endif %}
-            {% if i.outcome %}<div>Outcome: {{ i.outcome }}</div>{% endif %}
-            {% if i.flow_key %}<div style="font-family:'JetBrains Mono',monospace;font-size:0.68rem">{{ i.flow_key }}</div>{% endif %}
+        <div style="text-align:right;font-size:0.75rem;color:var(--text-muted);white-space:nowrap">
+            <strong style="color:var(--text-main)">{{ group.session_count }}</strong> sessions<br>
+            <strong style="color:var(--text-main)">{{ group.turn_count }}</strong> turns
         </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:0.45rem;margin-top:0.85rem;padding-top:0.85rem;border-top:1px solid var(--border)">
+        {% for c in group.sessions %}
+        <a href="{{ url_for('interactions.session_detail', session_id=c.session_id) }}" style="display:flex;justify-content:space-between;gap:0.75rem;align-items:center;text-decoration:none;color:inherit;background:var(--bg-base);border:1px solid var(--border);border-radius:6px;padding:0.55rem 0.7rem">
+            <span class="mono" style="color:var(--accent-2);font-size:0.72rem">{{ c.session_id }}</span>
+            <span style="font-size:0.72rem;color:var(--text-muted)">{{ c.turn_count }} turns - {{ c.stage or 'no stage' }}</span>
+        </a>
+        {% endfor %}
     </div>
 </div>
 {% endfor %}
@@ -71,24 +65,17 @@
 
 <div class="pagination">
     {% if pagination.has_prev %}
-    <a href="{{ url_for('interactions.index', page=pagination.prev_num, q=q) }}" class="page-btn">← Prev</a>
+    <a href="{{ url_for('interactions.index', page=pagination.prev_num, q=q) }}" class="page-btn">Prev</a>
     {% endif %}
-    {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
-        {% if p %}
-        <a href="{{ url_for('interactions.index', page=p, q=q) }}" class="page-btn {% if p == pagination.page %}active{% endif %}">{{ p }}</a>
-        {% else %}
-        <span style="padding:0 0.25rem;color:var(--text-muted)">…</span>
-        {% endif %}
-    {% endfor %}
+    <span class="page-btn active">Page {{ pagination.page }} / {{ pagination.pages }}</span>
     {% if pagination.has_next %}
-    <a href="{{ url_for('interactions.index', page=pagination.next_num, q=q) }}" class="page-btn">Next →</a>
+    <a href="{{ url_for('interactions.index', page=pagination.next_num, q=q) }}" class="page-btn">Next</a>
     {% endif %}
 </div>
 {% else %}
 <div class="card" style="text-align:center;padding:3rem">
-    <div style="font-size:2.5rem;margin-bottom:0.75rem"></div>
-    <div style="font-weight:700;color:var(--text-main);margin-bottom:0.4rem">No interactions yet</div>
-    <div style="color:var(--text-muted);font-size:0.83rem">Interactions are logged automatically by the AI agent during conversations.</div>
+    <div style="font-weight:700;color:var(--text-main);margin-bottom:0.4rem">No conversations found</div>
+    <div style="color:var(--text-muted);font-size:0.83rem">Agent transcripts will appear here once ai_agent_sessions rows are available.</div>
 </div>
 {% endif %}
 {% endblock %}

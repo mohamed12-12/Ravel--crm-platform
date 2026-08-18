@@ -245,11 +245,18 @@ CREATE TABLE IF NOT EXISTS ai_agent_sessions (
     updated_at TIMESTAMPTZ,
     locked_until TIMESTAMPTZ,
     lock_owner VARCHAR(80),
-    last_message_key VARCHAR(160)
+    last_message_key VARCHAR(160),
+    traveler_id VARCHAR(20),
+    lead_id VARCHAR(50),
+    raw_phone VARCHAR(32)
 );
 
 CREATE INDEX IF NOT EXISTS ix_ai_agent_sessions_locked_until
     ON ai_agent_sessions (locked_until);
+CREATE INDEX IF NOT EXISTS ix_ai_agent_sessions_traveler_id
+    ON ai_agent_sessions (traveler_id);
+CREATE INDEX IF NOT EXISTS ix_ai_agent_sessions_lead_id
+    ON ai_agent_sessions (lead_id);
 
 CREATE TABLE IF NOT EXISTS trip_bookings (
     booking_id VARCHAR(50) PRIMARY KEY,
