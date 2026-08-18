@@ -289,7 +289,6 @@ def _traveler_update_payload(data):
         "phone_code",
         "phone_lookup_key",
         "preferred_currency",
-        "lifetime_revenue",
         "passport_name",
         "passport_number",
         "passport_expiry",
@@ -297,13 +296,7 @@ def _traveler_update_payload(data):
         "passport_attachment_ref",
     ):
         if key in data and data.get(key) is not None:
-            # Handle float casting for lifetime_revenue
-            if key == "lifetime_revenue":
-                try:
-                    payload[key] = float(data.get(key))
-                except (ValueError, TypeError):
-                    payload[key] = 0.0
-            elif key == "preferred_currency":
+            if key == "preferred_currency":
                 payload[key] = str(data.get(key) or "").strip().upper() or None
             else:
                 payload[key] = data.get(key)

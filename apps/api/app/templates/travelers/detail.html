@@ -659,8 +659,20 @@
                     <input type="text" id="edit_community_whatsapp" value="{{ traveler.community_whatsapp or '' }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
                 </div>
                 <div>
-                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Lifetime Revenue (all currencies combined)</label>
-                    <input type="number" step="0.01" id="edit_lifetime_revenue" value="{{ traveler.lifetime_revenue or 0.0 }}" style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:0.5rem;color:#fff;font-size:0.85rem">
+                    <label style="font-size:0.8rem;font-weight:600;color:var(--text-dim);display:block;margin-bottom:0.4rem">Lifetime Revenue</label>
+                    {# Read-only and per-currency, not editable: this used to be a single
+                       combined-currency float a staff member could type over, but the
+                       page recalculates and overwrites it on every load anyway (see
+                       recalculate_traveler_stats in routes/travelers.py's detail()), so
+                       the edit was silently discarded. It also summed USD and EGP into
+                       one meaningless number. Shown here from the same revenue_summary
+                       the page hero above already computes -- net of refunds, one figure
+                       per currency, never blended. #}
+                    <div style="width:100%;padding:0.65rem 0.85rem;background:rgba(0,0,0,0.25);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-muted);font-size:0.85rem;display:flex;flex-direction:column;gap:0.2rem">
+                        <div><span style="color:var(--text-main);font-weight:600">{{ revenue_summary.primary_value }}</span> <span style="font-size:0.72rem">{{ revenue_summary.primary_currency }} net</span>{% if revenue_summary.primary_has_refunds %}<span style="font-size:0.72rem;color:#f2777a"> (−{{ revenue_summary.primary_refunds }} refunded)</span>{% endif %}</div>
+                        <div><span style="color:var(--text-main);font-weight:600">{{ revenue_summary.secondary_value }}</span> <span style="font-size:0.72rem">{{ revenue_summary.secondary_currency }} net</span>{% if revenue_summary.secondary_has_refunds %}<span style="font-size:0.72rem;color:#f2777a"> (−{{ revenue_summary.secondary_refunds }} refunded)</span>{% endif %}</div>
+                        <div style="font-size:0.68rem;margin-top:0.15rem">Computed from bookings, not editable here.</div>
+                    </div>
                 </div>
             </div>
 
@@ -720,7 +732,6 @@ async function saveChanges() {
         emergency_contact: document.getElementById('edit_emergency_contact').value,
         emergency_phone: document.getElementById('edit_emergency_phone').value,
         community_whatsapp: document.getElementById('edit_community_whatsapp').value,
-        lifetime_revenue: parseFloat(document.getElementById('edit_lifetime_revenue').value) || 0.0,
         introduce_yourself: document.getElementById('edit_introduce_yourself').value,
         medical_notes: document.getElementById('edit_medical_notes').value,
         notes: document.getElementById('edit_notes').value,

@@ -840,6 +840,61 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         self.assertIn('fetch("/rahma-crm/travelers/TR00161"', detail_html)
         self.assertIn('window.location.href = "/rahma-crm/travelers/"', detail_html)
 
+    # === lifetime_revenue is derived, not editable ===========================
+    # Before this fix, the edit modal posted a single combined-currency float
+    # to `lifetime_revenue`, which the update route accepted and saved -- but
+    # detail()'s own recalculate_traveler_stats() call overwrote it on the very
+    # next render, so the edit was silently discarded. It also mixed USD and
+    # EGP into one meaningless number. The field is now derived-only.
+
+    def test_the_edit_form_can_no_longer_overwrite_lifetime_revenue(self) -> None:
+        app, _db_path, _workbook_path = self._build_app()
+        client = app.test_client()
+        with app.app_context():
+            self.db.session.add(self.Traveler(
+                traveler_id="TR00300",
+                full_name="Revenue Traveler",
+                whatsapp_raw="1000000001",
+                phone_lookup_key="2010000001",
+                preferred_currency="USD",
+                lifetime_revenue=42.0,
+            ))
+            self.db.session.commit()
+
+        response = client.put(
+            "/travelers/TR00300",
+            json={"full_name": "Revenue Traveler", "lifetime_revenue": 999999.0},
+        )
+        self.assertEqual(response.status_code, 200)
+
+        with app.app_context():
+            traveler = self.db.session.get(self.Traveler, "TR00300")
+            # Untouched by the request -- not reset to 0, not overwritten to
+            # the submitted value. The field simply is not in the accepted
+            # update payload any more.
+            self.assertEqual(traveler.lifetime_revenue, 42.0)
+
+    def test_lifetime_revenue_is_not_in_the_edit_modal_at_all(self) -> None:
+        app, _db_path, _workbook_path = self._build_app()
+        client = app.test_client()
+        with app.app_context():
+            self.db.session.add(self.Traveler(
+                traveler_id="TR00301",
+                full_name="Revenue Traveler Two",
+                whatsapp_raw="1000000002",
+                phone_lookup_key="2010000002",
+                preferred_currency="USD",
+                lifetime_revenue=100.0,
+            ))
+            self.db.session.commit()
+
+        html = client.get("/travelers/TR00301").get_data(as_text=True)
+        self.assertNotIn('id="edit_lifetime_revenue"', html)
+        self.assertNotIn("edit_lifetime_revenue", html)
+        # The read-only replacement is present and labelled as computed.
+        self.assertIn("Lifetime Revenue", html)
+        self.assertIn("Computed from bookings, not editable here.", html)
+
 
 if __name__ == "__main__":
     unittest.main()
