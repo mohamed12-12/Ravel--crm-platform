@@ -466,41 +466,6 @@ class ConversationWorkflowPolicy:
                 **common,
             )
 
-        if passport_required:
-            passport_number = str(session_context.get("passport_number") or "").strip()
-            passport_expiry = str(session_context.get("passport_expiry") or "").strip()
-            passport_nationality = str(session_context.get("passport_nationality") or "").strip()
-            if not passport_number:
-                return WorkflowDecision(
-                    state="passport_number_required",
-                    customer_status="Waiting for customer response",
-                    allowed_tools=SELECTED_TRIP_TOOLS,
-                    required_step="collect_passport_number",
-                    customer_message_key="passport_number_required",
-                    assistant_message=self._passport_number_prompt(arabic=arabic),
-                    **common,
-                )
-            if not passport_expiry:
-                return WorkflowDecision(
-                    state="passport_expiry_required",
-                    customer_status="Waiting for customer response",
-                    allowed_tools=SELECTED_TRIP_TOOLS,
-                    required_step="collect_passport_expiry",
-                    customer_message_key="passport_expiry_required",
-                    assistant_message=self._passport_expiry_prompt(arabic=arabic),
-                    **common,
-                )
-            if not passport_nationality:
-                return WorkflowDecision(
-                    state="passport_country_required",
-                    customer_status="Waiting for customer response",
-                    allowed_tools=SELECTED_TRIP_TOOLS,
-                    required_step="collect_passport_country",
-                    customer_message_key="passport_country_required",
-                    assistant_message=self._passport_country_prompt(arabic=arabic),
-                    **common,
-                )
-
         if not currency:
             return WorkflowDecision(
                 state="currency_required",
@@ -565,31 +530,6 @@ class ConversationWorkflowPolicy:
             "Would you like to continue with that request, or start a new one?\n\n"
             "1. Continue the existing request\n"
             "2. Start a new request"
-        )
-
-    @staticmethod
-    def _passport_number_prompt(*, arabic: bool = False) -> str:
-        return (
-            "ما رقم جواز السفر؟"
-            if arabic
-            else "What is the passport number?"
-        )
-
-    @staticmethod
-    def _passport_expiry_prompt(*, arabic: bool = False) -> str:
-        return (
-            "متى تنتهي صلاحية جواز السفر؟\n"
-            "اكتبها بأي صيغة واضحة، مثل 21/08/2030."
-            if arabic
-            else "When does the passport expire? Type it in any clear format, for example 21/08/2030."
-        )
-
-    @staticmethod
-    def _passport_country_prompt(*, arabic: bool = False) -> str:
-        return (
-            "ما هي جنسية جواز السفر (الدولة المصدرة)؟"
-            if arabic
-            else "What is the issuing country/nationality on the passport?"
         )
 
     def _new_traveler_decision(self, session_context: dict[str, Any]) -> WorkflowDecision:

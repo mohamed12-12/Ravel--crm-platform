@@ -724,6 +724,71 @@ class Phase4TravelerManagementTests(unittest.TestCase):
             self.assertIsNone(self.db.session.get(self.Traveler, "TR00200"))
             self.assertEqual(self.TravelerDocument.query.filter_by(traveler_id="TR00200").count(), 0)
 
+    def test_passport_details_are_document_owned_not_generic_profile_updates(self) -> None:
+        app, db_path, workbook_path = self._build_app()
+        client = app.test_client()
+        passport_file = self.tmp_path / "passport.pdf"
+        passport_file.write_bytes(b"passport")
+
+        with app.app_context():
+            traveler = self.Traveler(traveler_id="TR00202", full_name="Passport Traveler", status="Active")
+            document = self.TravelerDocument(
+                traveler_id="TR00202",
+                category="passport",
+                file_name="passport.pdf",
+                original_file_name="passport.pdf",
+                mime_type="application/pdf",
+                file_extension="pdf",
+                file_size=8,
+                storage_path=str(passport_file),
+                verification_status="pending",
+            )
+            self.db.session.add_all([traveler, document])
+            self.db.session.commit()
+            document_id = document.document_id
+
+        profile_response = client.post(
+            "/travelers/TR00202",
+            data={
+                "passport_number": "SHOULDNOTSAVE",
+                "passport_expiry": "2030-05-01",
+                "passport_nationality": "Egyptian",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(profile_response.status_code, 302)
+
+        with app.app_context():
+            traveler = self.db.session.get(self.Traveler, "TR00202")
+            self.assertIsNone(traveler.passport_number)
+            self.assertIsNone(traveler.passport_expiry)
+            self.assertIsNone(traveler.passport_nationality)
+
+        response = client.post(
+            f"/travelers/TR00202/documents/{document_id}/passport",
+            data={
+                "passport_full_name": "Passport Traveler",
+                "passport_number": "A1234567",
+                "passport_expiry": "2030-05-01",
+                "passport_nationality": "Egyptian",
+                "verification_status": "verified",
+                "notes": "Checked against scan",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with app.app_context():
+            document = self.db.session.get(self.TravelerDocument, document_id)
+            traveler = self.db.session.get(self.Traveler, "TR00202")
+            self.assertEqual(document.passport_number, "A1234567")
+            self.assertEqual(document.passport_expiry.isoformat(), "2030-05-01")
+            self.assertEqual(document.passport_nationality, "Egyptian")
+            self.assertEqual(document.verification_status, "verified")
+            self.assertEqual(traveler.passport_number, "A1234567")
+            self.assertEqual(traveler.passport_expiry.isoformat(), "2030-05-01")
+            self.assertEqual(traveler.passport_nationality, "Egyptian")
+
     def test_delete_traveler_with_a_booking_status_history_succeeds_under_real_foreign_key_enforcement(self) -> None:
         """Confirmed bug: booking_status_history.booking_id is NOT NULL with
         a foreign key to trip_bookings.booking_id, and neither model

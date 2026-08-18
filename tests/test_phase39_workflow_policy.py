@@ -357,40 +357,13 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
             },
         }
 
-        passport_number_step = policy.evaluate({**base_context, **passport_fields_common})
-        self.assertEqual(passport_number_step.state, "passport_number_required")
-
-        passport_expiry_step = policy.evaluate({
-            **base_context,
-            **passport_fields_common,
-            "passport_number": "A1234567",
-        })
-        self.assertEqual(passport_expiry_step.state, "passport_expiry_required")
-
-        passport_country_step = policy.evaluate({
-            **base_context,
-            **passport_fields_common,
-            "passport_number": "A1234567",
-            "passport_expiry": "2030-05-01",
-        })
-        self.assertEqual(passport_country_step.state, "passport_country_required")
-
-        currency_step = policy.evaluate({
-            **base_context,
-            **passport_fields_common,
-            "passport_number": "A1234567",
-            "passport_expiry": "2030-05-01",
-            "passport_nationality": "Egyptian",
-        })
+        currency_step = policy.evaluate({**base_context, **passport_fields_common})
         self.assertEqual(currency_step.state, "currency_required")
         self.assertEqual(currency_step.required_step, "collect_payment_currency")
 
         booking_step = policy.evaluate({
             **base_context,
             **passport_fields_common,
-            "passport_number": "A1234567",
-            "passport_expiry": "2030-05-01",
-            "passport_nationality": "Egyptian",
             "currency": "USD",
         })
         self.assertEqual(booking_step.state, "booking_ready")

@@ -1304,15 +1304,6 @@ def test_international_trip_requires_a_passport_attachment_before_the_draft(
     runtime.handle_passport_attachment(session, "passport-scan.pdf")
     session = _send(runtime, "done", session)
 
-    # The passport attachment alone is not the full record -- structured
-    # number/expiry/issuing-country fields are asked next, one at a time.
-    assert session.stage == "passport_number_required"
-    session = _send(runtime, "A1234567", session)
-    assert session.stage == "passport_expiry_required"
-    session = _send(runtime, "01/06/2032", session)
-    assert session.stage == "passport_country_required"
-    session = _send(runtime, "Egyptian", session)
-
     assert session.stage == "currency_required"
     session = _send(runtime, "1", session)
     assert session.stage == "booking_confirmation_required"
@@ -2114,6 +2105,7 @@ def _bali_passport_number_required_session(runtime: ToolCallingSessionRuntime) -
     classifier path this phase hardens, so it is used for these tests
     instead.
     """
+    pytest.skip("Phase 2 removed conversational passport detail collection; passport details are CRM document-owned.")
     _verified_runtime_with_switch_trips(runtime)
     session = runtime.create_session()
     for text in ("01554158741", "international", "1", "boys", "single", "2", "same", "2"):

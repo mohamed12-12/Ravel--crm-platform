@@ -291,9 +291,6 @@ def _traveler_update_payload(data):
         "phone_lookup_key",
         "preferred_currency",
         "passport_name",
-        "passport_number",
-        "passport_expiry",
-        "passport_nationality",
         "passport_attachment_ref",
     ):
         if key in data and data.get(key) is not None:
@@ -305,8 +302,6 @@ def _traveler_update_payload(data):
         payload["birthday"] = _parse_date(data.get("birthday"))
     if "rating" in data:
         payload["rating"] = _parse_rating(data.get("rating"))
-    if "passport_expiry" in data:
-        payload["passport_expiry"] = _parse_date(data.get("passport_expiry"))
     return payload
 
 
@@ -764,6 +759,39 @@ def upload_document(traveler_id):
 
     flash('Document uploaded successfully.', 'success')
     return redirect(url_for('travelers.detail', traveler_id=traveler_id))
+
+
+@travelers_bp.route('/<traveler_id>/documents/<int:document_id>/passport', methods=['POST'])
+def update_passport_document(traveler_id, document_id: int):
+    traveler = db.get_or_404(Traveler, traveler_id)
+    document = TravelerDocument.query.filter_by(
+        document_id=document_id,
+        traveler_id=traveler.traveler_id,
+    ).first_or_404()
+    if _normalize_document_category(document.category) != "passport":
+        abort(404)
+
+    status = (request.form.get("verification_status") or "pending").strip().lower()
+    if status not in {"pending", "verified", "rejected"}:
+        status = "pending"
+
+    document.passport_full_name = request.form.get("passport_full_name") or None
+    document.passport_number = request.form.get("passport_number") or None
+    document.passport_nationality = request.form.get("passport_nationality") or None
+    document.passport_expiry = _parse_date(request.form.get("passport_expiry"))
+    document.verification_status = status
+    document.notes = request.form.get("notes") or None
+
+    traveler.passport_name = document.passport_full_name or traveler.passport_name
+    traveler.passport_number = document.passport_number or traveler.passport_number
+    traveler.passport_nationality = document.passport_nationality or traveler.passport_nationality
+    traveler.passport_expiry = document.passport_expiry or traveler.passport_expiry
+    traveler.passport_attachment_ref = document.storage_path
+
+    db.session.commit()
+    _sync_traveler_sheet(traveler_id)
+    flash("Passport document details updated.", "success")
+    return redirect(url_for("travelers.detail", traveler_id=traveler_id))
 
 
 @travelers_bp.route('/<traveler_id>/documents/passport/view')

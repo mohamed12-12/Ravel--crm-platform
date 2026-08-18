@@ -174,15 +174,23 @@
                         {% endif %}
                     </div>
                 </div>
-                {% if not passport_document and not traveler.passport_number %}
+                {% if not passport_document %}
                 <div style="padding:0.75rem 0.9rem;border-radius:0.6rem;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.28);color:#fca5a5;font-size:0.85rem;margin-bottom:1rem">
-                    Passport is missing. International bookings should stay pending until passport data or a handoff note is added.
+                    Passport file is missing. International bookings should stay pending until a passport file or a handoff note is added.
                 </div>
                 {% endif %}
-                <form action="{{ url_for('travelers.upload_document', traveler_id=traveler.traveler_id) }}" method="POST" enctype="multipart/form-data" style="display:grid;grid-template-columns:minmax(190px,1fr) minmax(170px,1fr) auto;gap:0.6rem;align-items:center;margin-bottom:0.9rem;padding:0.85rem;border:1px solid var(--border);border-radius:0.65rem;background:rgba(255,255,255,0.02)">
+                <form action="{{ url_for('travelers.upload_document', traveler_id=traveler.traveler_id) }}" method="POST" enctype="multipart/form-data" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0.6rem;align-items:center;margin-bottom:0.9rem;padding:0.85rem;border:1px solid var(--border);border-radius:0.65rem;background:rgba(255,255,255,0.02)">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="category" value="passport">
                     <input type="file" name="file" accept=".jpg,.jpeg,.png,.pdf" required style="min-width:0;width:100%">
+                    <input type="text" name="passport_full_name" placeholder="Passport full name" value="{{ traveler.passport_name or traveler.full_name or '' }}" style="min-width:0;width:100%;padding:0.6rem 0.8rem;background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
+                    <input type="text" name="passport_number" placeholder="Passport number" style="min-width:0;width:100%;padding:0.6rem 0.8rem;background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
+                    <input type="date" name="passport_expiry" style="min-width:0;width:100%;padding:0.55rem 0.8rem;background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
+                    <input type="text" name="passport_nationality" placeholder="Issuing nationality" value="{{ traveler.passport_nationality or traveler.nationality or '' }}" style="min-width:0;width:100%;padding:0.6rem 0.8rem;background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
+                    <select name="verification_status" style="min-width:0;width:100%;padding:0.6rem 0.8rem;background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
+                        <option value="pending">Pending review</option>
+                        <option value="verified">Verified</option>
+                    </select>
                     <input type="text" name="notes" placeholder="Upload notes" style="min-width:0;width:100%;padding:0.6rem 0.8rem;background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
                     <button type="submit" class="btn btn-primary btn-sm">Upload Passport</button>
                 </form>
@@ -198,10 +206,25 @@
                         </div>
                         <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;justify-content:flex-end">
                             <span class="badge {% if item.exists %}badge-green{% else %}badge-yellow{% endif %}">{{ 'Available' if item.exists else 'Missing' }}</span>
+                            <span class="badge {% if doc.verification_status == 'verified' %}badge-green{% elif doc.verification_status == 'rejected' %}badge-yellow{% else %}badge-blue{% endif %}">{{ doc.verification_status or 'pending' }}</span>
                             {% if item.exists %}
                             <a href="{{ url_for('travelers.view_document', traveler_id=traveler.traveler_id, document_id=doc.document_id) }}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">Open</a>
                             {% endif %}
                         </div>
+                        <form action="{{ url_for('travelers.update_passport_document', traveler_id=traveler.traveler_id, document_id=doc.document_id) }}" method="POST" style="width:100%;display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:0.55rem;margin-top:0.65rem;padding-top:0.65rem;border-top:1px solid rgba(255,255,255,0.08)">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="text" name="passport_full_name" placeholder="Passport full name" value="{{ doc.passport_full_name or '' }}" style="min-width:0;width:100%;padding:0.55rem 0.7rem;background:rgba(255,255,255,0.025);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
+                            <input type="text" name="passport_number" placeholder="Passport number" value="{{ doc.passport_number or '' }}" style="min-width:0;width:100%;padding:0.55rem 0.7rem;background:rgba(255,255,255,0.025);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
+                            <input type="date" name="passport_expiry" value="{{ doc.passport_expiry.isoformat() if doc.passport_expiry else '' }}" style="min-width:0;width:100%;padding:0.5rem 0.7rem;background:rgba(255,255,255,0.025);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
+                            <input type="text" name="passport_nationality" placeholder="Issuing nationality" value="{{ doc.passport_nationality or '' }}" style="min-width:0;width:100%;padding:0.55rem 0.7rem;background:rgba(255,255,255,0.025);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
+                            <select name="verification_status" style="min-width:0;width:100%;padding:0.55rem 0.7rem;background:rgba(255,255,255,0.025);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
+                                <option value="pending" {% if (doc.verification_status or 'pending') == 'pending' %}selected{% endif %}>Pending review</option>
+                                <option value="verified" {% if doc.verification_status == 'verified' %}selected{% endif %}>Verified</option>
+                                <option value="rejected" {% if doc.verification_status == 'rejected' %}selected{% endif %}>Rejected</option>
+                            </select>
+                            <input type="text" name="notes" placeholder="Review notes" value="{{ doc.notes or '' }}" style="min-width:0;width:100%;padding:0.55rem 0.7rem;background:rgba(255,255,255,0.025);border:1px solid var(--border);border-radius:0.5rem;color:var(--text-main)">
+                            <button type="submit" class="btn btn-primary btn-sm">Save Details</button>
+                        </form>
                         {% if doc.notes %}
                         <div style="width:100%;padding:0.6rem 0.7rem;margin-top:0.65rem;border-radius:0.5rem;background:rgba(255,255,255,0.035);border:1px solid rgba(255,255,255,0.08)">
                             <div style="font-size:0.68rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.2rem">Notes</div>

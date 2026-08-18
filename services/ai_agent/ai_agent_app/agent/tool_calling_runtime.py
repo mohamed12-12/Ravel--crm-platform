@@ -97,9 +97,6 @@ SAFE_STATUS_MAP = {
     "guardian_phone_required": "Waiting for customer response",
     "currency_required": "Waiting for customer response",
     "awaiting_passport_upload": "Waiting for customer response",
-    "passport_number_required": "Waiting for customer response",
-    "passport_expiry_required": "Waiting for customer response",
-    "passport_country_required": "Waiting for customer response",
     "booking_ready": "Ready",
     "booking_confirmation_required": "Waiting for customer response",
     "trip_media_shared": "Trip media shared",
@@ -170,9 +167,6 @@ _BACKEND_OWNED_COLLECTION_STEPS = {
     "collect_group_nationality_counts",
     "collect_flight_preference",
     "collect_passport_attachment",
-    "collect_passport_number",
-    "collect_passport_expiry",
-    "collect_passport_country",
 }
 
 _ABUSIVE_OR_HOSTILE_RE = re.compile(
@@ -2180,20 +2174,6 @@ class ToolCallingSessionRuntime:
             )
         if step == "collect_passport_attachment":
             return "لنكمل الرحلة الدولية، أرسل صورة أو ملف جواز السفر من فضلك." if language.startswith("ar") else "To continue with this international trip, please attach the passport image or PDF."
-        if step == "collect_passport_number":
-            if language.startswith("ar"):
-                return "رقم الجواز ده مش شكله صحيح. من فضلك اكتب رقم جواز السفر كما هو مكتوب (حروف وأرقام فقط)."
-            return "That doesn't look like a valid passport number. Please type the passport number exactly as printed (letters and digits only)."
-        if step == "collect_passport_expiry":
-            if session._passport_field_rejection_reason == "passport_expiry_past":
-                if language.startswith("ar"):
-                    return "تاريخ الانتهاء ده في الماضي، وده معناه إن الجواز منتهي الصلاحية. من فضلك تأكد من التاريخ أو أرسل جواز ساري."
-                return "That expiry date is in the past, which means this passport has already expired. Please double-check the date or provide a valid passport."
-            if language.startswith("ar"):
-                return "مش قادر أفهم تاريخ الانتهاء ده. من فضلك اكتبه بصيغة واضحة، مثل 21/08/2030."
-            return "I couldn't understand that expiry date. Please type it in a clear format, for example 21/08/2030."
-        if step == "collect_passport_country":
-            return "من فضلك اكتب جنسية جواز السفر." if language.startswith("ar") else "Please type the issuing nationality on the passport."
         return self._normalize_reply(decision.assistant_message, language)
 
     @staticmethod
@@ -2216,21 +2196,6 @@ class ToolCallingSessionRuntime:
             return any(token in normalized for token in ("flight", "without", "طيران"))
         if required_step == "collect_passport_attachment":
             return any(token in normalized for token in ("passport", "جواز"))
-        # Phase 3B: these steps previously fell through to the bare
-        # language-match check below, which passes almost any on-topic-
-        # sounding reply -- a side-question answer that never actually
-        # mentions the pending field (e.g. "is this trip family-friendly?"
-        # answered while collect_passport_country is pending) would then
-        # reach the customer with no clear signal that the field is still
-        # unanswered. Requiring the field's own vocabulary mirrors the
-        # existing checks above and keeps the reply visibly tied to the one
-        # thing still being asked for.
-        if required_step == "collect_passport_number":
-            return any(token in normalized for token in ("passport", "number", "جواز", "رقم"))
-        if required_step == "collect_passport_expiry":
-            return any(token in normalized for token in ("passport", "expiry", "expire", "expiration", "جواز", "انتهاء", "الصلاحية"))
-        if required_step == "collect_passport_country":
-            return any(token in normalized for token in ("passport", "country", "nationality", "issuing", "جواز", "جنسية", "بلد"))
         if required_step == "collect_payment_currency":
             return any(token in normalized for token in ("currency", "usd", "egp", "dollar", "pound", "عملة", "دولار", "جنيه"))
         # These steps were the ones the plan's Phase 4 flagged as still
@@ -6263,14 +6228,11 @@ class ToolCallingSessionRuntime:
         phrase now returns "" like any other unrecognized answer.
 
         Phase 4: added "my passport is from X"/"passport is from X"/
-        "passport from X" alongside the existing nationality-framed
-        triggers -- collect_passport_country's own prompt asks "which
-        country issued your passport", and a passport-framed answer is at
-        least as natural there as a nationality-framed one. Still purely a
-        deterministic regex extraction + the same maintained list lookup;
-        an unrecognized country after any trigger phrase still resolves to
-        "" via resolve_nationality, exactly as an unrecognized whole-text
-        answer would.
+        "passport from X" alongside the existing nationality-framed triggers.
+        Still purely a deterministic regex extraction + the same maintained
+        list lookup; an unrecognized country after any trigger phrase still
+        resolves to "" via resolve_nationality, exactly as an unrecognized
+        whole-text answer would.
         """
         lowered = " ".join(str(text or "").strip().lower().split())
         resolved = resolve_nationality(lowered)
@@ -6586,71 +6548,4 @@ class ToolCallingSessionRuntime:
                 self._update_collection_state(session, currency=True)
                 return True
             return False
-        if session.stage == "passport_number_required" and not session.passport_number:
-            candidate = re.sub(r"\s+", "", str(text or "").strip())
-            # Phase 3C: stripping whitespace before the alnum+length check
-            # meant any short, punctuation-free side question collapsed
-            # into a false match too -- "is it far" -> "isitfar" (7 chars,
-            # alnum) was captured as a passport number. Real passport
-            # numbers are alnum but always contain at least one digit
-            # (either a leading letter + digits, or all-digits); requiring
-            # that rules out pure-alphabetic collapsed phrases without
-            # rejecting any real passport-number format.
-            if candidate.isalnum() and 6 <= len(candidate) <= 9 and any(ch.isdigit() for ch in candidate):
-                session.passport_number = candidate.upper()
-                session._passport_field_rejection_reason = ""
-                return True
-            session._passport_field_rejection_reason = "passport_number_invalid"
-            return False
-        if session.stage == "passport_expiry_required" and not session.passport_expiry:
-            parsed = normalize_expiry_date_input(text)
-            if not parsed:
-                session._passport_field_rejection_reason = "passport_expiry_unparseable"
-                return False
-            expiry_date = date.fromisoformat(parsed)
-            if expiry_date < date.today():
-                session._passport_field_rejection_reason = "passport_expiry_past"
-                return False
-            # Flag (don't block) when the passport is valid but expires soon relative
-            # to the trip start -- many airlines/countries require 6 months' validity.
-            reference_date = date.today()
-            trip_start = str(self._selected_trip(session).get("start_date") or "").strip()
-            if trip_start:
-                try:
-                    reference_date = date.fromisoformat(trip_start[:10])
-                except ValueError:
-                    pass
-            session._passport_expiry_warning = parsed if expiry_date < add_months(reference_date, 6) else ""
-            session.passport_expiry = parsed
-            session._passport_field_rejection_reason = ""
-            return True
-        if session.stage == "passport_country_required" and not session.passport_nationality:
-            # Phase 3C: this used to accept ANY non-empty, non-phone-shaped
-            # text up to 60 chars as-is -- "is this trip family-friendly?"
-            # was captured verbatim as passport_nationality and the workflow
-            # silently advanced. nationality_required already solves exactly
-            # this problem (a country/nationality answer) by resolving
-            # against the maintained nationality_reference list instead of
-            # trusting free text -- reuse that same resolver here rather
-            # than inventing a second one, so "Egypt"/"Egyptian"/"مصري"/
-            # "KSA"/"UAE"/etc. are all still accepted, but an unrelated
-            # sentence is not.
-            resolved = self._extract_nationality_hint(text)
-            if not resolved:
-                session._passport_field_rejection_reason = "passport_country_invalid"
-                return False
-            session.passport_nationality = resolved
-            if session.nationality and session.nationality.strip().casefold() != resolved.casefold():
-                # Cross-check only, per spec: a mismatch is fine and common (dual
-                # nationals, recently-changed nationality) -- log that it
-                # happened, don't block. Phase 6: previously logged the two
-                # actual nationality values; the diagnostic value is in
-                # knowing the cross-check fired, not the specific values, so
-                # this now logs presence-of-mismatch only.
-                agent_logger.info(
-                    "Passport nationality differs from stated nationality session=%s mismatch=true",
-                    session.id,
-                )
-            session._passport_field_rejection_reason = ""
-            return True
         return False
