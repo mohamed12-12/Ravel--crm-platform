@@ -28,7 +28,7 @@ from services.ai_agent.ai_agent_app.agent.response_guard import (
     known_record_ids_from_context,
 )
 from services.ai_agent.ai_agent_app.agent.write_response_gating import detect_write_record_type
-from services.ai_agent.ai_agent_app.agent.tool_calling_runtime import ToolCallingSessionRuntime
+from services.ai_agent.ai_agent_app.agent.tool_calling_runtime import SAFE_STATUS_MAP, ToolCallingSessionRuntime
 from services.ai_agent.ai_agent_app.agent.session_store import SessionLockBusy
 from services.ai_agent.ai_agent_app.agent.session_flow import detect_language
 from services.ai_agent.ai_agent_app.config import Settings, load_settings
@@ -413,6 +413,41 @@ def _merge_gemini_hints_into_session(session, hints: dict[str, Any]) -> None:
         session.currency = currency
 
 
+# Stages that only the legacy deterministic runtime (session_flow.SessionFlowManager)
+# ever sets -- ToolCallingSessionRuntime's SAFE_STATUS_MAP has no entries for these.
+# Kept as a small addition on top of SAFE_STATUS_MAP rather than a second full map:
+# a stage added to SAFE_STATUS_MAP used to also need adding here by hand, and four
+# tool_calling stages (starting, group_nationality_type_required,
+# group_nationality_counts_required, trip_media_shared) were missed and silently
+# rendered as "Understanding request" until this was unified.
+_LEGACY_DETERMINISTIC_STATUS_MAP: dict[str, str] = {
+    "awaiting_phone": "Ready",
+    "traveler_profile_incomplete": "New traveler details required",
+    "traveler_creation_confirmation_required": "Profile confirmation required",
+    "public_trip_details": "Ready",
+    "trip_preferences_incomplete": "Trip preferences being collected",
+    "unable_to_continue": "Unable to continue",
+    "awaiting_country_code": "Checking CRM",
+    "awaiting_intake": "Understanding request",
+    "awaiting_trip_type": "Checking CRM",
+    "awaiting_confirmation": "Searching trips",
+    "awaiting_group_size": "Understanding request",
+    "awaiting_room_type": "Waiting for customer response",
+    "awaiting_flight": "Waiting for customer response",
+    "awaiting_currency": "Waiting for customer response",
+    "awaiting_clarification": "Waiting for customer response",
+    "gemini_conversation": "Understanding request",
+    "ready": "Ready",
+    "completed": "Done",
+    "handed_off": "Unable to complete request",
+    "cancelled": "Unable to complete request",
+}
+
+# SAFE_STATUS_MAP is authoritative for any stage it defines; the legacy map only
+# fills in stages SAFE_STATUS_MAP doesn't know about.
+SESSION_STATUS_MAP: dict[str, str] = {**_LEGACY_DETERMINISTIC_STATUS_MAP, **SAFE_STATUS_MAP}
+
+
 def _room_choice_label(room_type: str, room_group: str = "") -> str:
     if room_type == "Single":
         return "Single room"
@@ -427,73 +462,14 @@ def _serialize_session(gateway: ExcelSheetGateway, session) -> dict[str, Any]:
     runtime_mode = str(getattr(session, "agent_mode", "deterministic") or "deterministic").strip().lower() or "deterministic"
     chat_enabled = runtime_mode in {"tool_calling", "gemini"}
     requires_intake = runtime_mode == "deterministic" and session.stage == "awaiting_intake"
-    safe_status_map = {
-        "awaiting_phone": "Ready",
-        "identity_required": "Waiting for WhatsApp number",
-        "identity_lookup_pending": "Checking CRM",
-        "traveler_found": "Traveler found",
-        "traveler_not_found": "New traveler details required",
-        "traveler_profile_incomplete": "New traveler details required",
-        "traveler_creation_confirmation_required": "Profile confirmation required",
-        "traveler_verified": "Traveler verified",
-        "trip_type_required": "Ready",
-        "public_trip_details": "Ready",
-        "trip_discovery": "Trip preferences being collected",
-        "trip_preferences_incomplete": "Trip preferences being collected",
-        "trip_search_ready": "Searching trips",
-        "trip_selection_required": "Waiting for customer response",
-        "trip_results_available": "Searching trips",
-        "room_type_required": "Waiting for customer response",
-        "traveler_gender_required": "Waiting for customer response",
-        "capacity_handoff_required": "Human review required",
-        "group_size_required": "Waiting for customer response",
-        "flight_option_required": "Waiting for customer response",
-        "nationality_required": "Waiting for customer response",
-        "birthday_required": "Waiting for customer response",
-        "guardian_name_required": "Waiting for customer response",
-        "guardian_phone_required": "Waiting for customer response",
-        "currency_required": "Waiting for customer response",
-        "passport_number_required": "Waiting for customer response",
-        "passport_expiry_required": "Waiting for customer response",
-        "passport_country_required": "Waiting for customer response",
-        "duplicate_lead_choice_required": "Waiting for customer response",
-        "no_trips_available": "No matching trips",
-        "booking_ready": "Ready",
-        "booking_confirmation_required": "Waiting for customer response",
-        "no_trip_match": "Trip preferences being collected",
-        "duplicate_traveler_detected": "Human review required",
-        "human_handoff_required": "Human review required",
-        "unable_to_continue": "Unable to continue",
-        "awaiting_country_code": "Checking CRM",
-        "awaiting_intake": "Understanding request",
-        "awaiting_trip_type": "Checking CRM",
-        "awaiting_confirmation": "Searching trips",
-        "awaiting_passport_upload": "Waiting for customer response",
-        "awaiting_group_size": "Understanding request",
-        "awaiting_room_type": "Waiting for customer response",
-        "awaiting_flight": "Waiting for customer response",
-        "awaiting_currency": "Waiting for customer response",
-        "awaiting_clarification": "Waiting for customer response",
-        "gemini_conversation": "Understanding request",
-        "collecting_context": "Understanding request",
-        "waiting": "Waiting for customer response",
-        "checking_crm": "Checking CRM",
-        "searching_trips": "Searching trips",
-        "ready": "Ready",
-        "done": "Done",
-        "completed": "Done",
-        "handed_off": "Unable to complete request",
-        "cancelled": "Unable to complete request",
-        "error": "Unable to complete request",
-    }
     return {
         "id": session.id,
         "runtime_mode": runtime_mode,
-        "customer_status": safe_status_map.get(session.stage, "Understanding request"),
+        "customer_status": SESSION_STATUS_MAP.get(session.stage, "Understanding request"),
         "chat_enabled": chat_enabled,
         "requires_intake": requires_intake,
         "stage": session.stage,
-        "uiStatus": safe_status_map.get(session.stage, "Understanding request"),
+        "uiStatus": SESSION_STATUS_MAP.get(session.stage, "Understanding request"),
         "messages": session.messages,
         "agentMode": runtime_mode,
         "toolsUsed": list(getattr(session, "tools_used", []) or []),
