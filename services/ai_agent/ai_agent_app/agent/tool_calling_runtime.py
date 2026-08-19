@@ -186,6 +186,33 @@ _BACKEND_OWNED_COLLECTION_STEPS = {
     "collect_private_budget",
 }
 
+# States reached only AFTER a phone number was already submitted and no
+# matching traveler was found -- the customer is now mid new-traveler
+# registration (name -> nationality -> birthday) with nothing left to ask
+# except those fields. Deliberately NOT including "identity_required": a
+# bare destination/trip mention on the very first message, before any phone
+# has even been asked for, is meant to show trip details with no identity at
+# all (see test_naming_a_destination_before_any_identity_shows_trip_details_
+# without_asking_for_phone) -- that behavior must keep working unchanged.
+# While one of these three is pending, the generic trip-reference/discovery/
+# browse handlers below (free-text fuzzy matching against trip names) must
+# not be allowed to hijack a failed-capture message -- that message belongs
+# to the router already built for exactly this case (conversational-
+# interruption keyword match, then the off-script classifier's
+# side_question/navigation/correction categories, falling back to the
+# scripted re-ask), reached via the _BACKEND_OWNED_COLLECTION_STEPS branch
+# further down in handle_message. Without this guard, e.g. "tell me the
+# trips first" during name collection got fuzzy-matched as a trip-name
+# search and answered "no trip found by that name" instead of being routed
+# to answer-then-re-ask-for-name.
+_IDENTITY_ONBOARDING_STATES = frozenset(
+    {
+        "traveler_not_found",
+        "nationality_required",
+        "birthday_required",
+    }
+)
+
 _ABUSIVE_OR_HOSTILE_RE = re.compile(
     r"\b(?:fuck|f\W*u\W*c\W*k|shit|stupid|idiot|dumb|bad bot|"
     r"غبي|غبية|أحمق|احمق|حمار|كلب|زفت|خرا|خره|قرف|مقرف|تافه|وسخ|حقير)\b",
@@ -4657,6 +4684,11 @@ class ToolCallingSessionRuntime:
             # streak that would otherwise escalate to a human starts over.
             session.unclear_step_strikes = 0
             session.unclear_step_key = ""
+        # A message that failed to capture while identity/registration is
+        # still pending must go to the off-script router further down
+        # (_BACKEND_OWNED_COLLECTION_STEPS branch), not to the generic
+        # trip-reference handlers below -- see _IDENTITY_ONBOARDING_STATES.
+        pending_identity_capture = not step_value_captured and capture_stage in _IDENTITY_ONBOARDING_STATES
         if not step_value_captured:
             privacy_context = self._build_context(session, clean_text)
             privacy_response = self._privacy_policy.evaluate_user_message(clean_text, privacy_context)
@@ -4691,15 +4723,30 @@ class ToolCallingSessionRuntime:
         if media_intent and self._handle_trip_media_request_if_ready(session, clean_text):
             agent_logger.info("Tool-calling session %s returned verified trip media from CRM", session.id)
             return session
-        if not media_intent and self._handle_trip_details_request_if_ready(session, clean_text):
+        if not media_intent and not pending_identity_capture and self._handle_trip_details_request_if_ready(session, clean_text):
             agent_logger.info("Tool-calling session %s answered trip follow-up details from session CRM context", session.id)
             return session
-        if not media_intent and not session.private_trip_active and self._handle_trip_discovery_request_if_ready(session, clean_text):
+        if (
+            not media_intent
+            and not session.private_trip_active
+            and not pending_identity_capture
+            and self._handle_trip_discovery_request_if_ready(session, clean_text)
+        ):
             return session
-        if not media_intent and not session.private_trip_active and self._handle_public_trip_reference_if_present(session, clean_text):
+        if (
+            not media_intent
+            and not session.private_trip_active
+            and not pending_identity_capture
+            and self._handle_public_trip_reference_if_present(session, clean_text)
+        ):
             agent_logger.info("Tool-calling session %s resolved public trip reference from CRM", session.id)
             return session
-        if not media_intent and not session.private_trip_active and self._handle_post_selection_trip_browse_or_change(session, clean_text):
+        if (
+            not media_intent
+            and not session.private_trip_active
+            and not pending_identity_capture
+            and self._handle_post_selection_trip_browse_or_change(session, clean_text)
+        ):
             return session
         if preloaded_tool_event is None:
             preloaded_tool_event = self._run_identity_lookup_if_ready(session)
@@ -6722,6 +6769,17 @@ class ToolCallingSessionRuntime:
             return "", ""
         if "?" in name or "\u061f" in name:
             return "", ""
+        # Structural validation alone (token count + character class) accepts
+        # any 3+-word phrase with no semantic check -- a live transcript
+        # showed a customer typing "tell me the trips first" during name
+        # collection and having it silently accepted as their name, because
+        # it happened to be three plausible-looking tokens. Trip/booking
+        # vocabulary is never a real person's name, so reject it here rather
+        # than let it fall through to _apply_required_step_capture returning
+        # True -- this keeps the message routed to the off-script classifier
+        # (side_question/etc.) instead of being consumed as identity data.
+        if cls._has_trip_reference_words(name):
+            return "", ""
         normalized = cls._normalize_trip_reference(name)
         if not normalized:
             return "", ""
@@ -6923,13 +6981,32 @@ class ToolCallingSessionRuntime:
             "budget_currency": session.private_budget_currency or session.currency,
             "notes": "Private/custom trip intake from WhatsApp agent.",
         }
-        result = self._write_executor.execute(
-            action="create_private_trip_request",
-            payload=payload,
-            session_context=session_context,
-        )
+        try:
+            result = self._write_executor.execute(
+                action="create_private_trip_request",
+                payload=payload,
+                session_context=session_context,
+            )
+        except Exception:
+            # Unlike _execute_new_traveler_lead (which already logs and
+            # recovers gracefully on its own write failure), this call had no
+            # try/except at all -- a live customer's request silently failed
+            # to save with no exception ever logged anywhere, leaving no way
+            # to diagnose why. Log the full traceback so the next occurrence
+            # is diagnosable instead of a dead end.
+            agent_logger.exception(
+                "create_private_trip_request raised session=%s payload=%s",
+                session.id,
+                {k: v for k, v in payload.items() if k not in {"notes"}},
+            )
+            return False
         request_id = str(result.get("result_id") or "").strip()
         if not request_id or not write_result_allows_success(result, "private_trip_request"):
+            agent_logger.warning(
+                "create_private_trip_request did not execute session=%s contract=%s",
+                session.id,
+                (result or {}).get("write_result_contract") if isinstance(result, dict) else None,
+            )
             return False
         session.private_trip_request_id = request_id
         self._apply_result(session, {"write_results": [result], "tool_requests": []})

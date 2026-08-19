@@ -3019,6 +3019,49 @@ def test_side_question_during_new_traveler_name_collection_leaves_state_untouche
     assert session.stage == "nationality_required"
 
 
+# ---------------------------------------------------------------------------
+# Live transcript bug: a customer whose phone lookup came back "not found"
+# was asked for their full name, and instead replied "عرفني بس الرحلات
+# الاول" ("just tell me the trips first"). Because that message contains a
+# trip-reference word ("الرحلات"), _handle_public_trip_reference_if_present
+# claimed it BEFORE the off-script classifier ever got a turn, fuzzy-matched
+# it against trip names, found nothing, and replied "لم أجد رحلة مؤكدة بهذا
+# الاسم" ("no confirmed trip found by that name") -- an answer to a question
+# nobody asked, while silently abandoning the pending name field. The next
+# turn ("شرم") was then read against the wrong (trip-selection) stage instead
+# of being asked for a name again. Fixed by _IDENTITY_ONBOARDING_STATES: a
+# failed-capture message during name/nationality/birthday collection must
+# reach the existing off-script classifier's side_question route instead of
+# the generic trip-reference handlers.
+# ---------------------------------------------------------------------------
+def test_trip_worded_side_question_during_new_traveler_name_collection_does_not_hijack_the_turn(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    session = _new_traveler_name_required_session(runtime)
+    before = _full_state_snapshot(session)
+    agent = _install_classifier_agent_for(
+        runtime,
+        [_classification_response("side_question", 0.85), text_response("Sure! What's your full name?")],
+    )
+
+    session = _send(runtime, "عرفني بس الرحلات الاول", session)
+
+    # The off-script classifier must be the thing that handled this turn --
+    # not the trip-reference/discovery handlers, which never call it at all.
+    assert agent.classify_off_script_turn.call_count == 1
+    reply = session.messages[-1]["text"]
+    assert "لم أجد رحلة" not in reply
+    assert session.customer_name == ""
+    assert session.stage == "traveler_not_found"
+    after = _full_state_snapshot(session)
+    after.pop("tools_used"); before.pop("tools_used")
+    assert after == before
+
+    session = _send(runtime, "Maged Aweis Alani", session)
+    assert session.customer_name == "Maged Aweis Alani"
+    assert session.stage == "nationality_required"
+
+
 def test_side_question_during_nationality_collection_leaves_state_untouched_then_captures_normally(
     runtime: ToolCallingSessionRuntime,
 ) -> None:
