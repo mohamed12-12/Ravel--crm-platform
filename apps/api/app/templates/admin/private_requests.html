@@ -17,6 +17,22 @@
     .private-form .wide { grid-column:span 2; }
     .private-form .full { grid-column:1 / -1; }
     .private-form button { align-self:end; border:0; border-radius:6px; padding:.65rem .9rem; background:var(--accent); color:#06120f; font-weight:700; cursor:pointer; }
+    .picker { position:relative; }
+    .picker-input { padding-right:2.1rem !important; }
+    .picker-clear {
+        display:none; position:absolute; right:.4rem; top:50%; transform:translateY(-50%);
+        border:0; background:transparent; color:var(--text-dim); font-size:1rem; line-height:1; cursor:pointer; padding:.2rem;
+    }
+    .picker.has-selection .picker-clear { display:block; }
+    .picker.has-selection .picker-input { color:#86efac; }
+    .picker-results {
+        display:none; position:absolute; z-index:5; top:calc(100% + .25rem); left:0; right:0;
+        background:#101010; border:1px solid var(--border); border-radius:6px; max-height:220px; overflow-y:auto;
+    }
+    .picker-results.open { display:block; }
+    .picker-result { padding:.5rem .65rem; font-size:.82rem; cursor:pointer; }
+    .picker-result:hover, .picker-result.active { background:rgba(255,255,255,.06); }
+    .picker-empty { padding:.5rem .65rem; font-size:.78rem; color:var(--text-muted); }
     .private-board { display:grid; grid-template-columns:repeat(4, minmax(220px, 1fr)); gap:.85rem; overflow-x:auto; padding-bottom:.4rem; }
     .private-column { min-width:220px; background:#101010; border:1px solid var(--border); border-radius:8px; padding:.75rem; }
     .private-column h2 { font-size:.82rem; color:var(--text-dim); margin:0 0 .7rem; text-transform:uppercase; letter-spacing:.06em; }
@@ -42,12 +58,12 @@
     <form class="private-form" method="post" action="{{ url_for('private_requests.create') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <label>Traveler
-            <select name="traveler_id">
-                <option value="">Unlinked</option>
-                {% for traveler in travelers %}
-                <option value="{{ traveler.traveler_id }}">{{ traveler.full_name or traveler.traveler_id }} - {{ traveler.traveler_id }}</option>
-                {% endfor %}
-            </select>
+            <div class="picker" data-picker data-search-url="{{ url_for('private_requests.search_travelers') }}">
+                <input type="text" class="picker-input" placeholder="Unlinked — search name, ID, or phone" autocomplete="off">
+                <button type="button" class="picker-clear" title="Clear">&times;</button>
+                <input type="hidden" name="traveler_id">
+                <div class="picker-results"></div>
+            </div>
         </label>
         <label>Service
             <select name="service_type" required>
@@ -92,8 +108,13 @@
                 {% endfor %}
             </select>
         </label>
-        <label class="wide">Lead ID
-            <input name="lead_id">
+        <label class="wide">Lead
+            <div class="picker" data-picker data-search-url="{{ url_for('private_requests.search_leads') }}">
+                <input type="text" class="picker-input" placeholder="No lead — search name, ID, or phone" autocomplete="off">
+                <button type="button" class="picker-clear" title="Clear">&times;</button>
+                <input type="hidden" name="lead_id">
+                <div class="picker-results"></div>
+            </div>
         </label>
         <label class="full">Notes
             <textarea name="notes"></textarea>
@@ -119,8 +140,104 @@
             <span class="sla sla-ok">On track</span>
             {% endif %}
         </a>
+        {% else %}
+        <div class="request-meta">No requests in this stage.</div>
         {% endfor %}
     </div>
     {% endfor %}
 </section>
+
+<script>
+(function () {
+    // Type-to-search picker: a plain <select> of every traveler used to cap
+    // out at 300 rows (alphabetical), which made every traveler past that
+    // cap impossible to link from this form. Backed by /search/travelers
+    // and /search/leads (see routes/private_requests.py) instead.
+    function debounce(fn, delay) {
+        var timer = null;
+        return function () {
+            var args = arguments;
+            clearTimeout(timer);
+            timer = setTimeout(function () { fn.apply(null, args); }, delay);
+        };
+    }
+
+    function initPicker(root) {
+        var searchUrl = root.getAttribute('data-search-url');
+        var textInput = root.querySelector('.picker-input');
+        var hiddenInput = root.querySelector('input[type="hidden"]');
+        var resultsBox = root.querySelector('.picker-results');
+        var clearBtn = root.querySelector('.picker-clear');
+
+        function closeResults() {
+            resultsBox.classList.remove('open');
+            resultsBox.innerHTML = '';
+        }
+
+        function selectResult(id, label) {
+            hiddenInput.value = id;
+            textInput.value = label;
+            root.classList.add('has-selection');
+            closeResults();
+        }
+
+        function clearSelection() {
+            hiddenInput.value = '';
+            textInput.value = '';
+            root.classList.remove('has-selection');
+            textInput.focus();
+        }
+
+        function renderResults(items) {
+            resultsBox.innerHTML = '';
+            if (!items.length) {
+                var empty = document.createElement('div');
+                empty.className = 'picker-empty';
+                empty.textContent = 'No matches.';
+                resultsBox.appendChild(empty);
+            } else {
+                items.forEach(function (item) {
+                    var row = document.createElement('div');
+                    row.className = 'picker-result';
+                    row.textContent = item.label;
+                    row.addEventListener('mousedown', function (event) {
+                        // mousedown (not click) fires before the input's blur
+                        // handler would otherwise close the results first.
+                        event.preventDefault();
+                        selectResult(item.id, item.label);
+                    });
+                    resultsBox.appendChild(row);
+                });
+            }
+            resultsBox.classList.add('open');
+        }
+
+        var runSearch = debounce(function (term) {
+            fetch(searchUrl + '?q=' + encodeURIComponent(term))
+                .then(function (response) { return response.ok ? response.json() : { results: [] }; })
+                .then(function (data) { renderResults(data.results || []); })
+                .catch(function () { closeResults(); });
+        }, 250);
+
+        textInput.addEventListener('input', function () {
+            // Any manual edit invalidates a previous selection -- otherwise a
+            // half-retyped name could still submit the old, now-wrong id.
+            hiddenInput.value = '';
+            root.classList.remove('has-selection');
+            var term = textInput.value.trim();
+            if (term.length < 2) {
+                closeResults();
+                return;
+            }
+            runSearch(term);
+        });
+        textInput.addEventListener('blur', function () {
+            setTimeout(closeResults, 100);
+        });
+        clearBtn.addEventListener('click', clearSelection);
+    }
+
+    document.querySelectorAll('[data-picker]').forEach(initPicker);
+})();
+</script>
 {% endblock %}

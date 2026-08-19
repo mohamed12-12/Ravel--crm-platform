@@ -3,10 +3,11 @@ from __future__ import annotations
 import math
 from datetime import date, datetime
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
+from sqlalchemy import or_
 
 from app.extensions import db
-from app.models import BookingTransaction, PrivateTripRequest, Traveler, Trip, TripBooking
+from app.models import BookingTransaction, Lead, PrivateTripRequest, Traveler, Trip, TripBooking
 from app.models.booking_transaction import ENTRY_PAYMENT, SOURCE_PRIVATE_TRIP_DEPOSIT
 from app.security import current_user_id, employee_session_required
 from services.crm.system_services.private_trips import (
@@ -74,7 +75,6 @@ def index():
     columns = {stage: [] for stage in PRIVATE_REQUEST_STAGES}
     for item in requests:
         columns.setdefault(item.stage or "registered", []).append(item)
-    travelers = Traveler.query.order_by(Traveler.full_name.asc()).limit(300).all()
     return render_template(
         "admin/private_requests.html",
         requests=requests,
@@ -84,7 +84,79 @@ def index():
         service_types=PRIVATE_SERVICE_TYPES,
         scopes=PRIVATE_TRIP_SCOPES,
         currencies=PRIVATE_BUDGET_CURRENCIES,
-        travelers=travelers,
+    )
+
+
+# A plain <select> of every traveler (previously capped at 300, alphabetical)
+# silently made every traveler past that cap impossible to link from this
+# form at all. These two endpoints back a type-to-search picker instead --
+# same @employee_session_required gate as every other route on this
+# blueprint, since they expose traveler/lead names and phone numbers.
+_PICKER_RESULT_LIMIT = 20
+
+
+@private_requests_bp.route("/search/travelers")
+@employee_session_required
+def search_travelers():
+    term = str(request.args.get("q") or "").strip()
+    if len(term) < 2:
+        return jsonify({"results": []})
+    like = f"%{term}%"
+    matches = (
+        Traveler.query.filter(
+            or_(
+                Traveler.full_name.ilike(like),
+                Traveler.traveler_id.ilike(like),
+                Traveler.whatsapp_raw.ilike(like),
+                Traveler.normalized_whatsapp.ilike(like),
+            )
+        )
+        .order_by(Traveler.full_name.asc())
+        .limit(_PICKER_RESULT_LIMIT)
+        .all()
+    )
+    return jsonify(
+        {
+            "results": [
+                {
+                    "id": traveler.traveler_id,
+                    "label": f"{traveler.full_name or traveler.traveler_id} — {traveler.traveler_id}",
+                }
+                for traveler in matches
+            ]
+        }
+    )
+
+
+@private_requests_bp.route("/search/leads")
+@employee_session_required
+def search_leads():
+    term = str(request.args.get("q") or "").strip()
+    if len(term) < 2:
+        return jsonify({"results": []})
+    like = f"%{term}%"
+    matches = (
+        Lead.query.filter(
+            or_(
+                Lead.customer_name.ilike(like),
+                Lead.lead_id.ilike(like),
+                Lead.raw_phone.ilike(like),
+            )
+        )
+        .order_by(Lead.created_at.desc())
+        .limit(_PICKER_RESULT_LIMIT)
+        .all()
+    )
+    return jsonify(
+        {
+            "results": [
+                {
+                    "id": lead.lead_id,
+                    "label": f"{lead.customer_name or lead.lead_id} — {lead.lead_id}",
+                }
+                for lead in matches
+            ]
+        }
     )
 
 

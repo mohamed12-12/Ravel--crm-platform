@@ -224,6 +224,104 @@ def test_the_convert_form_only_renders_at_the_paid_stage(private_request_app) ->
     assert "Convert To Booking" in ready
 
 
+# ---------------------------------------------------------------------------
+# The create form's traveler picker used to be a plain <select> preloaded
+# with Traveler.query.order_by(full_name).limit(300) -- alphabetically past
+# the 300th traveler was simply not selectable, ever, at creation time. It's
+# now a type-to-search box backed by these two endpoints.
+# ---------------------------------------------------------------------------
+def test_search_travelers_matches_by_name_id_or_phone(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    _login_as_employee(app, client)
+    with app.app_context():
+        from app.models.traveler import Traveler
+
+        db.session.add(Traveler(traveler_id="TR00301", full_name="Maged Aweis Alani", status="Active", whatsapp_raw="01270482380"))
+        db.session.commit()
+
+    by_name = client.get("/admin/private-requests/search/travelers?q=Maged").get_json()
+    assert by_name["results"] == [{"id": "TR00301", "label": "Maged Aweis Alani — TR00301"}]
+
+    by_id = client.get("/admin/private-requests/search/travelers?q=TR00301").get_json()
+    assert by_id["results"][0]["id"] == "TR00301"
+
+    by_phone = client.get("/admin/private-requests/search/travelers?q=01270482380").get_json()
+    assert by_phone["results"][0]["id"] == "TR00301"
+
+    no_match = client.get("/admin/private-requests/search/travelers?q=zzzzzz").get_json()
+    assert no_match["results"] == []
+
+    too_short = client.get("/admin/private-requests/search/travelers?q=a").get_json()
+    assert too_short["results"] == []
+
+
+def test_search_travelers_requires_employee_session(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    response = client.get("/admin/private-requests/search/travelers?q=Maged")
+    assert response.status_code in (302, 401, 403)
+
+
+def test_search_leads_matches_by_name_id_or_phone(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    _login_as_employee(app, client)
+    with app.app_context():
+        from app.models.lead import Lead
+        from services.crm.system_services.private_trips import utc_now
+
+        db.session.add(
+            Lead(
+                lead_id="LD00099",
+                customer_name="Sara Youssef",
+                raw_phone="01112223344",
+                created_at=utc_now().replace(tzinfo=None),
+            )
+        )
+        db.session.commit()
+
+    by_name = client.get("/admin/private-requests/search/leads?q=Sara").get_json()
+    assert by_name["results"] == [{"id": "LD00099", "label": "Sara Youssef — LD00099"}]
+
+    by_id = client.get("/admin/private-requests/search/leads?q=LD00099").get_json()
+    assert by_id["results"][0]["id"] == "LD00099"
+
+
+def test_create_still_accepts_traveler_and_lead_ids_from_the_picker(private_request_app) -> None:
+    """The picker submits the same hidden traveler_id/lead_id fields the old
+    <select>/<input> did -- create() itself needs no change."""
+    app, db = private_request_app
+    client = app.test_client()
+    csrf_token = _login_as_employee(app, client)
+    with app.app_context():
+        from app.models.traveler import Traveler
+
+        db.session.add(Traveler(traveler_id="TR00302", full_name="Picked Traveler", status="Active"))
+        db.session.commit()
+
+    response = client.post(
+        "/admin/private-requests/",
+        data={
+            "csrf_token": csrf_token,
+            "traveler_id": "TR00302",
+            "lead_id": "",
+            "service_type": "consultation",
+            "trip_scope": "Local",
+            "destination": "Luxor",
+            "party_size": "2",
+        },
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        from app.models.private_trip_request import PrivateTripRequest
+
+        item = PrivateTripRequest.query.filter_by(traveler_id="TR00302").one()
+        assert item.destination == "Luxor"
+
+
 if __name__ == "__main__":  # pragma: no cover
     import unittest
 
