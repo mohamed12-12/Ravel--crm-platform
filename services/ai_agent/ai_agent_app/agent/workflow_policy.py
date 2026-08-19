@@ -227,7 +227,7 @@ class ConversationWorkflowPolicy:
         girls_count = self._as_int(session_context.get("girls_count"))
         room_requirements = session_context.get("room_requirements") if isinstance(session_context.get("room_requirements"), dict) else {}
         mixed_room_requirements = list(room_requirements.get("requirements") or []) if isinstance(room_requirements.get("requirements"), list) else []
-        mixed_gender_counts_collected = bool(collection_state.get("gender_counts") or (boys_count > 0 and girls_count > 0))
+        mixed_gender_counts_collected = bool(collection_state.get("gender_counts") or (boys_count > 0 and girls_count > 0) or mixed_room_requirements)
         family_units_collected = bool(collection_state.get("family_units") or room_group != "mixed" or mixed_room_requirements)
         if room_group == "mixed":
             room_type_collected = bool(mixed_room_requirements)

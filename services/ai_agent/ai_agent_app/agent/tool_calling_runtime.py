@@ -2354,6 +2354,45 @@ class ToolCallingSessionRuntime:
         session.fallback_used = False
         return True
 
+    def _continue_after_revision(
+        self,
+        session: SessionState,
+        clean_text: str,
+        *,
+        field_label: str,
+        user_already_appended: bool = False,
+    ) -> bool:
+        self._apply_trip_configuration_defaults(session)
+        self._ensure_room_requirements_for_group(session)
+        context = self._build_context(session, clean_text)
+        decision = self._workflow_policy.evaluate(context)
+        context["workflow_policy"] = decision.to_context()
+        session.stage = decision.state
+        if not user_already_appended:
+            session.messages.append({"role": "user", "text": clean_text})
+        if decision.handoff_required and self._execute_policy_handoff(session, context, decision):
+            return True
+        if decision.required_step == "create_booking_draft":
+            session.booking_confirmation_requested = True
+            session.booking_confirmed = False
+            session.stage = "booking_confirmation_required"
+            reply = self._booking_confirmation_summary(session)
+        elif decision.required_step in _BACKEND_OWNED_COLLECTION_STEPS:
+            reply = self._backend_required_step_reply(session, decision, clean_text)
+        else:
+            reply = self._normalize_reply(decision.assistant_message, session.language)
+        prefix = "\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0627\u0644\u062a\u0641\u0635\u064a\u0644\u0629." if session.language.startswith("ar") else f"Updated {field_label}."
+        self._append_authoritative_reply(
+            session,
+            message_key=f"workflow.revision.{field_label}",
+            base_text=f"{prefix}\n\n{reply}" if reply else prefix,
+        )
+        session.tools_used = []
+        session.fallback_used = False
+        session.unclear_step_strikes = 0
+        session.unclear_step_key = ""
+        return True
+
     def _handle_off_script_classifier(self, session: SessionState, decision, clean_text: str) -> bool:
         """Router dispatch for a message neither _apply_required_step_capture
         nor _is_conversational_interruption could interpret -- only ever
@@ -2446,6 +2485,14 @@ class ToolCallingSessionRuntime:
                 return False
             self._update_collection_state(session, trip_type=True)
             return self._reply_for_off_script_state_change(session, clean_text)
+
+        if category == "correction_field_change":
+            return self._handle_revision_intent(
+                session,
+                clean_text,
+                force=True,
+                user_already_appended=True,
+            )
 
         return False
 
@@ -3843,6 +3890,276 @@ class ToolCallingSessionRuntime:
             return "With Flight"
         return ""
 
+    @staticmethod
+    def _clear_booking_confirmation_state(session: SessionState) -> None:
+        session.booking_confirmation_requested = False
+        session.booking_confirmed = False
+
+    @classmethod
+    def _has_field_revision_signal(cls, text: str) -> bool:
+        lowered = cls._normalize_trip_reference(text)
+        compact = cls._compact_intent(text)
+        if cls._is_explicit_correction_signal(text):
+            return True
+        return any(
+            marker in lowered
+            for marker in (
+                "not ",
+                "dont want",
+                "don't want",
+                "change to",
+                "switch to",
+                "make it",
+                "make that",
+                "rather",
+                "instead of",
+                "\u0645\u0634 \u0639\u0627\u064a\u0632",
+                "\u0645\u0634 \u0639\u0627\u064a\u0632\u0629",
+                "\u0639\u0627\u064a\u0632 \u0627\u063a\u064a\u0631",
+                "\u0639\u0627\u064a\u0632\u0629 \u0627\u063a\u064a\u0631",
+                "\u063a\u064a\u0631",
+                "\u0628\u062f\u0644",
+                "\u062e\u0644\u064a\u0647\u0627",
+            )
+        ) or compact.startswith(("iwant", "عايز", "عايزه", "عايزة"))
+
+    @classmethod
+    def _looks_like_bare_revision_value(cls, text: str) -> bool:
+        normalized = cls._normalize_trip_reference(text)
+        if not normalized or "?" in str(text or "") or "\u061f" in str(text or ""):
+            return False
+        return len(normalized.split()) <= 3
+
+    @classmethod
+    def _room_type_revision_from_text(cls, text: str, current: str = "") -> str:
+        lowered = cls._normalize_trip_reference(text)
+        current = str(current or "").strip().title()
+        aliases = {
+            "Single": ("single", "\u0641\u0631\u062f\u064a", "\u0641\u0631\u062f\u064a\u0647", "\u0633\u0646\u062c\u0644", "\u0645\u0646\u0641\u0631\u062f", "\u0645\u0646\u0641\u0631\u062f\u0647"),
+            "Double": ("double", "\u062f\u0628\u0644", "\u062f\u0627\u0628\u0644", "\u062f\u0648\u0628\u0644", "\u062b\u0646\u0627\u0626\u064a", "\u062b\u0646\u0627\u0626\u064a\u0647", "\u0645\u0632\u062f\u0648\u062c", "\u0645\u0632\u062f\u0648\u062c\u0647"),
+            "Triple": ("triple", "\u062a\u0631\u0628\u0644", "\u062a\u0631\u064a\u0628\u0644", "\u062b\u0644\u0627\u062b\u064a", "\u062b\u0644\u0627\u062b\u064a\u0647", "\u062a\u0644\u0627\u062a\u064a"),
+        }
+
+        def has_alias(room_type: str) -> bool:
+            return any(alias in lowered for alias in aliases[room_type])
+
+        def negates(room_type: str) -> bool:
+            return any(
+                f"not {alias}" in lowered
+                or f"no {alias}" in lowered
+                or f"\u0645\u0634 {alias}" in lowered
+                or f"\u0645\u0648\u0634 {alias}" in lowered
+                for alias in aliases[room_type]
+            )
+
+        mentioned = [room_type for room_type in ("Single", "Double", "Triple") if has_alias(room_type)]
+        if not mentioned:
+            return ""
+        if current and current in mentioned:
+            if negates(current):
+                replacement = next((room_type for room_type in mentioned if room_type != current), "")
+                return replacement
+            if any(negates(room_type) for room_type in mentioned if room_type != current):
+                return ""
+            replacement = next((room_type for room_type in mentioned if room_type != current), "")
+            return replacement
+        if len(mentioned) == 1:
+            return mentioned[0]
+        return mentioned[-1]
+
+    @classmethod
+    def _room_group_revision_from_text(cls, text: str, current: str = "") -> str:
+        lowered = cls._normalize_trip_reference(text)
+        current = str(current or "").strip().lower()
+        boys_terms = ("boys", "boy", "male", "men", "man", "\u0634\u0628\u0627\u0628", "\u0630\u0643\u0648\u0631", "\u0631\u062c\u0627\u0644", "\u0631\u062c\u0627\u0644\u0647", "\u0627\u0648\u0644\u0627\u062f", "\u0623\u0648\u0644\u0627\u062f")
+        girls_terms = ("girls", "girl", "female", "women", "woman", "\u0628\u0646\u0627\u062a", "\u0627\u0646\u0627\u062b", "\u0625\u0646\u0627\u062b", "\u0646\u0633\u0627\u0621")
+
+        def has_any(terms: tuple[str, ...]) -> bool:
+            return any(term in lowered for term in terms)
+
+        def negates(terms: tuple[str, ...]) -> bool:
+            return any(f"not {term}" in lowered or f"no {term}" in lowered or f"\u0645\u0634 {term}" in lowered for term in terms)
+
+        if cls._has_mixed_group_hint(text) or (has_any(boys_terms) and has_any(girls_terms) and not (negates(boys_terms) or negates(girls_terms))):
+            return "mixed"
+        if current == "girls" and negates(girls_terms) and has_any(boys_terms):
+            return "boys"
+        if current == "boys" and negates(boys_terms) and has_any(girls_terms):
+            return "girls"
+        if has_any(boys_terms) and not negates(boys_terms):
+            return "boys"
+        if has_any(girls_terms) and not negates(girls_terms):
+            return "girls"
+        return ""
+
+    @classmethod
+    def _currency_revision_from_text(cls, text: str) -> str:
+        lowered = " ".join(str(text or "").strip().casefold().split())
+        usd = any(token in lowered for token in ("usd", "dollar", "dollars", "$", "\u062f\u0648\u0644\u0627\u0631"))
+        egp = any(token in lowered for token in ("egp", "egyptian pound", "egyptian pounds", "pound", "pounds", "\u062c\u0646\u064a\u0647", "\u062c\u0646\u064a\u0629"))
+        if usd and not egp:
+            return "USD"
+        if egp and not usd:
+            return "EGP"
+        if usd and egp:
+            if re.search(r"(?:not|no)\s+(?:egp|egyptian pound|pound)", lowered) or "\u0645\u0634 \u062c\u0646\u064a" in lowered:
+                return "USD"
+            if re.search(r"(?:not|no)\s+(?:usd|dollars?|\$)", lowered) or "\u0645\u0634 \u062f\u0648\u0644\u0627\u0631" in lowered:
+                return "EGP"
+            return "USD"
+        return ""
+
+    def _handle_revision_intent(
+        self,
+        session: SessionState,
+        clean_text: str,
+        *,
+        force: bool = False,
+        user_already_appended: bool = False,
+    ) -> bool:
+        if self._is_exploratory_question(clean_text) and not force:
+            return False
+        has_signal = force or self._has_field_revision_signal(clean_text)
+        bare_value = self._looks_like_bare_revision_value(clean_text)
+        if not (has_signal or bare_value):
+            return False
+
+        hints = self._extract_hints(clean_text, stage=session.stage)
+        collection_state = self._collection_state(session)
+        people_counts = self._extract_mixed_people_counts(clean_text)
+        candidate_room_requirements = hints.get("candidate_room_requirements")
+        if (
+            isinstance(candidate_room_requirements, dict)
+            and candidate_room_requirements.get("requirements")
+            and isinstance(session.room_requirements, dict)
+            and session.room_requirements.get("requirements")
+            and session.stage != "booking_confirmation_required"
+        ):
+            return False
+
+        room_group = self._room_group_revision_from_text(clean_text, session.room_group)
+        if session.room_group and room_group and room_group != session.room_group and (has_signal or bare_value):
+            session.room_group = room_group
+            session.room_type = ""
+            session.room_requirements = {}
+            session.boys_count = people_counts["boys"] if room_group == "mixed" else 0
+            session.girls_count = people_counts["girls"] if room_group == "mixed" else 0
+            session.family_units = 0
+            if room_group == "mixed" and people_counts["boys"] and people_counts["girls"]:
+                session.group_size = people_counts["boys"] + people_counts["girls"]
+                self._update_collection_state(session, gender_counts=True, group_size=True)
+            else:
+                self._update_collection_state(session, gender_counts=False, family_units=False)
+            self._clear_booking_confirmation_state(session)
+            self._update_collection_state(session, room_group=True, room_type=False, family_units=False)
+            return self._continue_after_revision(
+                session,
+                clean_text,
+                field_label="traveler gender",
+                user_already_appended=user_already_appended,
+            )
+
+        if session.room_group == "mixed" and collection_state.get("gender_counts") and people_counts["boys"] and people_counts["girls"]:
+            if people_counts["boys"] != session.boys_count or people_counts["girls"] != session.girls_count:
+                session.boys_count = people_counts["boys"]
+                session.girls_count = people_counts["girls"]
+                session.group_size = people_counts["boys"] + people_counts["girls"]
+                session.room_requirements = {}
+                session.room_type = ""
+                session.family_units = 0
+                self._clear_booking_confirmation_state(session)
+                self._update_collection_state(
+                    session,
+                    room_group=True,
+                    gender_counts=True,
+                    family_units=False,
+                    group_size=True,
+                    room_type=False,
+                )
+                return self._continue_after_revision(
+                    session,
+                    clean_text,
+                    field_label="gender counts",
+                    user_already_appended=user_already_appended,
+                )
+
+        family_units = hints.get("candidate_family_units")
+        if session.room_group == "mixed" and family_units is not None and int(family_units) != int(session.family_units or 0) and has_signal:
+            max_units = min(int(session.boys_count or 0), int(session.girls_count or 0))
+            session.family_units = min(max(0, int(family_units)), max_units)
+            session.room_requirements = {}
+            self._clear_booking_confirmation_state(session)
+            self._update_collection_state(session, family_units=True)
+            return self._continue_after_revision(
+                session,
+                clean_text,
+                field_label="family units",
+                user_already_appended=user_already_appended,
+            )
+
+        room_type = self._room_type_revision_from_text(clean_text, session.room_type)
+        if session.room_type and room_type and room_type != session.room_type and (has_signal or bare_value):
+            session.room_type = room_type
+            session.room_requirements = {}
+            self._clear_booking_confirmation_state(session)
+            self._update_collection_state(session, room_type=True)
+            self._ensure_room_requirements_for_group(session)
+            return self._continue_after_revision(
+                session,
+                clean_text,
+                field_label="room type",
+                user_already_appended=user_already_appended,
+            )
+
+        group_size = int(hints.get("candidate_group_size") or 0)
+        if (
+            session.room_group != "mixed"
+            and session.group_size
+            and collection_state.get("group_size")
+            and group_size
+            and group_size != int(session.group_size or 0)
+            and (has_signal or bare_value)
+        ):
+            session.group_size = group_size
+            session.room_requirements = {}
+            self._clear_booking_confirmation_state(session)
+            self._update_collection_state(session, group_size=True)
+            self._refresh_selected_trip_capacity(session)
+            self._ensure_room_requirements_for_group(session)
+            return self._continue_after_revision(
+                session,
+                clean_text,
+                field_label="traveler count",
+                user_already_appended=user_already_appended,
+            )
+
+        flight_option = self._flight_option_from_text(clean_text)
+        if session.flight_option and flight_option and flight_option != session.flight_option and (has_signal or bare_value):
+            session.flight_option = flight_option
+            self._clear_passport_state(session)
+            self._clear_booking_confirmation_state(session)
+            self._update_collection_state(session, flight_option=True)
+            return self._continue_after_revision(
+                session,
+                clean_text,
+                field_label="flight option",
+                user_already_appended=user_already_appended,
+            )
+
+        currency = self._currency_revision_from_text(clean_text)
+        if session.currency and currency and currency != session.currency and (has_signal or bare_value):
+            session.currency = currency
+            self._clear_booking_confirmation_state(session)
+            self._update_collection_state(session, currency=True)
+            return self._continue_after_revision(
+                session,
+                clean_text,
+                field_label="currency",
+                user_already_appended=user_already_appended,
+            )
+
+        return False
+
     @classmethod
     def _compact_intent(cls, text: str) -> str:
         return re.sub(r"[^0-9a-z\u0600-\u06ff]+", "", cls._normalize_trip_reference(text))
@@ -3900,6 +4217,9 @@ class ToolCallingSessionRuntime:
         session.room_group = ""
         session.room_requirements = {}
         session.group_size = 1
+        session.boys_count = 0
+        session.girls_count = 0
+        session.family_units = 0
         session.flight_option = ""
         session.currency = ""
         session.group_nationality_type = ""
@@ -3907,7 +4227,7 @@ class ToolCallingSessionRuntime:
         session.booking_confirmation_requested = False
         session.booking_confirmed = False
         self._clear_passport_state(session)
-        self._update_collection_state(session, room_type=False, room_group=False, group_size=False, group_nationality_type=False, group_nationality_counts=False, flight_option=False, currency=False)
+        self._update_collection_state(session, room_type=False, room_group=False, gender_counts=False, family_units=False, group_size=False, group_nationality_type=False, group_nationality_counts=False, flight_option=False, currency=False)
 
     def _reset_booking_state(self, session: SessionState) -> None:
         session.trip_type = ""
@@ -4247,6 +4567,9 @@ class ToolCallingSessionRuntime:
             return session
 
         if self._handle_post_booking_message(session, clean_text):
+            return session
+
+        if self._handle_revision_intent(session, clean_text):
             return session
 
         if self._handle_booking_confirmation_reply(session, clean_text):
@@ -6154,12 +6477,19 @@ class ToolCallingSessionRuntime:
         boys_count = int(hints.get("candidate_boys_count") or 0)
         girls_count = int(hints.get("candidate_girls_count") or 0)
         if boys_count and girls_count and not is_exploratory:
+            counts_changed = boys_count != session.boys_count or girls_count != session.girls_count
             session.boys_count = boys_count
             session.girls_count = girls_count
             session.group_size = boys_count + girls_count
             session.room_group = "mixed"
+            if counts_changed:
+                session.room_requirements = {}
+                self._clear_booking_confirmation_state(session)
             self._update_collection_state(session, room_group=True, gender_counts=True, group_size=True)
         if group_size:
+            if session.group_size and group_size != int(session.group_size or 0):
+                session.room_requirements = {}
+                self._clear_booking_confirmation_state(session)
             session.group_size = group_size
             self._update_collection_state(session, group_size=True)
 
@@ -6194,18 +6524,22 @@ class ToolCallingSessionRuntime:
         if flight_option:
             if session.flight_option and session.flight_option != flight_option:
                 self._clear_passport_state(session)
-                session.booking_confirmation_requested = False
-                session.booking_confirmed = False
+                self._clear_booking_confirmation_state(session)
             session.flight_option = flight_option
             self._update_collection_state(session, flight_option=True)
 
         currency = str(hints.get("candidate_currency") or "").strip()
         if currency and session.customer_name and session.nationality and session.birthday:
+            if session.currency and session.currency != currency:
+                self._clear_booking_confirmation_state(session)
             session.currency = currency
             self._update_collection_state(session, currency=True)
 
         room_type = str(hints.get("candidate_room_type") or "").strip()
         room_group = str(hints.get("candidate_room_group") or "").strip()
+        room_requirements = hints.get("candidate_room_requirements") if not is_exploratory else None
+        has_room_requirements = isinstance(room_requirements, dict) and bool(room_requirements.get("requirements"))
+        has_revision_signal = self._has_field_revision_signal(clean_text)
         if session.stage in {"group_nationality_type_required", "group_nationality_counts_required"}:
             room_type = ""
             room_group = ""
@@ -6225,13 +6559,45 @@ class ToolCallingSessionRuntime:
                 )
                 room_group = ""
         if room_type:
+            if has_room_requirements:
+                room_type = "" if session.room_type else room_type
+            elif session.room_type and session.room_type != room_type and not has_revision_signal:
+                agent_logger.info(
+                    "Ignored incidental room-type mention session=%s current_type=%s candidate_type=%s",
+                    session.id,
+                    session.room_type,
+                    room_type,
+                )
+                room_type = ""
+            elif session.room_type and session.room_type != room_type:
+                session.room_requirements = {}
+                self._clear_booking_confirmation_state(session)
+        if room_type:
             session.room_type = room_type
             self._update_collection_state(session, room_type=True)
         if room_group:
+            if has_room_requirements:
+                room_group = "" if session.room_group else room_group
+            elif session.room_group and session.room_group != room_group and not has_revision_signal:
+                agent_logger.info(
+                    "Ignored incidental room-group mention session=%s current_group=%s candidate_group=%s",
+                    session.id,
+                    session.room_group,
+                    room_group,
+                )
+                room_group = ""
+            elif session.room_group and session.room_group != room_group:
+                session.room_type = ""
+                session.room_requirements = {}
+                session.boys_count = 0 if room_group != "mixed" else session.boys_count
+                session.girls_count = 0 if room_group != "mixed" else session.girls_count
+                session.family_units = 0
+                self._clear_booking_confirmation_state(session)
+                self._update_collection_state(session, room_type=False, gender_counts=room_group == "mixed" and bool(session.boys_count and session.girls_count), family_units=False)
+        if room_group:
             session.room_group = room_group
             self._update_collection_state(session, room_group=True)
-        room_requirements = hints.get("candidate_room_requirements") if not is_exploratory else None
-        if isinstance(room_requirements, dict) and room_requirements.get("requirements"):
+        if has_room_requirements:
             merged_requirements = self._merge_room_requirements(session, room_requirements, clean_text)
             session.room_requirements = merged_requirements
             if not session.room_type:

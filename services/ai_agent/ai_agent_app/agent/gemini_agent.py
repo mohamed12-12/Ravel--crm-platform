@@ -60,6 +60,7 @@ OFF_SCRIPT_CLASSIFIER_CATEGORIES = frozenset(
         "side_question",
         "correction_trip_switch",
         "correction_trip_type_switch",
+        "correction_field_change",
         "navigation",
         "unclear",
     }
@@ -90,6 +91,11 @@ _OFF_SCRIPT_CLASSIFIER_SYSTEM_PROMPT = (
     "yet rather than treating it as a named trip that failed to match.\n"
     "- correction_trip_type_switch: the customer wants to change between local and "
     "international. Example: \"no, make it international\".\n"
+    "- correction_field_change: the customer clearly wants to revise an already "
+    "answered booking field other than the trip itself, such as room type, "
+    "traveler count, boys/girls split, flight option, currency, or nationality. "
+    "Examples: \"I want double not single\", \"make it 4 travelers\", "
+    "\"actually pay in USD\", \"no flights please\".\n"
     "- navigation: the customer wants to cancel, start over, or go back to an "
     "earlier step.\n"
     "- unclear: none of the above fit with real confidence.\n\n"
@@ -98,7 +104,7 @@ _OFF_SCRIPT_CLASSIFIER_SYSTEM_PROMPT = (
     "Respond with strict JSON only, no other text, no markdown fences, matching "
     "exactly this shape: "
     '{"category": "<one of: side_question, correction_trip_switch, '
-    'correction_trip_type_switch, navigation, unclear>", "target_hint": '
+    'correction_trip_type_switch, correction_field_change, navigation, unclear>", "target_hint": '
     '"<short text or empty string>", "confidence": <number from 0 to 1>}'
 )
 
