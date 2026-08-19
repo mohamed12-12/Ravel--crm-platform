@@ -287,12 +287,20 @@ EXPLANATION_REQUEST_EXACT_TERMS: set[str] = {
     "تقصد ايه",
     "تقصد إيه",
 }
+# "ليه" ("why") is deliberately NOT in this set even though it reads like a
+# natural fit: as a blind substring it also matches inside "خليها" (make
+# it), "عليها"/"عليه" (on it), and "إليها"/"إليه" (to it) -- all extremely
+# common words, none of them an explanation request. Semantic-capture audit
+# phase 1 (PC-1 investigation) found this swallowing trip-type/field
+# corrections phrased with "خليها ..." into a generic "let me explain"
+# reply before the classifier ever ran. tool_calling_runtime.py's
+# _is_explanation_request checks it separately with a real word boundary
+# instead of the plain substring test every other term here uses.
 EXPLANATION_REQUEST_SUBSTRING_TERMS: set[str] = {
     "why do",
     "why are",
     "why need",
     "what do you need",
-    "ليه",
     "لماذا",
     "ليش",
     "عشان ايه",

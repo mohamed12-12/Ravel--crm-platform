@@ -2109,10 +2109,16 @@ class ToolCallingSessionRuntime:
             return False
         if normalized in EXPLANATION_REQUEST_EXACT_TERMS:
             return True
-        return (
-            normalized in EXPLANATION_REQUEST_EXACT_TERMS
-            or any(phrase in normalized for phrase in EXPLANATION_REQUEST_SUBSTRING_TERMS)
-        )
+        # "ليه" needs a real word boundary, not the plain substring check
+        # every other term here uses -- see the comment on
+        # EXPLANATION_REQUEST_SUBSTRING_TERMS in lexicon.py.
+        # _normalize_trip_reference keeps punctuation in the ؀-ۿ
+        # range (including "؟") as literal characters rather than
+        # collapsing it to a space, so the right boundary must accept
+        # trailing punctuation too, not just whitespace/end-of-string.
+        if re.search(r"(?:^|\s)ليه(?=\s|$|[؟?.,!])", normalized):
+            return True
+        return any(phrase in normalized for phrase in EXPLANATION_REQUEST_SUBSTRING_TERMS)
 
     @classmethod
     def _is_name_step_clarification(cls, text: str) -> bool:
@@ -6700,11 +6706,43 @@ class ToolCallingSessionRuntime:
         session.selected_trip_name = ""
         session.selected_trip_name_ar = ""
         self._clear_booking_dependent_state(session)
+        self._clear_private_trip_downstream_state(session)
         preview = dict(session.preview or {})
         preview.pop("trip_result", None)
         session.preview = preview
         self._update_collection_state(session, selected_trip=False)
         return True
+
+    def _clear_private_trip_downstream_state(self, session: SessionState) -> None:
+        """Semantic-capture audit phase 1 (PC-1): mirrors
+        _clear_booking_dependent_state's role for the regular flow -- a
+        trip-type change invalidates everything already answered in a
+        private-trip intake (a destination/dates/party size/budget given
+        under "local" cannot be silently carried into a corrected
+        "international" request without reconfirmation), the same way it
+        invalidates room/flight/currency for a selected trip. No-op when
+        the session never entered the private flow, so this is safe to
+        call unconditionally from the one shared _apply_trip_type_change
+        used by both the regular and private flows.
+        """
+        if not session.private_trip_active:
+            return
+        session.private_service_type = ""
+        session.private_destination = ""
+        session.private_start_date_pref = ""
+        session.private_end_date_pref = ""
+        session.private_dates_flexible = False
+        session.private_party_size = 0
+        session.private_budget_amount = 0.0
+        session.private_budget_currency = ""
+        self._update_collection_state(
+            session,
+            private_service_type=False,
+            private_destination=False,
+            private_dates=False,
+            private_party_size=False,
+            private_budget=False,
+        )
 
     def _merge_hints(self, session: SessionState, hints: dict[str, Any], clean_text: str = "") -> None:
         """Applies the intent extractor's per-field candidates onto session
@@ -7005,6 +7043,15 @@ class ToolCallingSessionRuntime:
         list lookup; an unrecognized country after any trigger phrase still
         resolves to "" via resolve_nationality, exactly as an unrecognized
         whole-text answer would.
+
+        Semantic-capture audit PC-4: every trigger phrase above was
+        English-only, so "أنا مصري" / "جنسيتي سعودي" / "جواز سفري من مصر"
+        never resolved -- only a bare, single-word answer ("مصري" alone)
+        did. Added the Arabic equivalents of the SAME triggers, still
+        against the SAME maintained nationality_reference list, and still
+        capturing only the single word immediately after the trigger (not
+        a run of words) so trailing unrelated text in a mixed sentence
+        ("... وعايز أحجز") is never swept into the lookup.
         """
         lowered = " ".join(str(text or "").strip().lower().split())
         resolved = resolve_nationality(lowered)
@@ -7015,7 +7062,15 @@ class ToolCallingSessionRuntime:
             lowered,
         )
         if match:
-            return resolve_nationality(match.group(1))
+            resolved = resolve_nationality(match.group(1))
+            if resolved:
+                return resolved
+        arabic_match = re.search(
+            r"(?:جنسيتي|جنسيتى|انا|أنا|جواز سفري من|جواز سفرى من|جوازي من)\s+([؀-ۿ]+)",
+            lowered,
+        )
+        if arabic_match:
+            return resolve_nationality(arabic_match.group(1))
         return ""
 
     def _available_room_types(self, session: SessionState) -> list[str]:
@@ -7559,11 +7614,22 @@ class ToolCallingSessionRuntime:
                     return True
                 return any(term in lowered for term in arabic)
 
-            if menu_option_number == 2 or _currency_matches(usd_latin, usd_arabic):
+            usd_hit = menu_option_number == 2 or _currency_matches(usd_latin, usd_arabic)
+            egp_hit = menu_option_number == 1 or _currency_matches(egp_latin, egp_arabic)
+            if usd_hit and egp_hit:
+                # Semantic-capture audit PC-6: both currency names appearing
+                # in the same message ("أدفع بالمصري ولا بالدولار؟" -- EGP or
+                # USD?) used to resolve to USD unconditionally (whichever
+                # branch this if/elif checked first), silently answering a
+                # QUESTION comparing the two options as if it were a
+                # decision. Neither name is negated here, so this is
+                # genuinely ambiguous -- fail closed rather than guess.
+                return False
+            if usd_hit:
                 session.currency = "USD"
                 self._update_collection_state(session, currency=True)
                 return True
-            elif menu_option_number == 1 or _currency_matches(egp_latin, egp_arabic):
+            if egp_hit:
                 session.currency = "EGP"
                 self._update_collection_state(session, currency=True)
                 return True

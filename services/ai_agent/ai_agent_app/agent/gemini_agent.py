@@ -98,6 +98,16 @@ SEMANTIC_CANDIDATE_DOMAIN_HINTS: dict[str, str] = {
     "collect_group_size": "a plain integer -- the total number of travelers",
     "collect_private_party_size": "a plain integer -- the total number of travelers",
     "collect_private_budget": "an amount plus currency, formatted like '5000 EGP' or '3000 USD'",
+    # Semantic-capture audit phase 1 (PC-5): the deterministic resolver for
+    # these three needs its counts attached to an English group/nationality
+    # WORD, not a bare number -- the hint format below is the exact shape
+    # _extract_mixed_people_counts / _extract_nationality_group_counts
+    # already parse (confirmed against the real functions, not guessed),
+    # so a candidate in this shape reaches state through the same
+    # unmodified resolver every other field uses, with no new validation.
+    "collect_gender_counts": "two counts formatted like '2 boys 2 girls' -- the number of boys and the number of girls",
+    "collect_family_units": "a plain integer -- the number of family/couple units who may share a room, or 0 if none",
+    "collect_group_nationality_counts": "two counts formatted like '2 egyptian 2 foreigner'",
 }
 
 _OFF_SCRIPT_CLASSIFIER_SYSTEM_PROMPT = (

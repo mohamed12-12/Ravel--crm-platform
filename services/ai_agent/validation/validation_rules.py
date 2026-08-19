@@ -146,9 +146,31 @@ def normalize_trip_type(value: str | None) -> str:
     # same search with a leading "ال" stripped from every word.
     dearticled = re.sub(r"(?<!\S)ال", "", normalized)
     for candidate in (normalized, dearticled):
+        # Semantic-capture audit phase 1 (PC-1): a correction naming BOTH
+        # types in one sentence ("خليها دولية مش محلية" -- "make it
+        # international, not local") used to return whichever alias
+        # TRIP_TYPE_ALIASES happens to iterate to first, ignoring "مش"
+        # ("not") entirely -- it returned "local" for a sentence explicitly
+        # rejecting "local". Collect every match with its text position and
+        # whether a negation word immediately precedes it, then prefer the
+        # earliest non-negated match instead of the dict-iteration-order
+        # first match.
+        matches: list[tuple[int, str, bool]] = []
         for alias, trip_type in TRIP_TYPE_ALIASES.items():
             if len(alias) < 3:
                 continue
-            if re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", candidate):
+            for match in re.finditer(rf"(?<!\w){re.escape(alias)}(?!\w)", candidate):
+                preceding = candidate[: match.start()]
+                negated = bool(re.search(r"(?:^|\s)(?:مش|لا|not|no)\s*$", preceding))
+                matches.append((match.start(), trip_type, negated))
+        if not matches:
+            continue
+        matches.sort(key=lambda item: item[0])
+        for _, trip_type, negated in matches:
+            if not negated:
                 return trip_type
+        # Every match on this candidate was negated ("مش دولي ولا محلي" --
+        # rejecting both, or rejecting one with nothing else stated) -- try
+        # the other candidate before giving up; if neither has a
+        # non-negated match, this is genuinely ambiguous, so fail closed.
     return ""
