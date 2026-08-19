@@ -535,6 +535,51 @@
     .modal-value-reason {
         line-height: 1.6;
         font-size: 0.95rem;
+        white-space: pre-wrap;
+    }
+
+    .modal-section {
+        display: flex;
+        flex-direction: column;
+        gap: 0.7rem;
+    }
+
+    .reason-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+    }
+
+    .reason-code-chip {
+        background: rgba(0, 208, 146, 0.12);
+        border: 1px solid rgba(0, 208, 146, 0.34);
+        border-radius: 999px;
+        color: #7dd3c7;
+        font-size: 0.78rem;
+        font-weight: 800;
+        padding: 0.28rem 0.65rem;
+    }
+
+    .modal-link-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.55rem;
+    }
+
+    .modal-link-list a {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--border-glass);
+        border-radius: 6px;
+        color: #fff;
+        font-size: 0.86rem;
+        font-weight: 700;
+        padding: 0.45rem 0.7rem;
+        text-decoration: none;
+    }
+
+    .modal-link-list a:hover {
+        border-color: var(--accent);
     }
 
     .modal-textarea {
@@ -951,7 +996,7 @@
 </style>
 
 {% macro render_card(item) %}
-<div class="handoff-card card-glow-{{ item.priority|lower }}" id="card-{{ item.handoff_id }}" draggable="true" data-id="{{ item.handoff_id }}" data-priority="{{ item.priority }}" data-notes="{{ item.display_notes|e }}" data-search="{{ item.traveler_name|lower }} {{ item.handoff_id|lower }} {{ item.reason|lower }}">
+<div class="handoff-card card-glow-{{ item.priority|lower }}" id="card-{{ item.handoff_id }}" draggable="true" data-id="{{ item.handoff_id }}" data-priority="{{ item.priority }}" data-search="{{ item.traveler_name|lower }} {{ item.handoff_id|lower }} {{ item.reason|lower }} {{ item.reason_code|lower }} {{ item.customer_summary|lower }} {{ item.agent_summary|lower }}">
     <!-- Priority Badge -->
     <div class="priority-badge prio-{{ item.priority|lower }}">
         {{ item.priority }}
@@ -971,7 +1016,7 @@
 
     <!-- Reason Content Box -->
     <div class="card-reason">
-        {{ item.reason }}
+        {{ item.reason_text or item.reason }}
     </div>
 
     <!-- Footer Timestamp & ID -->
@@ -1132,13 +1177,34 @@
                     <span class="modal-value" id="modal-priority">N/A</span>
                 </div>
             </div>
-            <div class="modal-field">
-                <span class="modal-label">System Conflict / Audit Reason</span>
+            <div class="modal-section">
+                <span class="modal-label">Why This Escalated</span>
+                <div class="reason-chip-row">
+                    <span class="reason-code-chip" id="modal-reason-code">manual_handoff</span>
+                </div>
                 <div class="modal-value modal-value-reason" id="modal-reason">N/A</div>
             </div>
-            <div class="modal-field">
-                <span class="modal-label">System Guidance</span>
-                <div class="modal-value modal-value-reason" id="modal-guidance">No additional guidance recorded.</div>
+            <div class="modal-section">
+                <span class="modal-label">What The Customer Said</span>
+                <div class="modal-value modal-value-reason" id="modal-customer-summary">No customer message recorded.</div>
+            </div>
+            <div class="modal-section">
+                <span class="modal-label">What The Agent Was Doing</span>
+                <div class="modal-value modal-value-reason" id="modal-agent-summary">No agent summary recorded.</div>
+                <div class="modal-detail-row">
+                    <div class="modal-field">
+                        <span class="modal-label">Flow Key</span>
+                        <span class="modal-value" id="modal-flow-key">N/A</span>
+                    </div>
+                    <div class="modal-field">
+                        <span class="modal-label">Step</span>
+                        <span class="modal-value" id="modal-step">N/A</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-section">
+                <span class="modal-label">Links</span>
+                <div class="modal-link-list" id="modal-links">No related records linked.</div>
             </div>
             <div class="modal-field">
                 <span class="modal-label">Resolution Notes</span>
@@ -1174,6 +1240,37 @@
     const HANDOFF_UPDATE_URL_TEMPLATE = "{{ url_for('handoffs.update_handoff', id='__HANDOFF_ID__') }}";
     function handoffUpdateUrl(handoffId) {
         return HANDOFF_UPDATE_URL_TEMPLATE.replace('__HANDOFF_ID__', handoffId);
+    }
+    const HANDOFF_ITEMS = {{ handoff_items|tojson }};
+    const HANDOFF_BY_ID = Object.fromEntries(HANDOFF_ITEMS.map(item => [item.handoff_id, item]));
+
+    function setModalText(id, value, fallback = 'N/A') {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const text = String(value || '').trim();
+        el.innerText = text || fallback;
+    }
+
+    function renderModalLinks(item) {
+        const container = document.getElementById('modal-links');
+        if (!container) return;
+        container.innerHTML = '';
+        const links = [
+            ['Traveler', item.traveler_url, item.traveler_id],
+            ['Lead', item.lead_url, item.lead_id],
+            ['Trip', item.trip_url, item.trip_id],
+            ['Transcript', item.session_url, item.session_id],
+        ].filter(([, url]) => url);
+        if (!links.length) {
+            container.innerText = 'No related records linked.';
+            return;
+        }
+        links.forEach(([label, url, identifier]) => {
+            const link = document.createElement('a');
+            link.href = url;
+            link.textContent = identifier ? `${label}: ${identifier}` : label;
+            container.appendChild(link);
+        });
     }
 
     // Filter Logic
@@ -1222,24 +1319,22 @@
 
     // Modal Details Box
     function openDetails(handoffId) {
-        const card = document.getElementById(`card-${handoffId}`);
-        if (!card) return;
+        const item = HANDOFF_BY_ID[handoffId];
+        if (!item) return;
 
-        const name = card.querySelector('.traveler-name').innerText;
-        const phone = card.querySelector('.traveler-phone').innerText;
-        const reason = card.querySelector('.card-reason').innerText;
-        const priority = card.getAttribute('data-priority');
-        const guidance = card.getAttribute('data-notes') || '';
+        setModalText('modal-traveler-name', item.traveler_name);
+        setModalText('modal-traveler-phone', item.traveler_phone);
+        setModalText('modal-handoff-id', `#${handoffId}`);
+        setModalText('modal-priority', item.priority);
+        setModalText('modal-reason-code', item.reason_code || 'manual_handoff');
+        setModalText('modal-reason', item.reason_text || item.reason, 'No reason recorded.');
+        setModalText('modal-customer-summary', item.customer_summary, 'No customer message recorded.');
+        setModalText('modal-agent-summary', item.agent_summary || item.display_notes, 'No agent summary recorded.');
+        setModalText('modal-flow-key', item.flow_key);
+        setModalText('modal-step', item.step);
+        renderModalLinks(item);
 
-        document.getElementById('modal-traveler-name').innerText = name;
-        document.getElementById('modal-traveler-phone').innerText = phone;
-        document.getElementById('modal-handoff-id').innerText = `#${handoffId}`;
-        document.getElementById('modal-priority').innerText = priority;
-        document.getElementById('modal-reason').innerText = reason;
-        document.getElementById('modal-guidance').innerText = guidance || 'No additional guidance recorded.';
-        
-        // Fetch current notes or settings if any
-        document.getElementById('modal-notes').value = '';
+        document.getElementById('modal-notes').value = item.resolution_notes || '';
 
         const resolveBtn = document.getElementById('modal-resolve-btn');
         resolveBtn.onclick = () => {
@@ -1259,10 +1354,14 @@
             method: 'PUT',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-Token': window.CRM_CSRF_TOKEN },
-            body: JSON.stringify({ status: 'Resolved', notes: notes })
+            body: JSON.stringify({ status: 'Resolved', resolution_notes: notes })
         })
         .then(r => r.json())
         .then(() => {
+            if (HANDOFF_BY_ID[handoffId]) {
+                HANDOFF_BY_ID[handoffId].status = 'Resolved';
+                HANDOFF_BY_ID[handoffId].resolution_notes = notes;
+            }
             const card = document.getElementById(`card-${handoffId}`);
             if (card) {
                 document.getElementById('list-resolved').appendChild(card);
