@@ -304,6 +304,66 @@ def test_gendered_requirements_can_use_unsplit_aggregate_capacity(bridge_app):
         assert trip.draft_holds_girls_double == 1
 
 
+def test_a_gendered_pool_shortage_is_rejected_not_silently_overbooked(bridge_app):
+    """The two existing mixed-booking tests only exercise requests that fit
+    exactly within the gendered pools -- neither would fail if
+    _assert_room_capacity's gender_capacity block were deleted entirely.
+    This pins the rejection itself: 1 boys_double available, 2 requested.
+    """
+    app, db = bridge_app
+    client = app.test_client()
+    app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://staging/redacted"
+    from app.models import Trip, TripBooking
+
+    with app.app_context():
+        trip = db.session.get(Trip, "RTPG001")
+        trip.double_total = 5
+        trip.double_remaining = 5
+        trip.boys_double = 1
+        trip.girls_double = 5
+        db.session.commit()
+
+    response = client.post(
+        "/api/crm/agent/write",
+        json={
+            "action": "create_booking_draft",
+            "payload": {
+                "traveler_id": "TRPG001",
+                "trip_id": "RTPG001",
+                "room_type": "Double",
+                "room_group": "mixed",
+                "channel": "web",
+                "boys_count": 4,
+                "girls_count": 2,
+                "group_size": 6,
+                "room_requirements": {
+                    "requirements": [
+                        {"room_type": "Double", "room_group": "boys", "rooms": 2},
+                        {"room_type": "Double", "room_group": "girls", "rooms": 1},
+                    ],
+                    "boys_rooms_requested": 2,
+                    "girls_rooms_requested": 1,
+                },
+            },
+            "session_context": {"session_id": "gendered-shortage", "language": "en", "booking_confirmed": True},
+        },
+    )
+
+    assert response.status_code == 200
+    contract = response.get_json()["result"]["write_result_contract"]
+    assert contract["status"] == "failed"
+    assert contract["executed"] is False
+
+    # Nothing was written, and the aggregate/gendered holds are untouched --
+    # a rejected request must not partially reserve capacity.
+    with app.app_context():
+        trip = db.session.get(Trip, "RTPG001")
+        assert trip.draft_holds_double == 0
+        assert trip.draft_holds_boys_double == 0
+        assert trip.draft_holds_girls_double == 0
+        assert TripBooking.query.count() == 0
+
+
 def test_repeated_create_lead_returns_structured_duplicate_in_postgres_mode(bridge_app):
     app, db = bridge_app
     client = app.test_client()

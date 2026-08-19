@@ -75,7 +75,7 @@
     </aside>
 </div>
 
-{% if not item.converted_booking_id and item.stage not in ('lost',) %}
+{% if not item.converted_booking_id and item.stage == 'paid' %}
 <section class="panel" style="margin-top:1rem">
     <h2>Convert To Booking</h2>
     <form class="form-grid" method="post" action="{{ url_for('private_requests.convert', request_id=item.request_id) }}">
@@ -107,6 +107,10 @@
             <button type="submit">Convert</button>
         </div>
     </form>
+</section>
+{% elif not item.converted_booking_id and item.stage != 'lost' %}
+<section class="panel" style="margin-top:1rem">
+    <p style="color:var(--text-muted)">Conversion is available once this request reaches the <strong>paid</strong> stage (currently <strong>{{ item.stage }}</strong>).</p>
 </section>
 {% endif %}
 {% endblock %}

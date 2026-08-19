@@ -173,6 +173,19 @@ def convert(request_id: str):
     if item.converted_booking_id:
         flash("This private request is already converted.", "info")
         return redirect(url_for("bookings.detail", booking_id=item.converted_booking_id))
+    # PRIVATE_REQUEST_TRANSITIONS already encodes "paid" as the only stage that
+    # may move to "converted" -- but unlike update_stage(), this route never
+    # checked it, so an employee could convert straight from "registered" and
+    # skip the whole consultation/deposit/design pipeline the stages exist to
+    # enforce (and, with no deposit recorded yet, create a booking with no
+    # payment evidence at all).
+    if not can_transition_private_stage(item.stage, "converted"):
+        flash(
+            f"{item.request_id} must reach the 'paid' stage before it can be converted "
+            f"(currently '{item.stage}').",
+            "error",
+        )
+        return redirect(url_for("private_requests.detail", request_id=item.request_id))
     traveler = db.session.get(Traveler, item.traveler_id) if item.traveler_id else None
     if traveler is None:
         flash("Link a traveler before converting this private request.", "error")
