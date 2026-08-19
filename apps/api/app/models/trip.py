@@ -21,6 +21,7 @@ class Trip(db.Model):
     end_date = db.Column(db.Date)
     sales_status = db.Column(db.String(50)) # Open / Closed / Cancelled
     data_audit = db.Column(db.Text)
+    is_private = db.Column(db.Boolean, nullable=False, default=False, index=True)
     
     # Extension Fields
     trip_window_status = db.Column(db.String(50))
@@ -109,6 +110,7 @@ class Trip(db.Model):
             end_date=to_date(row.get("End Date")),
             sales_status=clean(row.get("Sales Status")),
             data_audit=clean(row.get("Data Audit")),
+            is_private=bool(clean(row.get("Is Private"))) if clean(row.get("Is Private")) is not None else False,
             trip_window_status=clean(row.get("Trip Window Status")),
             trip_availability_note=clean(row.get("Trip Availability Note")),
             next_reengage_date=to_date(row.get("Next Reengage Date")),
@@ -147,6 +149,7 @@ class Trip(db.Model):
             "end_date": self.end_date.isoformat() if self.end_date else None,
             "sales_status": self.sales_status,
             "data_audit": self.data_audit,
+            "is_private": bool(self.is_private),
             "trip_window_status": self.trip_window_status,
             "trip_availability_note": self.trip_availability_note,
             "next_reengage_date": self.next_reengage_date.isoformat() if self.next_reengage_date else None,

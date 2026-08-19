@@ -65,6 +65,7 @@ from services.ai_agent.validation.lexicon import (
 from services.ai_agent.validation.validation_rules import CLOSED_LEAD_STAGES, normalize_flight_option, normalize_trip_type
 from services.ai_agent.llm import build_llm_provider
 from services.crm.system_services.trip_pricing import price_for_room_and_currency
+from services.crm.system_services.private_trips import normalize_private_scope, normalize_private_service_type
 from services.crm.system_services.phone_normalization import normalize_phone_input
 
 
@@ -88,6 +89,12 @@ SAFE_STATUS_MAP = {
     "traveler_gender_required": "Waiting for customer response",
     "gender_counts_required": "Waiting for customer response",
     "family_units_required": "Waiting for customer response",
+    "private_service_type_required": "Waiting for customer response",
+    "private_destination_required": "Waiting for customer response",
+    "private_dates_required": "Waiting for customer response",
+    "private_party_size_required": "Waiting for customer response",
+    "private_budget_required": "Waiting for customer response",
+    "private_request_ready": "Ready",
     "group_size_required": "Waiting for customer response",
     "group_nationality_type_required": "Waiting for customer response",
     "group_nationality_counts_required": "Waiting for customer response",
@@ -108,6 +115,7 @@ SAFE_STATUS_MAP = {
     "searching_trips": "Searching trips",
     "waiting": "Waiting for customer response",
     "done": "Done",
+    "post_booking_support": "Done",
     "error": "Unable to complete request",
 }
 
@@ -171,6 +179,11 @@ _BACKEND_OWNED_COLLECTION_STEPS = {
     "collect_group_nationality_counts",
     "collect_flight_preference",
     "collect_passport_attachment",
+    "collect_private_service_type",
+    "collect_private_destination",
+    "collect_private_dates",
+    "collect_private_party_size",
+    "collect_private_budget",
 }
 
 _ABUSIVE_OR_HOSTILE_RE = re.compile(
@@ -445,6 +458,16 @@ class ToolCallingSessionRuntime:
                 "boys_count": session.boys_count,
                 "girls_count": session.girls_count,
                 "family_units": session.family_units,
+                "private_trip_active": session.private_trip_active,
+                "private_service_type": session.private_service_type,
+                "private_destination": session.private_destination,
+                "private_start_date_pref": session.private_start_date_pref,
+                "private_end_date_pref": session.private_end_date_pref,
+                "private_dates_flexible": session.private_dates_flexible,
+                "private_party_size": session.private_party_size,
+                "private_budget_amount": session.private_budget_amount,
+                "private_budget_currency": session.private_budget_currency,
+                "private_trip_request_id": session.private_trip_request_id,
                 "group_nationality_type": session.group_nationality_type,
                 "group_nationality_counts": dict(session.group_nationality_counts or {}),
                 "flight_option": session.flight_option,
@@ -537,6 +560,16 @@ class ToolCallingSessionRuntime:
             "boys_count": session.boys_count,
             "girls_count": session.girls_count,
             "family_units": session.family_units,
+            "private_trip_active": session.private_trip_active,
+            "private_service_type": session.private_service_type,
+            "private_destination": session.private_destination,
+            "private_start_date_pref": session.private_start_date_pref,
+            "private_end_date_pref": session.private_end_date_pref,
+            "private_dates_flexible": session.private_dates_flexible,
+            "private_party_size": session.private_party_size,
+            "private_budget_amount": session.private_budget_amount,
+            "private_budget_currency": session.private_budget_currency,
+            "private_trip_request_id": session.private_trip_request_id,
             "group_nationality_type": session.group_nationality_type,
             "group_nationality_counts": dict(session.group_nationality_counts or {}),
             "currency": session.currency,
@@ -2155,6 +2188,16 @@ class ToolCallingSessionRuntime:
             if language.startswith("ar"):
                 return "تمام، عشان أكمل الحجز محتاج اختيار الغرفة فقط. اكتب اسم الغرفة أو رقمها من الاختيارات الظاهرة."
             return "I’m with you. To continue, I only need the room choice. Reply with the room name or its number."
+        if step == "collect_private_service_type":
+            return "What private service do you need? Reply 1 consultation, 2 bookings only, 3 full package, 4 design only, or 5 chaperone."
+        if step == "collect_private_destination":
+            return "What destination should the private trip cover?"
+        if step == "collect_private_dates":
+            return "What dates do you prefer? You can send YYYY-MM-DD, or say the dates are flexible."
+        if step == "collect_private_party_size":
+            return "How many travelers are in the private trip request?"
+        if step == "collect_private_budget":
+            return "What budget range should the team keep in mind? Please include EGP or USD."
         if step in ("collect_new_traveler_name", "collect_guardian_name"):
             if session._name_rejection_reason == "repeated_tokens":
                 if language.startswith("ar"):
@@ -2225,6 +2268,16 @@ class ToolCallingSessionRuntime:
             return any(token in normalized for token in ("passport", "جواز"))
         if required_step == "collect_payment_currency":
             return any(token in normalized for token in ("currency", "usd", "egp", "dollar", "pound", "عملة", "دولار", "جنيه"))
+        if required_step == "collect_private_service_type":
+            return any(token in normalized for token in ("consult", "booking", "package", "design", "chaperone", "private", "custom"))
+        if required_step == "collect_private_destination":
+            return any(token in normalized for token in ("destination", "place", "city", "country", "where", "to"))
+        if required_step == "collect_private_dates":
+            return any(token in normalized for token in ("date", "flexible", "when", "month", "day"))
+        if required_step == "collect_private_party_size":
+            return any(token in normalized for token in ("traveler", "people", "person", "party", "group", "boys", "girls"))
+        if required_step == "collect_private_budget":
+            return any(token in normalized for token in ("budget", "usd", "egp", "dollar", "pound", "currency"))
         # These steps were the ones the plan's Phase 4 flagged as still
         # falling through to the bare language-match check below -- same
         # gap as Phase 3B above, just not yet closed for these fields.
@@ -4028,6 +4081,8 @@ class ToolCallingSessionRuntime:
         collection_state = self._collection_state(session)
         people_counts = self._extract_mixed_people_counts(clean_text)
         candidate_room_requirements = hints.get("candidate_room_requirements")
+        if session.stage in {"group_nationality_type_required", "group_nationality_counts_required"}:
+            return False
         if (
             isinstance(candidate_room_requirements, dict)
             and candidate_room_requirements.get("requirements")
@@ -4594,6 +4649,7 @@ class ToolCallingSessionRuntime:
         if session.awaiting_trip_reselection and self._handle_pending_trip_reselection_answer(session, clean_text):
             return session
 
+        self._detect_private_trip_intent(session, clean_text)
         capture_stage = session.stage
         step_value_captured = self._apply_required_step_capture(session, clean_text)
         if step_value_captured:
@@ -4638,16 +4694,17 @@ class ToolCallingSessionRuntime:
         if not media_intent and self._handle_trip_details_request_if_ready(session, clean_text):
             agent_logger.info("Tool-calling session %s answered trip follow-up details from session CRM context", session.id)
             return session
-        if not media_intent and self._handle_trip_discovery_request_if_ready(session, clean_text):
+        if not media_intent and not session.private_trip_active and self._handle_trip_discovery_request_if_ready(session, clean_text):
             return session
-        if not media_intent and self._handle_public_trip_reference_if_present(session, clean_text):
+        if not media_intent and not session.private_trip_active and self._handle_public_trip_reference_if_present(session, clean_text):
             agent_logger.info("Tool-calling session %s resolved public trip reference from CRM", session.id)
             return session
-        if not media_intent and self._handle_post_selection_trip_browse_or_change(session, clean_text):
+        if not media_intent and not session.private_trip_active and self._handle_post_selection_trip_browse_or_change(session, clean_text):
             return session
         if preloaded_tool_event is None:
             preloaded_tool_event = self._run_identity_lookup_if_ready(session)
-        self._run_trip_reference_lookup_if_ready(session, clean_text)
+        if not session.private_trip_active:
+            self._run_trip_reference_lookup_if_ready(session, clean_text)
         agent_state = self._state_by_session.setdefault(session.id, AgentState(goal="help the traveler plan a trip"))
         agent_state.customer_intent = clean_text
         self._memory.update_short_term(
@@ -4680,6 +4737,35 @@ class ToolCallingSessionRuntime:
             workflow_decision = self._workflow_policy.evaluate(session_context)
             session_context["workflow_policy"] = workflow_decision.to_context()
             session.stage = workflow_decision.state
+
+        if workflow_decision.required_step == "create_private_trip_request":
+            if self._execute_private_trip_request(session, session_context):
+                request_id = session.private_trip_request_id
+                reply = (
+                    f"Private trip request {request_id} has been saved. "
+                    "The team will contact you within 24-48 hours to scope it and confirm next steps."
+                )
+                self._append_authoritative_reply(
+                    session,
+                    message_key="workflow.private_trip_request.created",
+                    base_text=reply,
+                )
+                session.stage = "post_booking_support"
+                session.tools_used = ["create_private_trip_request", "create_handoff"]
+                session.fallback_used = False
+                return session
+            else:
+                self._append_agent_reply(
+                    session,
+                    message_key="workflow.private_request_failed",
+                    base_text="I could not save the private trip request right now. I can connect you with the team to continue manually.",
+                    user_text=clean_text,
+                    required_action="Do not claim the private request was saved.",
+                    session_context=session_context,
+                )
+                session.tools_used = ["create_private_trip_request"]
+                session.fallback_used = False
+                return session
 
         if workflow_decision.handoff_required:
             if self._execute_policy_handoff(session, session_context, workflow_decision):
@@ -5735,6 +5821,8 @@ class ToolCallingSessionRuntime:
                     session.booking_status = str(session_update.get("booking_status") or session.booking_status or "")
                 if "handoff_state" in session_update:
                     session.handoff_state = str(session_update.get("handoff_state") or session.handoff_state or "")
+                if "private_trip_request_id" in session_update:
+                    session.private_trip_request_id = str(session_update.get("private_trip_request_id") or session.private_trip_request_id or "")
                 if "stage" in session_update:
                     session.stage = str(session_update.get("stage") or session.stage or "")
                 if "booking_result" in session_update and isinstance(session_update.get("booking_result"), dict):
@@ -6753,6 +6841,122 @@ class ToolCallingSessionRuntime:
                 return DESTINATION_TRIP_TYPE_ALIASES[phrase]
         return "", ""
 
+    @staticmethod
+    def _private_trip_intent(text: str) -> bool:
+        lowered = " ".join(str(text or "").casefold().split())
+        compact = re.sub(r"[^a-z0-9\u0600-\u06ff]+", "", lowered)
+        english = (
+            "private trip",
+            "custom trip",
+            "tailor made",
+            "tailor-made",
+            "bespoke trip",
+            "trip just for us",
+            "design a trip",
+            "private package",
+        )
+        arabic = (
+            "\u0631\u062d\u0644\u0629 \u062e\u0627\u0635\u0629",
+            "\u0631\u062d\u0644\u0647 \u062e\u0627\u0635\u0647",
+            "\u0628\u0631\u0646\u0627\u0645\u062c \u062e\u0627\u0635",
+            "\u0631\u062d\u0644\u0629 \u0645\u062e\u0635\u0635\u0629",
+            "\u0639\u0627\u064a\u0632 \u0631\u062d\u0644\u0629 \u0644\u064a\u0646\u0627",
+        )
+        return any(term in lowered for term in english) or any(term in lowered for term in arabic) or compact in {"privatetrip", "customtrip"}
+
+    def _detect_private_trip_intent(self, session: SessionState, text: str) -> None:
+        if session.private_trip_active or self._private_trip_intent(text):
+            session.private_trip_active = True
+            self._update_collection_state(session, private_trip_active=True)
+
+    @staticmethod
+    def _private_service_type_from_text(text: str, option_number: int = 0) -> str:
+        if option_number:
+            mapped = normalize_private_service_type(str(option_number))
+            if mapped:
+                return mapped
+        return normalize_private_service_type(text)
+
+    @staticmethod
+    def _private_dates_from_text(text: str) -> tuple[str, str, bool]:
+        normalized = str(text or "").translate(_DIGIT_TRANSLATION).strip()
+        lowered = normalized.casefold()
+        flexible = any(term in lowered for term in ("flexible", "any date", "dates flexible", "\u0645\u0631\u0646", "\u0627\u064a \u0645\u0639\u0627\u062f"))
+        matches = re.findall(r"\b(\d{4}-\d{1,2}-\d{1,2})\b", normalized)
+        if matches:
+            return matches[0], matches[1] if len(matches) > 1 else "", flexible
+        return "", "", flexible
+
+    @staticmethod
+    def _private_budget_from_text(text: str) -> tuple[float, str]:
+        normalized = str(text or "").translate(_DIGIT_TRANSLATION)
+        amount = 0.0
+        match = re.search(r"\b(\d+(?:[,\s]\d{3})*(?:\.\d+)?)\b", normalized)
+        if match:
+            try:
+                amount = float(match.group(1).replace(",", "").replace(" ", ""))
+            except ValueError:
+                amount = 0.0
+        currency = ""
+        lowered = normalized.casefold()
+        if any(token in lowered for token in ("usd", "dollar", "$", "\u062f\u0648\u0644\u0627\u0631")):
+            currency = "USD"
+        elif any(token in lowered for token in ("egp", "pound", "\u062c\u0646\u064a\u0647", "\u062c\u0646\u064a\u0629")):
+            currency = "EGP"
+        return amount, currency
+
+    def _execute_private_trip_request(self, session: SessionState, session_context: dict[str, Any]) -> bool:
+        linked_ids = self._linked_ids(session)
+        payload = {
+            "traveler_id": linked_ids["traveler_id"],
+            "lead_id": linked_ids["lead_id"],
+            "service_type": session.private_service_type,
+            "trip_scope": normalize_private_scope(session.trip_type) or session.trip_type,
+            "destination": session.private_destination,
+            "start_date_pref": session.private_start_date_pref,
+            "end_date_pref": session.private_end_date_pref,
+            "dates_flexible": bool(session.private_dates_flexible),
+            "party_size": int(session.private_party_size or session.group_size or 1),
+            "boys_count": int(session.boys_count or 0),
+            "girls_count": int(session.girls_count or 0),
+            "budget_amount": float(session.private_budget_amount or 0.0) or None,
+            "budget_currency": session.private_budget_currency or session.currency,
+            "notes": "Private/custom trip intake from WhatsApp agent.",
+        }
+        result = self._write_executor.execute(
+            action="create_private_trip_request",
+            payload=payload,
+            session_context=session_context,
+        )
+        request_id = str(result.get("result_id") or "").strip()
+        if not request_id or not write_result_allows_success(result, "private_trip_request"):
+            return False
+        session.private_trip_request_id = request_id
+        self._apply_result(session, {"write_results": [result], "tool_requests": []})
+        handoff_payload = {
+            "traveler_id": linked_ids["traveler_id"],
+            "lead_id": linked_ids["lead_id"],
+            "flow_key": "private_trip_request",
+            "reason_code": "private_trip_consultation",
+            "reason_text": "Private/custom trip request requires human consultation and pricing.",
+            "priority": "High",
+            "channel": "web",
+            "customer_name": session.customer_name,
+            "agent_summary": f"Private request {request_id} saved for {session.private_destination}.",
+            "customer_summary": session.messages[-1]["text"] if session.messages else "",
+            "notes": f"Private request id: {request_id}",
+            "metadata": {"private_trip_request_id": request_id, "destination": session.private_destination},
+            "update_lead": True,
+        }
+        handoff_result = self._write_executor.execute(
+            action="create_handoff",
+            payload=handoff_payload,
+            session_context={**session_context, "reason_code": "private_trip_consultation"},
+        )
+        if isinstance(handoff_result, dict) and str(handoff_result.get("result_id") or "").strip():
+            self._apply_result(session, {"write_results": [handoff_result], "tool_requests": []})
+        return True
+
     def _apply_required_step_capture(self, session: SessionState, text: str) -> bool:
         normalized_text = str(text or "").translate(_DIGIT_TRANSLATION).strip()
         option_match = re.fullmatch(r"([1-9])[\s.)_\-]*", normalized_text)
@@ -6770,6 +6974,59 @@ class ToolCallingSessionRuntime:
                 return True
             if option_number == 2 or compact in {"new", "newrequest", "startnew", "startnewrequest"}:
                 session.duplicate_lead_choice = "new"
+                return True
+            return False
+
+        if session.stage == "private_service_type_required":
+            service_type = self._private_service_type_from_text(normalized_text, option_number)
+            if service_type:
+                session.private_service_type = service_type
+                self._update_collection_state(session, private_service_type=True)
+                return True
+            return False
+
+        if session.stage == "private_destination_required":
+            destination = str(normalized_text or "").strip()
+            if destination and not self._is_exploratory_question(text):
+                session.private_destination = destination[:200]
+                self._update_collection_state(session, private_destination=True)
+                return True
+            return False
+
+        if session.stage == "private_dates_required":
+            start_date, end_date, flexible = self._private_dates_from_text(normalized_text)
+            if start_date or flexible:
+                session.private_start_date_pref = start_date
+                session.private_end_date_pref = end_date
+                session.private_dates_flexible = flexible
+                self._update_collection_state(session, private_dates=True)
+                return True
+            return False
+
+        if session.stage == "private_party_size_required":
+            people_counts = self._extract_mixed_people_counts(normalized_text)
+            if people_counts["boys"] and people_counts["girls"]:
+                session.boys_count = people_counts["boys"]
+                session.girls_count = people_counts["girls"]
+                session.private_party_size = people_counts["boys"] + people_counts["girls"]
+                session.group_size = session.private_party_size
+                self._update_collection_state(session, private_party_size=True, gender_counts=True, group_size=True)
+                return True
+            group_size = option_number or int(self._extract_hints(normalized_text, stage="group_size_required").get("candidate_group_size") or 0)
+            if group_size:
+                session.private_party_size = group_size
+                session.group_size = group_size
+                self._update_collection_state(session, private_party_size=True, group_size=True)
+                return True
+            return False
+
+        if session.stage == "private_budget_required":
+            amount, currency = self._private_budget_from_text(normalized_text)
+            if currency:
+                session.private_budget_amount = amount
+                session.private_budget_currency = currency
+                session.currency = currency
+                self._update_collection_state(session, private_budget=True, currency=True)
                 return True
             return False
 

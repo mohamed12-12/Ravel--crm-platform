@@ -24,6 +24,11 @@ from .field_mapping import (
 )
 from .phone_normalization import normalize_phone_input
 from .payment_rules import validate_payment_transition
+from .private_trips import (
+    consultation_due_from,
+    normalize_private_scope,
+    normalize_private_service_type,
+)
 from .revenue_rules import booking_revenue
 from .trip_program import build_trip_program
 from .trip_pricing import parse_room_prices
@@ -305,6 +310,23 @@ class UnifiedCRMService:
             f"handoff:{str(traveler_id_or_phone or '').strip()}:"
             f"{str(reason_code or 'manual_handoff').strip()}:"
             f"{str(session_id_or_open_lead_id or '').strip()}"
+        )
+
+    @staticmethod
+    def private_trip_request_idempotency_key(
+        *,
+        traveler_id: str = "",
+        lead_id: str = "",
+        service_type: str = "",
+        destination: str = "",
+        session_id: str = "",
+    ) -> str:
+        scope = str(traveler_id or lead_id or "").strip()
+        return (
+            f"private_trip:{scope}:"
+            f"{str(service_type or '').strip()}:"
+            f"{str(destination or '').strip().casefold()}:"
+            f"{str(session_id or '').strip()}"
         )
 
     @staticmethod
@@ -1542,6 +1564,151 @@ class UnifiedCRMService:
                 customer_confirmation_allowed=True,
                 safe_customer_message_key="handoff.already_recorded" if deduplicated else "handoff.created",
                 audit={"reason_code": reason_code, "lead_id": lead_id, "traveler_id": traveler_id},
+            ),
+        }
+
+    def create_private_trip_request(
+        self,
+        *,
+        traveler_id: str = "",
+        lead_id: str = "",
+        service_type: str,
+        trip_scope: str,
+        destination: str = "",
+        start_date_pref: str = "",
+        end_date_pref: str = "",
+        dates_flexible: bool | str = False,
+        party_size: int | str = 1,
+        boys_count: int | str = 0,
+        girls_count: int | str = 0,
+        budget_amount: float | str | None = None,
+        budget_currency: str = "",
+        notes: str = "",
+        created_by: int | None = None,
+        idempotency_key: str = "",
+        session_id: str = "",
+    ) -> dict[str, Any]:
+        self.ensure_operational_schema()
+        normalized_service = normalize_private_service_type(service_type)
+        if not normalized_service:
+            raise ValueError("Private request service type is required.")
+        normalized_scope = normalize_private_scope(trip_scope)
+        if not normalized_scope:
+            raise ValueError("Private request scope must be Local or International.")
+
+        def _date(value: str) -> str | None:
+            raw = str(value or "").strip()
+            if not raw:
+                return None
+            try:
+                return date.fromisoformat(raw[:10]).isoformat()
+            except ValueError:
+                return None
+
+        def _float(value: Any) -> float | None:
+            raw = str(value or "").strip()
+            if not raw:
+                return None
+            try:
+                return float(raw.replace(",", ""))
+            except (TypeError, ValueError):
+                return None
+
+        def _bool(value: Any) -> bool:
+            if isinstance(value, bool):
+                return value
+            return str(value or "").strip().lower() in {"1", "true", "yes", "y"}
+
+        now = _utc_now().replace(microsecond=0)
+        resolved_idempotency_key = str(idempotency_key or "").strip() or self.private_trip_request_idempotency_key(
+            traveler_id=traveler_id,
+            lead_id=lead_id,
+            service_type=normalized_service,
+            destination=destination,
+            session_id=session_id,
+        )
+        consultation_due = consultation_due_from(now).replace(tzinfo=None)
+        with self.connect() as connection:
+            existing = None
+            if resolved_idempotency_key:
+                existing = connection.execute(
+                    """
+                    SELECT *
+                    FROM private_trip_requests
+                    WHERE idempotency_key = ?
+                    LIMIT 1
+                    """,
+                    (resolved_idempotency_key,),
+                ).fetchone()
+            if existing:
+                request_id = str(existing["request_id"] or "")
+                contract = self.write_result_contract(
+                    status="reused",
+                    executed=False,
+                    reused=True,
+                    record_type="private_trip_request",
+                    record_id=request_id,
+                    idempotency_key=resolved_idempotency_key,
+                    customer_confirmation_allowed=True,
+                    safe_customer_message_key="private_trip_request.reused",
+                    audit={"session_id": session_id},
+                )
+                return {**dict(existing), "write_result_contract": contract}
+
+            request_id = self._next_prefixed_id(connection, "private_trip_requests", "request_id", "PRT-", 6)
+            connection.execute(
+                """
+                INSERT INTO private_trip_requests (
+                    request_id, traveler_id, lead_id, service_type, trip_scope, destination,
+                    start_date_pref, end_date_pref, dates_flexible, party_size, boys_count,
+                    girls_count, budget_amount, budget_currency, stage, stage_changed_at,
+                    consultation_due_at, notes, created_at, created_by, idempotency_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    request_id,
+                    traveler_id or None,
+                    lead_id or None,
+                    normalized_service,
+                    normalized_scope,
+                    str(destination or "").strip() or None,
+                    _date(start_date_pref),
+                    _date(end_date_pref),
+                    1 if _bool(dates_flexible) else 0,
+                    max(self._as_int(party_size, default=1) or 1, 1),
+                    max(self._as_int(boys_count, default=0) or 0, 0),
+                    max(self._as_int(girls_count, default=0) or 0, 0),
+                    _float(budget_amount),
+                    str(budget_currency or "").strip().upper() or None,
+                    "registered",
+                    now.isoformat(timespec="seconds"),
+                    consultation_due.isoformat(timespec="seconds"),
+                    str(notes or "").strip() or None,
+                    now.isoformat(timespec="seconds"),
+                    created_by,
+                    resolved_idempotency_key or None,
+                ),
+            )
+            connection.commit()
+        return {
+            "request_id": request_id,
+            "traveler_id": traveler_id,
+            "lead_id": lead_id,
+            "service_type": normalized_service,
+            "trip_scope": normalized_scope,
+            "destination": str(destination or "").strip(),
+            "stage": "registered",
+            "idempotency_key": resolved_idempotency_key,
+            "write_result_contract": self.write_result_contract(
+                status="created",
+                executed=True,
+                reused=False,
+                record_type="private_trip_request",
+                record_id=request_id,
+                idempotency_key=resolved_idempotency_key,
+                customer_confirmation_allowed=True,
+                safe_customer_message_key="private_trip_request.created",
+                audit={"session_id": session_id},
             ),
         }
 
@@ -3380,6 +3547,7 @@ class UnifiedCRMService:
                 self._ensure_booking_event_trail_table(connection)
                 self._ensure_booking_status_history_table(connection)
                 self._ensure_traveler_documents_table(connection)
+                self._ensure_private_trip_requests_table(connection)
                 self._ensure_sync_queue_table(connection)
                 self._migrate_travelers_passport_columns(connection)
                 self._migrate_trips_room_columns(connection)
@@ -3387,6 +3555,7 @@ class UnifiedCRMService:
                 self._migrate_lead_columns(connection)
                 self._migrate_idempotency_columns(connection)
                 self._migrate_interaction_message_key_unique_index(connection)
+                self._migrate_booking_transaction_private_columns(connection)
                 connection.commit()
             self._schema_ready_paths.add(db_key)
 
@@ -3411,6 +3580,46 @@ class UnifiedCRMService:
             )
             """
         )
+
+    @staticmethod
+    def _ensure_private_trip_requests_table(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS private_trip_requests (
+                request_id TEXT PRIMARY KEY,
+                traveler_id TEXT,
+                lead_id TEXT,
+                service_type TEXT NOT NULL,
+                trip_scope TEXT NOT NULL,
+                destination TEXT,
+                start_date_pref TEXT,
+                end_date_pref TEXT,
+                dates_flexible INTEGER NOT NULL DEFAULT 0,
+                party_size INTEGER NOT NULL DEFAULT 1,
+                boys_count INTEGER NOT NULL DEFAULT 0,
+                girls_count INTEGER NOT NULL DEFAULT 0,
+                budget_amount REAL,
+                budget_currency TEXT,
+                stage TEXT NOT NULL DEFAULT 'registered',
+                stage_changed_at TEXT NOT NULL,
+                assigned_to_user_id INTEGER,
+                consultation_due_at TEXT,
+                consultation_done_at TEXT,
+                design_due_at TEXT,
+                design_delivered_at TEXT,
+                deposit_amount REAL,
+                deposit_currency TEXT,
+                deposit_paid_at TEXT,
+                deposit_is_refundable INTEGER NOT NULL DEFAULT 0,
+                converted_booking_id TEXT,
+                lost_reason TEXT,
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                created_by INTEGER,
+                idempotency_key TEXT UNIQUE
+            )
+            """
+        )
         connection.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_handoff_queue_status_created
@@ -3429,6 +3638,20 @@ class UnifiedCRMService:
             ON handoff_queue (lead_id, status)
             """
         )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_private_trip_requests_stage ON private_trip_requests(stage)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_private_trip_requests_traveler ON private_trip_requests(traveler_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_private_trip_requests_lead ON private_trip_requests(lead_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_private_trip_requests_created ON private_trip_requests(created_at)")
+
+    @staticmethod
+    def _migrate_booking_transaction_private_columns(connection: sqlite3.Connection) -> None:
+        try:
+            rows = connection.execute("PRAGMA table_info(booking_transactions)").fetchall()
+        except Exception:
+            return
+        existing_cols = {row[1] for row in rows}
+        if existing_cols and "is_non_refundable" not in existing_cols:
+            connection.execute("ALTER TABLE booking_transactions ADD COLUMN is_non_refundable INTEGER NOT NULL DEFAULT 0")
 
     @staticmethod
     def _migrate_travelers_passport_columns(connection: sqlite3.Connection) -> None:
@@ -3491,6 +3714,7 @@ class UnifiedCRMService:
             ("inclusions", "TEXT"),
             ("exclusions", "TEXT"),
             ("room_prices_json", "TEXT"),
+            ("is_private", "INTEGER DEFAULT 0"),
         ]
         for col_name, col_type in room_columns:
             if col_name not in existing_cols:
@@ -3545,6 +3769,7 @@ class UnifiedCRMService:
             "draft_holds_girls_double",
             "draft_holds_boys_triple",
             "draft_holds_girls_triple",
+            "is_private",
         ]
         existing = self._table_columns(connection, "trips")
         return ", ".join([*base_columns, *[column for column in optional_columns if column in existing]])
@@ -4050,7 +4275,7 @@ class UnifiedCRMService:
         reason = str(reason_code or "").strip().lower()
         if reason == "blacklisted_customer":
             return "Critical"
-        if reason in {"duplicate_phone_match", "phone_name_conflict", "group_booking_quote", "customer_requested_human_agent"}:
+        if reason in {"duplicate_phone_match", "phone_name_conflict", "group_booking_quote", "private_trip_consultation", "customer_requested_human_agent"}:
             return "High"
         return "Medium"
 
@@ -4095,6 +4320,13 @@ class UnifiedCRMService:
             return (
                 f"Manual commercial review needed{detail}. "
                 "The request qualifies for a group booking quote and should be reviewed by an employee before confirmation."
+            )
+        if reason == "private_trip_consultation":
+            destination = str(metadata.get("destination") or "").strip()
+            detail = f" for {destination}" if destination else ""
+            return (
+                f"Private/custom trip consultation needed{detail}. "
+                "The customer wants a scoped private trip, so a human must qualify, design, and price it."
             )
         if reason == "customer_requested_human_agent":
             return (
@@ -4456,11 +4688,14 @@ class UnifiedCRMService:
             "inclusions": str(value("inclusions") or "").strip(),
             "exclusions": str(value("exclusions") or "").strip(),
             "sales_notes": str(value("sales_notes") or "").strip(),
+            "is_private": bool(self._as_int(value("is_private"), default=0) or 0),
         }
         result["program"] = build_trip_program(result)
         return result
 
     def _trip_is_candidate(self, trip: dict[str, Any], *, today: date) -> bool:
+        if bool(trip.get("is_private")):
+            return False
         status = (trip.get("sales_status") or "").strip().lower()
         if status in INACTIVE_TRIP_STATUSES:
             return False

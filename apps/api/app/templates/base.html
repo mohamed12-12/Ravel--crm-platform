@@ -818,6 +818,9 @@
             <a href="{{ url_for('trips.index') }}" class="nav-link {% if request.blueprint == 'trips' %}active{% endif %}">
                 <span class="nav-icon"></span> Trips
             </a>
+            <a href="{{ url_for('private_requests.index') }}" class="nav-link {% if request.blueprint == 'private_requests' %}active{% endif %}">
+                <span class="nav-icon"></span> Private Requests
+            </a>
             <a href="{{ url_for('handoffs.index') }}" class="nav-link {% if request.blueprint == 'handoffs' %}active{% endif %}">
                 <span class="nav-icon"></span> Handoff Queue
                 <span class="nav-badge" id="sidebar-handoff-badge" style="display:none">0</span>

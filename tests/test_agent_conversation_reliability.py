@@ -688,10 +688,8 @@ def test_mixed_traveler_group_does_not_collapse_to_boys_inventory(runtime: ToolC
 
     assert session.room_group == "mixed"
     assert session.group_size == 2
-    assert "separately for boys and girls" in reply
-    assert "1 double boys room and 1 double girls room" in reply
-    assert "Double boys" in reply
-    assert "Double girls" in reply
+    assert session.stage == "family_units_required"
+    assert "family" in reply.lower() or "couples" in reply.lower()
     assert not runtime._write_executor.execute.called
 
 
@@ -719,19 +717,35 @@ def test_plain_mixed_group_reply_uses_separated_room_inventory(
     reply = session.messages[-1]["text"]
 
     assert session.room_group == "mixed"
-    assert session.stage == "room_type_required"
+    assert session.stage == "gender_counts_required"
     assert not session.preview["collection_state"].get("group_size")
-    assert "separately for boys and girls" in reply
-    assert "Double boys" in reply
-    assert "Double girls" in reply
+    assert "boys" in reply.lower()
+    assert "girls" in reply.lower()
     assert not runtime._write_executor.execute.called
 
 
 def test_mixed_room_request_is_stored_structurally(runtime: ToolCallingSessionRuntime) -> None:
-    session = _selected_trip_session(runtime)
+    session = _selected_trip_session(runtime, {
+        "trip_id": "RT-LOC-MIXED-STRUCT",
+        "trip_name": "Mixed Structural Demo",
+        "type": "Local",
+        "trip_type": "local",
+        "start_date": "2026-08-25",
+        "end_date": "2026-08-30",
+        "available_single": 3,
+        "available_double": 4,
+        "boys_double": 3,
+        "girls_double": 3,
+        "boys_triple": 2,
+        "girls_triple": 2,
+    })
     session.room_group = "mixed"
+    session.boys_count = 2
+    session.girls_count = 2
+    session.group_size = 4
+    session.family_units = 0
     session.stage = "room_type_required"
-    session.preview["collection_state"].update({"room_group": True, "room_type": False})
+    session.preview["collection_state"].update({"room_group": True, "gender_counts": True, "family_units": True, "room_type": False})
 
     session = _send(runtime, "1 double boys room and 1 double girls room", session)
 
@@ -884,7 +898,7 @@ def test_model_context_converts_room_inventory_to_availability_status(runtime: T
 
 
 def test_without_flight_from_passport_step_clears_stale_passport_state(runtime: ToolCallingSessionRuntime) -> None:
-    trip = {**TRIPS[0], "passport_required_with_flight": True}
+    trip = {**TRIPS[0], "passport_required_with_flight": True, "available_double": 3, "girls_double": 3}
     session = _selected_trip_session(runtime, trip)
     session.stage = "awaiting_passport_upload"
     session.room_group = "girls"
@@ -1648,7 +1662,36 @@ def test_booking_confirmation_requested_handles_unclear_reply_without_model_fall
     session.room_group = "girls"
     session.room_type = "Double"
     session.group_size = 2
+    session.group_nationality_type = "single"
     session.flight_option = "Not Applicable"
+    session.currency = "EGP"
+    session.preview = {
+        "traveler": {"traveler_id": "TR100", "full_name": "Mona Ali", "status": "Active"},
+        "workflow": {
+            "identity_verified": True,
+            "verified_traveler": {"traveler_id": "TR100", "full_name": "Mona Ali", "status": "Active"},
+            "verified_status": "Active",
+        },
+        "collection_state": {
+            "trip_type": True,
+            "selected_trip": True,
+            "room_group": True,
+            "room_type": True,
+            "group_size": True,
+            "group_nationality_type": True,
+            "flight_option": True,
+            "currency": True,
+        },
+        "trip_reference": {
+            "trip_id": "RT-LOC-26-DEM",
+            "trip_name": "DEMOO3",
+            "type": "Local",
+            "trip_type": "local",
+            "available_double": 3,
+            "girls_double": 3,
+        },
+    }
+    session.preview["trip_result"] = {"open_trips": [session.preview["trip_reference"]], "date_tbd_trips": []}
     runtime._conversation_ai = RewritingAgent(rewrite_reply="this model path should not run")
 
     session = _send(runtime, "without flight", session)
@@ -1657,7 +1700,7 @@ def test_booking_confirmation_requested_handles_unclear_reply_without_model_fall
     assert session.booking_confirmation_requested is True
     assert not session.booking_confirmed
     assert not runtime._write_executor.execute.called
-    assert "yes" in session.messages[-1]["text"].lower()
+    assert "confirm creating the booking draft" in session.messages[-1]["text"].lower()
     assert "couldn't prepare" not in session.messages[-1]["text"].lower()
 
     session.stage = "collecting_context"
@@ -1671,7 +1714,7 @@ def test_booking_confirmation_requested_handles_unclear_reply_without_model_fall
 
     assert session.stage == "booking_confirmation_required"
     assert not session.booking_confirmed
-    assert "yes" in session.messages[-1]["text"].lower()
+    assert "confirm creating the booking draft" in session.messages[-1]["text"].lower()
 
 
 def test_exploratory_trip_type_question_does_not_corrupt_session(runtime: ToolCallingSessionRuntime) -> None:

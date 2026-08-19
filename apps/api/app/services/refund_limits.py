@@ -155,7 +155,7 @@ def resolve_amount_paid(
             from app.services.booking_ledger import has_ledger, ledger_totals
 
             if has_ledger(booking_id):
-                return ledger_totals(booking_id).total_paid, True
+                return ledger_totals(booking_id).refundable_paid, True
         except Exception:  # pragma: no cover - never let the ledger break a refund
             logger.warning("Could not read the payment ledger for %s", booking_id, exc_info=True)
 

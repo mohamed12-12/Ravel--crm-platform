@@ -20,7 +20,7 @@ from services.ai_agent.ai_agent_app.agent.write_response_gating import (
 )
 
 
-_SUCCESS_RECORD_TYPES = {"booking", "lead", "handoff"}
+_SUCCESS_RECORD_TYPES = {"booking", "lead", "handoff", "private_trip_request"}
 _RAW_JSON_KEY_RE = re.compile(
     r"\b(?:assistant_message|write_result_contract|write_result|tool_result|workflow_policy|session_context|response_contract)\b",
     re.IGNORECASE,
@@ -123,6 +123,8 @@ def _record_type_from_text(text: str, explicit_record_type: str = "") -> str:
         or "\u062a\u062d\u0648\u064a\u0644" in normalized
     ):
         return "handoff"
+    if "private trip" in normalized or "custom trip" in normalized or "private request" in normalized:
+        return "private_trip_request"
     if "lead" in normalized or "request" in normalized or "\u0637\u0644\u0628" in normalized:
         return "lead"
     return ""
@@ -139,7 +141,12 @@ def known_record_ids_from_context(session_context: dict[str, Any] | None) -> dic
 
     context = session_context if isinstance(session_context, dict) else {}
     known: dict[str, str] = {}
-    for record_type, key in (("lead", "lead_id"), ("booking", "booking_id"), ("handoff", "handoff_id")):
+    for record_type, key in (
+        ("lead", "lead_id"),
+        ("booking", "booking_id"),
+        ("handoff", "handoff_id"),
+        ("private_trip_request", "private_trip_request_id"),
+    ):
         record_id = str(context.get(key) or "").strip()
         if record_id:
             known[record_type] = record_id

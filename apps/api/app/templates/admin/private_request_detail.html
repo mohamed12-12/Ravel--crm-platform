@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}{{ item.request_id }} - Private Request{% endblock %}
+
+{% block content %}
+<style>
+    .detail-head { display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; margin-bottom:1rem; }
+    .detail-head h1 { margin:0 0 .35rem; font-size:1.55rem; }
+    .muted { color:var(--text-muted); }
+    .grid { display:grid; grid-template-columns:2fr 1fr; gap:1rem; align-items:start; }
+    .panel { background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:1rem; }
+    .facts { display:grid; grid-template-columns:repeat(2, minmax(160px, 1fr)); gap:.75rem; }
+    .fact span { display:block; color:var(--text-muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; margin-bottom:.2rem; }
+    .fact strong { font-size:.95rem; }
+    .stage-list { display:grid; gap:.45rem; margin-top:.75rem; }
+    .stage-row { display:flex; justify-content:space-between; gap:.5rem; align-items:center; padding:.55rem .65rem; border:1px solid var(--border); border-radius:6px; background:#101010; }
+    .stage-row.current { border-color:var(--border-act); }
+    .stage-row form { margin:0; }
+    button, .button { border:0; border-radius:6px; padding:.55rem .75rem; background:var(--accent); color:#06120f; font-weight:700; cursor:pointer; text-decoration:none; }
+    input, select, textarea { width:100%; background:#101010; color:var(--text-main); border:1px solid var(--border); border-radius:6px; padding:.55rem .65rem; }
+    label { display:grid; gap:.3rem; color:var(--text-dim); font-size:.78rem; }
+    .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
+    .form-grid .full { grid-column:1 / -1; }
+    @media (max-width: 900px) { .grid { grid-template-columns:1fr; } }
+</style>
+
+<div class="detail-head">
+    <div>
+        <h1>{{ item.request_id }} - {{ item.destination or 'Private request' }}</h1>
+        <div class="muted">{{ service_types.get(item.service_type, item.service_type) }} · {{ item.trip_scope }} · {{ item.stage.replace('_', ' ') }}</div>
+    </div>
+    <a class="button" href="{{ url_for('private_requests.index') }}">Back</a>
+</div>
+
+<div class="grid">
+    <section class="panel">
+        <h2>Request Brief</h2>
+        <div class="facts">
+            <div class="fact"><span>Traveler</span><strong>{{ item.traveler.full_name if item.traveler else item.traveler_id or 'Unlinked' }}</strong></div>
+            <div class="fact"><span>Lead</span><strong>{{ item.lead_id or 'None' }}</strong></div>
+            <div class="fact"><span>Dates</span><strong>{{ item.start_date_pref or 'TBD' }}{% if item.end_date_pref %} to {{ item.end_date_pref }}{% endif %}{% if item.dates_flexible %} · flexible{% endif %}</strong></div>
+            <div class="fact"><span>Party</span><strong>{{ item.party_size }}{% if item.boys_count or item.girls_count %} ({{ item.boys_count }} boys, {{ item.girls_count }} girls){% endif %}</strong></div>
+            <div class="fact"><span>Budget</span><strong>{{ item.budget_amount or 'TBD' }} {{ item.budget_currency or '' }}</strong></div>
+            <div class="fact"><span>Deposit</span><strong>{{ item.deposit_amount or 'None' }} {{ item.deposit_currency or '' }}{% if item.deposit_amount %} · non-refundable{% endif %}</strong></div>
+            <div class="fact"><span>Consultation Due</span><strong>{{ item.consultation_due_at or 'Not set' }}</strong></div>
+            <div class="fact"><span>Design Due</span><strong>{{ item.design_due_at or 'Not set' }}</strong></div>
+            <div class="fact"><span>Converted Booking</span><strong>{% if item.converted_booking_id %}<a href="{{ url_for('bookings.detail', booking_id=item.converted_booking_id) }}">{{ item.converted_booking_id }}</a>{% else %}Not converted{% endif %}</strong></div>
+            <div class="fact"><span>Lost Reason</span><strong>{{ item.lost_reason or 'None' }}</strong></div>
+        </div>
+        {% if item.notes %}
+        <p class="muted" style="margin-top:1rem">{{ item.notes }}</p>
+        {% endif %}
+    </section>
+
+    <aside class="panel">
+        <h2>Stage</h2>
+        <div class="stage-list">
+            {% for stage in stages %}
+            <div class="stage-row {% if stage == item.stage %}current{% endif %}">
+                <span>{{ stage.replace('_', ' ') }}</span>
+                {% if stage != item.stage and item.stage not in ('converted', 'lost') %}
+                <form method="post" action="{{ url_for('private_requests.update_stage', request_id=item.request_id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="stage" value="{{ stage }}">
+                    {% if stage == 'deposit_paid' %}
+                    <input type="hidden" name="deposit_amount" value="{{ item.deposit_amount or item.budget_amount or '' }}">
+                    <input type="hidden" name="deposit_currency" value="{{ item.deposit_currency or item.budget_currency or 'EGP' }}">
+                    {% endif %}
+                    <button type="submit">Move</button>
+                </form>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </aside>
+</div>
+
+{% if not item.converted_booking_id and item.stage not in ('lost',) %}
+<section class="panel" style="margin-top:1rem">
+    <h2>Convert To Booking</h2>
+    <form class="form-grid" method="post" action="{{ url_for('private_requests.convert', request_id=item.request_id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>Trip Name
+            <input name="trip_name" value="Private {{ item.destination }}">
+        </label>
+        <label>Arabic Trip Name
+            <input name="trip_name_ar" value="Private {{ item.destination }}">
+        </label>
+        <label>Room Type
+            <select name="room_type">
+                <option>Single</option>
+                <option selected>Double</option>
+                <option>Triple</option>
+            </select>
+        </label>
+        <label>Currency
+            <select name="currency">
+                {% for currency in currencies %}
+                <option value="{{ currency }}" {% if currency == (item.deposit_currency or item.budget_currency) %}selected{% endif %}>{{ currency }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Total Price
+            <input type="number" min="0" step="0.01" name="total_price" value="{{ item.budget_amount or '' }}">
+        </label>
+        <div class="full">
+            <button type="submit">Convert</button>
+        </div>
+    </form>
+</section>
+{% endif %}
+{% endblock %}

@@ -145,6 +145,66 @@ def _ensure_trip_room_columns(app: Flask) -> None:
                 connection.execute(text(f"ALTER TABLE trips ADD COLUMN {column_name} {column_type}"))
 
 
+def _ensure_private_trip_schema(app: Flask) -> None:
+    uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
+    if not uri.startswith("sqlite"):
+        return
+
+    with app.app_context():
+        inspector = db.inspect(db.engine)
+        table_names = set(inspector.get_table_names())
+        with db.engine.begin() as connection:
+            if "trips" in table_names:
+                trip_columns = {column["name"] for column in inspector.get_columns("trips")}
+                if "is_private" not in trip_columns:
+                    connection.execute(text("ALTER TABLE trips ADD COLUMN is_private BOOLEAN NOT NULL DEFAULT 0"))
+            if "booking_transactions" in table_names:
+                transaction_columns = {column["name"] for column in inspector.get_columns("booking_transactions")}
+                if "is_non_refundable" not in transaction_columns:
+                    connection.execute(text("ALTER TABLE booking_transactions ADD COLUMN is_non_refundable BOOLEAN NOT NULL DEFAULT 0"))
+            connection.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS private_trip_requests (
+                    request_id VARCHAR(20) PRIMARY KEY,
+                    traveler_id VARCHAR(20),
+                    lead_id VARCHAR(50),
+                    service_type VARCHAR(40) NOT NULL,
+                    trip_scope VARCHAR(20) NOT NULL,
+                    destination VARCHAR(200),
+                    start_date_pref DATE,
+                    end_date_pref DATE,
+                    dates_flexible BOOLEAN NOT NULL DEFAULT 0,
+                    party_size INTEGER NOT NULL DEFAULT 1,
+                    boys_count INTEGER NOT NULL DEFAULT 0,
+                    girls_count INTEGER NOT NULL DEFAULT 0,
+                    budget_amount FLOAT,
+                    budget_currency VARCHAR(3),
+                    stage VARCHAR(40) NOT NULL DEFAULT 'registered',
+                    stage_changed_at DATETIME NOT NULL,
+                    assigned_to_user_id INTEGER,
+                    consultation_due_at DATETIME,
+                    consultation_done_at DATETIME,
+                    design_due_at DATETIME,
+                    design_delivered_at DATETIME,
+                    deposit_amount FLOAT,
+                    deposit_currency VARCHAR(3),
+                    deposit_paid_at DATETIME,
+                    deposit_is_refundable BOOLEAN NOT NULL DEFAULT 0,
+                    converted_booking_id VARCHAR(50),
+                    lost_reason TEXT,
+                    notes TEXT,
+                    created_at DATETIME NOT NULL,
+                    created_by INTEGER,
+                    idempotency_key VARCHAR(200) UNIQUE
+                )
+                """
+            ))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_private_trip_requests_stage ON private_trip_requests(stage)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_private_trip_requests_traveler_id ON private_trip_requests(traveler_id)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_private_trip_requests_lead_id ON private_trip_requests(lead_id)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_private_trip_requests_created_at ON private_trip_requests(created_at)"))
+
+
 def _ensure_lead_and_booking_group_columns(app: Flask) -> None:
     uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
     if not uri.startswith("sqlite"):
@@ -704,6 +764,7 @@ def create_app(config_name=None):
     socketio.init_app(app)
     _ensure_travelers_passport_columns(app)
     _ensure_trip_room_columns(app)
+    _ensure_private_trip_schema(app)
     _ensure_lead_and_booking_group_columns(app)
     _ensure_employee_followup_columns(app)
     _ensure_relational_assignment_schema(app)
@@ -721,6 +782,7 @@ def create_app(config_name=None):
     from .routes.interactions import interactions_bp
     from .routes.handoffs import handoffs_bp
     from .routes.admin import admin_bp
+    from .routes.private_requests import private_requests_bp
     from .routes.copy import copy_bp
     from .routes.crm import crm_bp
     from .routes.api_docs import api_docs_bp
@@ -734,6 +796,7 @@ def create_app(config_name=None):
     app.register_blueprint(interactions_bp)
     app.register_blueprint(handoffs_bp)
     app.register_blueprint(admin_bp)
+    app.register_blueprint(private_requests_bp)
     app.register_blueprint(copy_bp)
     app.register_blueprint(crm_bp)
     app.register_blueprint(api_docs_bp)

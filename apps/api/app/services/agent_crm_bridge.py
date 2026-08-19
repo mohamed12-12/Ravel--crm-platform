@@ -9,9 +9,15 @@ from typing import Any
 from sqlalchemy import func, or_, text
 
 from app.extensions import db
-from app.models import BookingStatusHistory, HandoffQueue, Interaction, Lead, Traveler, TravelerDocument, Trip, TripBooking, TripMedia
+from app.models import BookingStatusHistory, HandoffQueue, Interaction, Lead, PrivateTripRequest, Traveler, TravelerDocument, Trip, TripBooking, TripMedia
 from app.services.assignments import auto_assign_booking, auto_assign_lead
 from app.services.booking_automation import auto_create_booking_from_lead
+from services.crm.system_services.private_trips import (
+    consultation_due_from,
+    normalize_private_scope,
+    normalize_private_service_type,
+    utc_now,
+)
 from services.crm.system_services.unified_service import UnifiedCRMService
 
 
@@ -52,6 +58,7 @@ class PostgresAgentBridgeService:
     booking_idempotency_key = UnifiedCRMService.booking_idempotency_key
     lead_idempotency_key = staticmethod(UnifiedCRMService.lead_idempotency_key)
     handoff_idempotency_key = staticmethod(UnifiedCRMService.handoff_idempotency_key)
+    private_trip_request_idempotency_key = staticmethod(UnifiedCRMService.private_trip_request_idempotency_key)
     _split_name = staticmethod(UnifiedCRMService._split_name)
 
     ACTIVE_HANDOFF_STATUSES = {"pending", "in progress", "open"}
@@ -103,6 +110,7 @@ class PostgresAgentBridgeService:
         today = today or date.today()
         query = Trip.query
         normalized_trip_type = self.normalize_trip_type(trip_type) or _trim(trip_type)
+        query = query.filter(or_(Trip.is_private.is_(False), Trip.is_private.is_(None)))
         if normalized_trip_type:
             query = query.filter(Trip.type == normalized_trip_type)
         trips = []
@@ -639,6 +647,96 @@ class PostgresAgentBridgeService:
         )
         return payload
 
+    def create_private_trip_request(
+        self,
+        *,
+        traveler_id: str = "",
+        lead_id: str = "",
+        service_type: str,
+        trip_scope: str,
+        destination: str = "",
+        start_date_pref: str = "",
+        end_date_pref: str = "",
+        dates_flexible: bool | str = False,
+        party_size: int | str = 1,
+        boys_count: int | str = 0,
+        girls_count: int | str = 0,
+        budget_amount: float | str | None = None,
+        budget_currency: str = "",
+        notes: str = "",
+        created_by: int | None = None,
+        idempotency_key: str = "",
+        session_id: str = "",
+    ) -> dict[str, Any]:
+        normalized_service = normalize_private_service_type(service_type)
+        if not normalized_service:
+            raise ValueError("Private request service type is required.")
+        normalized_scope = normalize_private_scope(trip_scope)
+        if not normalized_scope:
+            raise ValueError("Private request scope must be Local or International.")
+        resolved_idempotency_key = _trim(idempotency_key) or self.private_trip_request_idempotency_key(
+            traveler_id=traveler_id,
+            lead_id=lead_id,
+            service_type=normalized_service,
+            destination=destination,
+            session_id=session_id,
+        )
+        existing = self._private_trip_request_by_idempotency(resolved_idempotency_key)
+        if existing:
+            payload = existing.to_dict()
+            payload["write_result_contract"] = self.write_result_contract(
+                status="reused",
+                executed=False,
+                reused=True,
+                record_type="private_trip_request",
+                record_id=existing.request_id,
+                idempotency_key=resolved_idempotency_key,
+                customer_confirmation_allowed=True,
+                safe_customer_message_key="private_trip_request.reused",
+                audit={"session_id": session_id},
+            )
+            return payload
+        now = utc_now().replace(tzinfo=None)
+        request_id = self._next_prefixed_id("private_trip_requests", "request_id", "PRT-", 6)
+        request = PrivateTripRequest(
+            request_id=request_id,
+            traveler_id=traveler_id or None,
+            lead_id=lead_id or None,
+            service_type=normalized_service,
+            trip_scope=normalized_scope,
+            destination=_trim(destination) or None,
+            start_date_pref=self._parse_date(start_date_pref),
+            end_date_pref=self._parse_date(end_date_pref),
+            dates_flexible=self._as_bool(dates_flexible),
+            party_size=max(int(party_size or 1), 1),
+            boys_count=max(int(boys_count or 0), 0),
+            girls_count=max(int(girls_count or 0), 0),
+            budget_amount=self._as_float_or_none(budget_amount),
+            budget_currency=_trim(budget_currency).upper() or None,
+            stage="registered",
+            stage_changed_at=now,
+            consultation_due_at=consultation_due_from(now).replace(tzinfo=None),
+            notes=_trim(notes) or None,
+            created_at=now,
+            created_by=created_by,
+            idempotency_key=resolved_idempotency_key,
+        )
+        db.session.add(request)
+        db.session.commit()
+        payload = request.to_dict()
+        payload["write_result_contract"] = self.write_result_contract(
+            status="created",
+            executed=True,
+            reused=False,
+            record_type="private_trip_request",
+            record_id=request_id,
+            idempotency_key=resolved_idempotency_key,
+            customer_confirmation_allowed=True,
+            safe_customer_message_key="private_trip_request.created",
+            audit={"session_id": session_id},
+        )
+        return payload
+
     def create_booking_draft(
         self,
         *,
@@ -821,6 +919,11 @@ class PostgresAgentBridgeService:
             return None
         return TripBooking.query.filter(text("idempotency_key = :key")).params(key=key).first()
 
+    def _private_trip_request_by_idempotency(self, key: str) -> PrivateTripRequest | None:
+        if not key:
+            return None
+        return PrivateTripRequest.query.filter(text("idempotency_key = :key")).params(key=key).first()
+
     def _next_prefixed_id(self, table_name: str, column_name: str, prefix: str, width: int) -> str:
         # `ORDER BY <col> DESC LIMIT 1` sorts lexicographically (text), not
         # numerically -- a non-sequential ID in this column (e.g. a
@@ -849,6 +952,26 @@ class PostgresAgentBridgeService:
         if isinstance(value, bool):
             return value
         return _trim(value).lower() in {"1", "true", "yes", "y"}
+
+    @staticmethod
+    def _parse_date(value: Any) -> date | None:
+        raw = _trim(value)
+        if not raw:
+            return None
+        try:
+            return date.fromisoformat(raw[:10])
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _as_float_or_none(value: Any) -> float | None:
+        raw = _trim(value)
+        if not raw:
+            return None
+        try:
+            return float(raw.replace(",", ""))
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _normalize_room_requirements(

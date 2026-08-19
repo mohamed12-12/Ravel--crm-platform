@@ -122,6 +122,16 @@ class SessionState:
     boys_count: int = 0
     girls_count: int = 0
     family_units: int = 0
+    private_trip_active: bool = False
+    private_service_type: str = ""
+    private_destination: str = ""
+    private_start_date_pref: str = ""
+    private_end_date_pref: str = ""
+    private_dates_flexible: bool = False
+    private_party_size: int = 0
+    private_budget_amount: float = 0.0
+    private_budget_currency: str = ""
+    private_trip_request_id: str = ""
     group_nationality_type: str = ""
     group_nationality_counts: dict[str, int] = field(default_factory=dict)
     preferred_date: str = ""

@@ -774,7 +774,11 @@ class GeminiWriteToolExecutor:
             agent_summary=self._value(payload, session_context, "agent_summary") or "Created through controlled Gemini write tool.",
             customer_summary=self._value(payload, session_context, "customer_summary") or "",
             notes=self._value(payload, session_context, "notes") or "",
-            metadata={"validation": validation.to_dict(), "session_id": session_context.get("session_id", "")},
+            metadata={
+                **(payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}),
+                "validation": validation.to_dict(),
+                "session_id": session_context.get("session_id", ""),
+            },
             update_lead=self._as_bool(self._value(payload, session_context, "update_lead", "handoff_required"), default=True),
             deduplicate_open=self._as_bool(self._value(payload, session_context, "deduplicate_open"), default=True),
             session_id=str(session_context.get("session_id") or ""),
@@ -805,6 +809,53 @@ class GeminiWriteToolExecutor:
                     "handoff_required": True,
                     "handoff_reason": reason_code or reason_text,
                     "write_result": {"handoff_case": result},
+                },
+            },
+        }
+
+    def _execute_create_private_trip_request(
+        self,
+        payload: dict[str, Any],
+        session_context: dict[str, Any],
+        validation,
+    ) -> dict[str, Any]:
+        traveler = self._resolve_traveler(payload, session_context)
+        result = self.service.create_private_trip_request(
+            traveler_id=str((traveler or {}).get("traveler_id") or validation.traveler_id or self._value(payload, session_context, "traveler_id") or ""),
+            lead_id=self._value(payload, session_context, "lead_id") or "",
+            service_type=self._value(payload, session_context, "service_type") or "",
+            trip_scope=self._value(payload, session_context, "trip_scope", "trip_type") or "",
+            destination=self._value(payload, session_context, "destination", "private_destination") or "",
+            start_date_pref=self._value(payload, session_context, "start_date_pref", "private_start_date_pref") or "",
+            end_date_pref=self._value(payload, session_context, "end_date_pref", "private_end_date_pref") or "",
+            dates_flexible=self._value(payload, session_context, "dates_flexible", "private_dates_flexible") or False,
+            party_size=self._as_int(self._value(payload, session_context, "party_size", "private_party_size", "group_size"), default=1) or 1,
+            boys_count=self._as_int(self._value(payload, session_context, "boys_count"), default=0) or 0,
+            girls_count=self._as_int(self._value(payload, session_context, "girls_count"), default=0) or 0,
+            budget_amount=self._value(payload, session_context, "budget_amount", "private_budget_amount"),
+            budget_currency=self._value(payload, session_context, "budget_currency", "private_budget_currency", "currency") or "",
+            notes=self._value(payload, session_context, "notes", "agent_notes") or "Created from private trip intake.",
+            session_id=str(session_context.get("session_id") or ""),
+        )
+        request_id = str(result.get("request_id") or "").strip()
+        contract = result.get("write_result_contract") if isinstance(result.get("write_result_contract"), dict) else {}
+        return {
+            "result_id": request_id,
+            "assistant_message": self._private_trip_request_message(result, str(session_context.get("language") or "en")),
+            "private_trip_request": result,
+            "executed": bool(contract.get("executed", True)),
+            "write_result": {"private_trip_request": result},
+            "write_result_contract": contract,
+            "traveler": traveler,
+            "session_update": {
+                "private_trip_request_id": request_id,
+                "handoff_state": "handed_off",
+                "stage": "handed_off",
+                "final_result": {
+                    "traveler": traveler,
+                    "lead_id": self._value(payload, session_context, "lead_id") or "",
+                    "private_trip_request_id": request_id,
+                    "write_result": {"private_trip_request": result},
                 },
             },
         }
@@ -1520,6 +1571,20 @@ class GeminiWriteToolExecutor:
             proposed_reply=proposed,
             write_result=result,
             record_type="handoff",
+            language=language,
+        )
+
+    @staticmethod
+    def _private_trip_request_message(result: dict[str, Any], language: str = "en") -> str:
+        request_id = str(result.get("request_id") or "").strip()
+        proposed = (
+            f"Private trip request {request_id} saved. "
+            "The team will review it and contact the customer within 24-48 hours."
+        )
+        return gate_customer_write_reply(
+            proposed_reply=proposed,
+            write_result=result,
+            record_type="private_trip_request",
             language=language,
         )
 

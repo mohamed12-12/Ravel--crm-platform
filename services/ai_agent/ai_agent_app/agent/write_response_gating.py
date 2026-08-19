@@ -94,6 +94,9 @@ def _record_id_from(write_result: dict[str, Any] | None, record_type: str) -> st
     if record_type == "handoff":
         handoff = write_result.get("handoff_case") if isinstance(write_result.get("handoff_case"), dict) else {}
         return str(write_result.get("handoff_id") or handoff.get("handoff_id") or "").strip()
+    if record_type == "private_trip_request":
+        private_request = write_result.get("private_trip_request") if isinstance(write_result.get("private_trip_request"), dict) else {}
+        return str(write_result.get("request_id") or private_request.get("request_id") or "").strip()
     return ""
 
 
@@ -128,6 +131,8 @@ def customer_message_from_write_result(
     arabic = str(language or "").strip().lower().startswith("ar")
 
     if status in _IDEMPOTENT_REPLAY_STATUSES and record_id:
+        if record_type == "private_trip_request":
+            return f"Private trip request {record_id} is already recorded. The team will follow up within 24-48 hours."
         if record_type == "booking":
             return f"طلب الحجز {record_id} مسجل بالفعل، وسيتابعه فريق Ravel." if arabic else f"Booking request {record_id} is already recorded. The Ravel team will follow up."
         if record_type == "handoff":
@@ -136,6 +141,8 @@ def customer_message_from_write_result(
             return f"طلبك {record_id} مسجل بالفعل، وسنتابعه معك." if arabic else f"Your request {record_id} is already recorded. We will follow up with you."
 
     if normalized.outcome is WriteOutcome.SUCCESS and record_id:
+        if record_type == "private_trip_request":
+            return f"Private trip request {record_id} has been saved. The team will follow up within 24-48 hours."
         if record_type == "booking":
             return f"تم تسجيل طلب الحجز {record_id}. فريق Ravel سيتابع معك الخطوة التالية." if arabic else f"Booking request {record_id} has been created. The Ravel team will follow up with the next step."
         if record_type == "handoff":
@@ -146,6 +153,8 @@ def customer_message_from_write_result(
 
     if normalized.outcome is not WriteOutcome.SUCCESS or not record_id:
         error_code = str(contract.get("error_code") or "").strip().lower()
+        if record_type == "private_trip_request":
+            return "I could not save the private trip request right now. Please try again or contact us directly."
         if record_type == "booking" and error_code == "capacity_unavailable":
             return "لم أستطع إنشاء طلب الحجز لهذا الخيار لأن التوافر تغير. من فضلك اختر خيار غرفة آخر، أو يمكنني توصيلك بموظف بشري." if arabic else "I could not create the booking request for that option because availability changed. Please choose another room option, or I can connect you with a human agent."
         if record_type == "booking":
@@ -204,6 +213,8 @@ def detect_write_record_type(tool_name: str, write_result: dict[str, Any] | None
         return "booking"
     if "handoff" in name:
         return "handoff"
+    if "private_trip_request" in name or "private" in name:
+        return "private_trip_request"
     if "lead" in name:
         return "lead"
     if isinstance(write_result, dict):
@@ -213,4 +224,6 @@ def detect_write_record_type(tool_name: str, write_result: dict[str, Any] | None
             return "handoff"
         if "lead_update" in write_result or "lead_id" in write_result:
             return "lead"
+        if "private_trip_request" in write_result or "request_id" in write_result:
+            return "private_trip_request"
     return "write"

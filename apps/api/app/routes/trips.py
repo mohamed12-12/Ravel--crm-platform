@@ -90,7 +90,7 @@ def index():
     status = request.args.get('status', '')
     trip_type = request.args.get('type', '')
 
-    query = Trip.query
+    query = Trip.query.filter(or_(Trip.is_private.is_(False), Trip.is_private.is_(None)))
     if q:
         query = query.filter(or_(
             Trip.trip_name.ilike(f'%{q}%'),

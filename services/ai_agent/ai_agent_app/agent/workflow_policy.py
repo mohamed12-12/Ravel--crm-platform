@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from services.ai_agent.ai_agent_app.agent.date_parsing import compute_age
+from services.crm.system_services.private_trips import normalize_private_service_type
 from services.crm.system_services.trip_pricing import price_for_room_and_currency
 
 
@@ -18,7 +19,7 @@ ARCHIVE_LIKE_STATUSES = {"inactive", "archived", "blacklisted", "blacklist", "bl
 ACTIVE_LIKE_STATUSES = {"", "active", "live", "repeat", "vip"}
 ROOM_OCCUPANCY = {"single": 1, "double": 2, "triple": 3}
 IDENTITY_TOOLS = {"find_traveler_by_phone"}
-WRITE_TOOLS = {"create_lead", "update_lead_stage", "create_booking_draft", "create_handoff"}
+WRITE_TOOLS = {"create_lead", "update_lead_stage", "create_booking_draft", "create_handoff", "create_private_trip_request"}
 LEAD_SAVE_TOOLS = {"create_lead"}
 MEDIA_TOOLS = {"get_trip_media"}
 VERIFIED_TRAVELER_TOOLS = {
@@ -267,6 +268,99 @@ class ConversationWorkflowPolicy:
         )
         if guardian_decision is not None:
             return guardian_decision
+
+        private_active = bool(session_context.get("private_trip_active"))
+        if private_active:
+            if trip_type not in {"local", "international"}:
+                return WorkflowDecision(
+                    state="trip_type_required",
+                    customer_status="Ready",
+                    allowed_tools=PRE_TRIP_SEARCH_TOOLS,
+                    required_step="collect_trip_type",
+                    customer_message_key="trip_type_required",
+                    assistant_message=(
+                        "Is this private trip local inside Egypt or international?\n\n1. Local trip\n2. International trip"
+                    ),
+                    **common,
+                )
+            private_service_type = normalize_private_service_type(session_context.get("private_service_type"))
+            if not private_service_type:
+                return WorkflowDecision(
+                    state="private_service_type_required",
+                    customer_status="Waiting for customer response",
+                    allowed_tools=PRE_TRIP_SEARCH_TOOLS,
+                    required_step="collect_private_service_type",
+                    customer_message_key="private_service_type_required",
+                    assistant_message=(
+                        "What kind of private service do you need?\n\n"
+                        "1. Consultation\n2. Bookings only\n3. Full package\n4. Design only\n5. Chaperone"
+                    ),
+                    **common,
+                )
+            if not str(session_context.get("private_destination") or "").strip():
+                return WorkflowDecision(
+                    state="private_destination_required",
+                    customer_status="Waiting for customer response",
+                    allowed_tools=PRE_TRIP_SEARCH_TOOLS,
+                    required_step="collect_private_destination",
+                    customer_message_key="private_destination_required",
+                    assistant_message="What destination should the private trip cover?",
+                    **common,
+                )
+            if not (
+                session_context.get("private_dates_flexible")
+                or str(session_context.get("private_start_date_pref") or "").strip()
+            ):
+                return WorkflowDecision(
+                    state="private_dates_required",
+                    customer_status="Waiting for customer response",
+                    allowed_tools=PRE_TRIP_SEARCH_TOOLS,
+                    required_step="collect_private_dates",
+                    customer_message_key="private_dates_required",
+                    assistant_message="What dates do you prefer? You can also say the dates are flexible.",
+                    **common,
+                )
+            if self._as_int(session_context.get("private_party_size")) <= 0:
+                return WorkflowDecision(
+                    state="private_party_size_required",
+                    customer_status="Waiting for customer response",
+                    allowed_tools=PRE_TRIP_SEARCH_TOOLS,
+                    required_step="collect_private_party_size",
+                    customer_message_key="private_party_size_required",
+                    assistant_message="How many travelers are in the private trip request?",
+                    **common,
+                )
+            if not str(session_context.get("private_budget_currency") or "").strip():
+                return WorkflowDecision(
+                    state="private_budget_required",
+                    customer_status="Waiting for customer response",
+                    allowed_tools=PRE_TRIP_SEARCH_TOOLS,
+                    required_step="collect_private_budget",
+                    customer_message_key="private_budget_required",
+                    assistant_message="What budget range should the team keep in mind? Please include EGP or USD.",
+                    **common,
+                )
+            if not str(session_context.get("private_trip_request_id") or "").strip():
+                return WorkflowDecision(
+                    state="private_request_ready",
+                    customer_status="Ready",
+                    allowed_tools=PRE_TRIP_SEARCH_TOOLS,
+                    required_step="create_private_trip_request",
+                    customer_message_key="private_request_ready",
+                    assistant_message="I will save this private trip request for the team now.",
+                    **common,
+                )
+            return WorkflowDecision(
+                state="human_handoff_required",
+                customer_status="Human review required",
+                allowed_tools=PRE_TRIP_SEARCH_TOOLS,
+                required_step="human_review",
+                customer_message_key="private_trip_consultation",
+                assistant_message="Your private trip request is saved. The team will contact you within 24-48 hours.",
+                handoff_required=True,
+                reason="private_trip_consultation",
+                **common,
+            )
 
         if trip_type not in {"local", "international"}:
             return WorkflowDecision(

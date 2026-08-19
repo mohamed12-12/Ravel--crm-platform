@@ -103,7 +103,7 @@ class PassportAttachmentTests(unittest.TestCase):
         os.environ.update(self.original_env)
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    def test_passport_fields_save_on_traveler_edit(self) -> None:
+    def test_passport_scalar_fields_do_not_save_on_traveler_edit(self) -> None:
         client, app, db_path = _make_app(self.tmpdir)
         response = client.put(
             '/travelers/TR900',
@@ -118,8 +118,8 @@ class PassportAttachmentTests(unittest.TestCase):
         with sqlite3.connect(db_path) as conn:
             row = conn.execute("SELECT passport_name, passport_number, passport_expiry FROM travelers WHERE traveler_id = ?", ('TR900',)).fetchone()
             self.assertEqual(row[0], 'Passport Traveler')
-            self.assertEqual(row[1], 'A1234567')
-            self.assertEqual(row[2], '2030-05-01')
+            self.assertIsNone(row[1])
+            self.assertIsNone(row[2])
 
     def test_upload_accepts_supported_types_and_links_metadata(self) -> None:
         client, app, db_path = _make_app(self.tmpdir)

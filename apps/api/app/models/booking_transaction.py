@@ -51,6 +51,7 @@ SOURCE_CORRECTION = "correction"
 SOURCE_MIGRATION_WORKBOOK = "migration_workbook"
 SOURCE_MIGRATION_LEGACY_REFUND = "migration_legacy_refund"
 SOURCE_MIGRATION_STATUS_INFERRED = "migration_status_inferred"
+SOURCE_PRIVATE_TRIP_DEPOSIT = "private_trip_deposit"
 
 # 'exact' means the date is the real one. 'unknown' means the amount is
 # trustworthy but the date is a placeholder -- true of every migrated refund,
@@ -81,6 +82,7 @@ class BookingTransaction(db.Model):
 
     source = db.Column(db.String(32), nullable=False, default=SOURCE_CRM_UI)
     is_inferred = db.Column(db.Boolean, nullable=False, default=False)
+    is_non_refundable = db.Column(db.Boolean, nullable=False, default=False)
     reverses_id = db.Column(db.Integer, db.ForeignKey("booking_transactions.transaction_id"), index=True)
 
     idempotency_key = db.Column(db.String(200), unique=True, index=True)
@@ -145,6 +147,7 @@ class BookingTransaction(db.Model):
             "notes": self.notes,
             "source": self.source,
             "is_inferred": bool(self.is_inferred),
+            "is_non_refundable": bool(self.is_non_refundable),
             "reverses_id": self.reverses_id,
             "created_by_user_id": self.created_by_user_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,

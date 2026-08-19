@@ -272,7 +272,7 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         body = detail_response.get_data(as_text=True)
         self.assertIn("LD20001", body)
         self.assertIn("B20001", body)
-        self.assertIn("INT20001", body)
+        self.assertIn("EV20001", body)
         self.assertIn("Needs manager review", body)
         # Lifetime revenue is aggregated per actual booking currency
         # (_build_revenue_summary_from_totals) rather than converted from USD at

@@ -3267,9 +3267,10 @@ def test_multi_turn_conversation_with_interleaved_side_question_reaches_currency
     assert session.room_type == "Single"
     assert session.group_size == 2
     assert session.flight_option == "Without Flight"
-    assert session.passport_number == "A1234567"
-    assert session.passport_expiry == "2032-06-01"
-    assert session.passport_nationality == "Egyptian"
+    assert session.passport_attachment_ref == "passport-scan.pdf"
+    assert session.passport_number == ""
+    assert session.passport_expiry == ""
+    assert session.passport_nationality == ""
     assert session.currency == "EGP"
 
 

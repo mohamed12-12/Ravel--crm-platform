@@ -45,12 +45,17 @@ class LedgerTotals:
 
     currency: str
     total_paid: float
+    non_refundable_paid: float
     total_refunded: float
     entry_count: int
 
     @property
+    def refundable_paid(self) -> float:
+        return max(0.0, self.total_paid - self.non_refundable_paid)
+
+    @property
     def remaining_refundable(self) -> float:
-        return max(0.0, self.total_paid - self.total_refunded)
+        return max(0.0, self.refundable_paid - self.total_refunded)
 
     @property
     def has_entries(self) -> bool:
@@ -88,6 +93,7 @@ def live_transactions_query(booking_id: str):
 def ledger_totals(booking_id: str, currency: str = "") -> LedgerTotals:
     """Sum a booking's standing transactions."""
     paid = 0.0
+    non_refundable_paid = 0.0
     refunded = 0.0
     count = 0
     resolved_currency = str(currency or "").strip().upper()
@@ -100,11 +106,14 @@ def ledger_totals(booking_id: str, currency: str = "") -> LedgerTotals:
             resolved_currency = str(entry.currency or "").strip().upper()
         if entry.entry_type == ENTRY_PAYMENT:
             paid += amount
+            if bool(getattr(entry, "is_non_refundable", False)):
+                non_refundable_paid += amount
         elif entry.entry_type == ENTRY_REFUND:
             refunded += amount
     return LedgerTotals(
         currency=resolved_currency,
         total_paid=_round_money(paid),
+        non_refundable_paid=_round_money(non_refundable_paid),
         total_refunded=_round_money(refunded),
         entry_count=count,
     )

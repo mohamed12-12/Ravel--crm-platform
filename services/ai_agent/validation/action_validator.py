@@ -576,6 +576,7 @@ class ActionValidator:
             "duplicate_phone_match",
             "unsupported_request",
             "policy_review",
+            "private_trip_consultation",
         }
         if (
             controlled_reason in controlled_review_reasons
@@ -601,6 +602,39 @@ class ActionValidator:
             action="create_handoff",
             decision=REJECTED,
             reasons=["No handoff trigger was identified for this request."],
+            session_id=session_id,
+        )
+
+    def _validate_create_private_trip_request(self, payload: dict[str, Any], session_context: dict[str, Any]) -> ValidationResult:
+        traveler, _resolution = self._resolve_traveler(payload, session_context)
+        session_id = str(session_context.get("session_id") or "")
+        missing: list[str] = []
+        if not traveler and not self._value(payload, session_context, "lead_id"):
+            missing.append("traveler_id_or_lead_id")
+        for field in ("service_type", "trip_scope", "destination"):
+            if not self._value(payload, session_context, field):
+                missing.append(field)
+        party_size = self._as_int(self._value(payload, session_context, "party_size", "group_size"))
+        if party_size is None or party_size < 1:
+            missing.append("party_size")
+        budget_amount = self._as_float(self._value(payload, session_context, "budget_amount"))
+        budget_currency = str(self._value(payload, session_context, "budget_currency", "currency") or "").strip().upper()
+        if budget_amount is not None and budget_currency not in {"EGP", "USD"}:
+            missing.append("budget_currency")
+        if missing:
+            return ValidationResult(
+                action="create_private_trip_request",
+                decision=NEED_MORE_INFORMATION,
+                missing_information=missing,
+                reasons=["Private trip requests need the service, scope, destination, party size, and a linked customer record."],
+                traveler_id=str((traveler or {}).get("traveler_id") or ""),
+                session_id=session_id,
+            )
+        return ValidationResult(
+            action="create_private_trip_request",
+            decision=APPROVED,
+            warnings=["Validation approved; execution must still pass through the controlled write tool."],
+            traveler_id=str((traveler or {}).get("traveler_id") or self._value(payload, session_context, "traveler_id") or ""),
             session_id=session_id,
         )
 

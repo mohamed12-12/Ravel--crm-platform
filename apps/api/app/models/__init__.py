@@ -11,5 +11,6 @@ from .interaction import Interaction
 from .booking_event import BookingEventTrail
 from .booking_transaction import BookingTransaction
 from .handoff import HandoffQueue
+from .private_trip_request import PrivateTripRequest
 from .copy_library import DMCopyLibrary, LanguageTemplate
 from .user import User
