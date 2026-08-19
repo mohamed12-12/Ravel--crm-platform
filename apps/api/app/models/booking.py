@@ -29,6 +29,9 @@ class TripBooking(db.Model):
     date_option = db.Column(db.String(50))
     currency = db.Column(db.String(20))
     group_size = db.Column(db.Integer, default=1)
+    boys_count = db.Column(db.Integer, default=0)
+    girls_count = db.Column(db.Integer, default=0)
+    family_units = db.Column(db.Integer, default=0)
     
     # Status/Audit
     booking_status = db.Column(db.String(50)) # Draft / Confirmed / Cancelled
@@ -139,6 +142,9 @@ class TripBooking(db.Model):
             date_option=clean(row.get("Date Option")),
             currency=clean(row.get("Currency")),
             group_size=int(clean(row.get("Group Size")) or 1),
+            boys_count=int(clean(row.get("Boys Count")) or 0),
+            girls_count=int(clean(row.get("Girls Count")) or 0),
+            family_units=int(clean(row.get("Family Units")) or 0),
             booking_status=clean(row.get("Booking Status")),
             draft_created_at=to_datetime(row.get("Draft Created At")) or _utc_now(),
             booking_source=clean(row.get("Booking Source")),
@@ -179,6 +185,9 @@ class TripBooking(db.Model):
             "date_option": self.date_option,
             "currency": self.currency,
             "group_size": self.group_size or 1,
+            "boys_count": self.boys_count or 0,
+            "girls_count": self.girls_count or 0,
+            "family_units": self.family_units or 0,
             "booking_status": self.booking_status,
             "draft_created_at": self.draft_created_at.isoformat() if self.draft_created_at else None,
             "booking_source": self.booking_source,

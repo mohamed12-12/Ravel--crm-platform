@@ -370,6 +370,13 @@ class DurableSessionStore:
             session.room_requirements = {}
         if not isinstance(session.group_nationality_counts, dict):
             session.group_nationality_counts = {}
+        for attr in ("group_size", "boys_count", "girls_count", "family_units"):
+            try:
+                setattr(session, attr, int(getattr(session, attr) or 0))
+            except (TypeError, ValueError):
+                setattr(session, attr, 0)
+        if session.group_size < 1:
+            session.group_size = 1
         return session
 
     @staticmethod

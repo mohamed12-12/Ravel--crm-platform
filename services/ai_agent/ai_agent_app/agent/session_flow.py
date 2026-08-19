@@ -119,6 +119,9 @@ class SessionState:
     room_group: str = ""
     room_requirements: dict[str, Any] = field(default_factory=dict)
     group_size: int = 1
+    boys_count: int = 0
+    girls_count: int = 0
+    family_units: int = 0
     group_nationality_type: str = ""
     group_nationality_counts: dict[str, int] = field(default_factory=dict)
     preferred_date: str = ""
@@ -1013,10 +1016,16 @@ class SessionFlowManager:
                 passport_required=passport_required,
                 passport_status=passport_status,
                 group_size=session.group_size,
+                boys_count=session.boys_count,
+                girls_count=session.girls_count,
+                family_units=session.family_units,
             )
             booking["room_group"] = session.room_group
             booking["room_choice_label"] = room_choice_label
             booking["group_size"] = session.group_size
+            booking["boys_count"] = session.boys_count
+            booking["girls_count"] = session.girls_count
+            booking["family_units"] = session.family_units
             session.booking_result = booking
             session.booking_status = str(booking.get("booking_status") or "Draft")
             session.handoff_state = "completed"

@@ -660,6 +660,9 @@ class PostgresAgentBridgeService:
         passport_required: bool = False,
         passport_status: str = "",
         group_size: int | str = 1,
+        boys_count: int | str = 0,
+        girls_count: int | str = 0,
+        family_units: int | str = 0,
         session_id: str = "",
         idempotency_key: str = "",
         require_explicit_confirmation: bool = False,
@@ -710,7 +713,7 @@ class PostgresAgentBridgeService:
         )
         if duplicate:
             return self._booking_result(duplicate, "duplicate", False, True, resolved_idempotency_key)
-        self._assert_room_capacity(trip, room_type)
+        self._assert_room_capacity(trip, normalized_requirements)
         booking_id = self._next_prefixed_id("trip_bookings", "booking_id", "BK", 6)
         booking = TripBooking(
             booking_id=booking_id,
@@ -727,6 +730,9 @@ class PostgresAgentBridgeService:
             date_option=date_option or None,
             currency=currency or None,
             group_size=int(group_size or 1),
+            boys_count=int(boys_count or 0),
+            girls_count=int(girls_count or 0),
+            family_units=int(family_units or 0),
             booking_status="Draft",
             booking_source=source or channel or "Agent",
             lead_id=lead_id or None,
@@ -737,7 +743,7 @@ class PostgresAgentBridgeService:
         )
         setattr(booking, "idempotency_key", resolved_idempotency_key)
         db.session.add(booking)
-        self._apply_capacity_hold(trip, room_type)
+        self._apply_capacity_hold(trip, normalized_requirements)
         traveler.last_booking_id = booking_id
         if lead_id:
             lead = db.session.get(Lead, lead_id)
@@ -850,41 +856,109 @@ class PostgresAgentBridgeService:
         room_type: str,
         room_group: str,
     ) -> list[dict[str, Any]]:
+        def normalize_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            normalized: list[dict[str, Any]] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                item_room_type = _trim(item.get("room_type") or room_type).title()
+                group = _trim(item.get("room_group") or item.get("group")).lower()
+                try:
+                    rooms = int(item.get("rooms") or item.get("count") or 0)
+                except (TypeError, ValueError):
+                    rooms = 0
+                if item_room_type in {"Single", "Double", "Triple"} and group in {"", "boys", "girls", "family"} and rooms > 0:
+                    normalized.append({"room_type": item_room_type, "room_group": group, "rooms": rooms})
+            return normalized
+
         if isinstance(room_requirements, list):
-            return room_requirements
+            normalized = normalize_items(room_requirements)
+            if normalized:
+                return normalized
         if isinstance(room_requirements, dict):
-            return [room_requirements]
+            raw_items = room_requirements.get("requirements") or room_requirements.get("rooms")
+            if isinstance(raw_items, list):
+                normalized = normalize_items(raw_items)
+                if normalized:
+                    return normalized
+            normalized = normalize_items([room_requirements])
+            if normalized:
+                return normalized
         if isinstance(room_requirements, str) and room_requirements.strip():
             try:
                 parsed = json.loads(room_requirements)
                 if isinstance(parsed, list):
-                    return parsed
+                    normalized = normalize_items(parsed)
+                    if normalized:
+                        return normalized
                 if isinstance(parsed, dict):
-                    return [parsed]
+                    raw_items = parsed.get("requirements") or parsed.get("rooms")
+                    if isinstance(raw_items, list):
+                        normalized = normalize_items(raw_items)
+                        if normalized:
+                            return normalized
+                    normalized = normalize_items([parsed])
+                    if normalized:
+                        return normalized
             except json.JSONDecodeError:
                 pass
-        return [{"room_type": room_type, "room_group": room_group or ""}]
+        fallback_room_type = _trim(room_type).title()
+        fallback_group = _trim(room_group).lower()
+        return [{"room_type": fallback_room_type, "room_group": fallback_group if fallback_group in {"boys", "girls", "family"} else "", "rooms": 1}]
 
     @staticmethod
-    def _assert_room_capacity(trip: Trip, room_type: str) -> None:
-        mapping = {
+    def _assert_room_capacity(trip: Trip, requirements: list[dict[str, Any]]) -> None:
+        aggregate_remaining = {
             "single": int(trip.single_remaining or 0) - int(trip.draft_holds_single or 0),
             "double": int(trip.double_remaining or 0) - int(trip.draft_holds_double or 0),
             "triple": int(trip.triple_remaining or 0) - int(trip.draft_holds_triple or 0),
         }
-        available = mapping.get(_trim(room_type).lower())
-        if available is not None and available <= 0:
-            raise ValueError("Trip capacity unavailable.")
+        requested_by_type: dict[str, int] = {}
+        for item in requirements:
+            room_type = _trim(item.get("room_type")).lower()
+            rooms = int(item.get("rooms") or 0)
+            requested_by_type[room_type] = requested_by_type.get(room_type, 0) + rooms
+        for room_type, requested in requested_by_type.items():
+            if requested > aggregate_remaining.get(room_type, 0):
+                raise ValueError("Trip capacity unavailable.")
+
+        gender_capacity = {
+            ("boys", "double"): int(trip.boys_double or 0) - int(trip.draft_holds_boys_double or 0),
+            ("girls", "double"): int(trip.girls_double or 0) - int(trip.draft_holds_girls_double or 0),
+            ("boys", "triple"): int(trip.boys_triple or 0) - int(trip.draft_holds_boys_triple or 0),
+            ("girls", "triple"): int(trip.girls_triple or 0) - int(trip.draft_holds_girls_triple or 0),
+        }
+        for item in requirements:
+            room_type = _trim(item.get("room_type")).lower()
+            group = _trim(item.get("room_group")).lower()
+            if room_type not in {"double", "triple"} or group not in {"boys", "girls"}:
+                continue
+            if not (int(getattr(trip, f"boys_{room_type}") or 0) or int(getattr(trip, f"girls_{room_type}") or 0)):
+                continue
+            rooms = int(item.get("rooms") or 0)
+            if rooms > gender_capacity.get((group, room_type), 0):
+                raise ValueError(f"{group.title()} {room_type} rooms are unavailable.")
 
     @staticmethod
-    def _apply_capacity_hold(trip: Trip, room_type: str) -> None:
-        key = _trim(room_type).lower()
-        if key == "single":
-            trip.draft_holds_single = int(trip.draft_holds_single or 0) + 1
-        elif key == "double":
-            trip.draft_holds_double = int(trip.draft_holds_double or 0) + 1
-        elif key == "triple":
-            trip.draft_holds_triple = int(trip.draft_holds_triple or 0) + 1
+    def _apply_capacity_hold(trip: Trip, requirements: list[dict[str, Any]]) -> None:
+        for item in requirements:
+            key = _trim(item.get("room_type")).lower()
+            group = _trim(item.get("room_group")).lower()
+            rooms = int(item.get("rooms") or 0)
+            if key == "single":
+                trip.draft_holds_single = int(trip.draft_holds_single or 0) + rooms
+            elif key == "double":
+                trip.draft_holds_double = int(trip.draft_holds_double or 0) + rooms
+                if group == "boys":
+                    trip.draft_holds_boys_double = int(trip.draft_holds_boys_double or 0) + rooms
+                elif group == "girls":
+                    trip.draft_holds_girls_double = int(trip.draft_holds_girls_double or 0) + rooms
+            elif key == "triple":
+                trip.draft_holds_triple = int(trip.draft_holds_triple or 0) + rooms
+                if group == "boys":
+                    trip.draft_holds_boys_triple = int(trip.draft_holds_boys_triple or 0) + rooms
+                elif group == "girls":
+                    trip.draft_holds_girls_triple = int(trip.draft_holds_girls_triple or 0) + rooms
 
     @staticmethod
     def _handoff_notes(

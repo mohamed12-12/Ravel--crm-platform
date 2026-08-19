@@ -1803,6 +1803,9 @@ class UnifiedCRMService:
         passport_required: bool = False,
         passport_status: str = "",
         group_size: int | str = 1,
+        boys_count: int | str = 0,
+        girls_count: int | str = 0,
+        family_units: int | str = 0,
         session_id: str = "",
         idempotency_key: str = "",
         require_explicit_confirmation: bool = False,
@@ -1846,6 +1849,9 @@ class UnifiedCRMService:
             passport_required=passport_required,
             passport_status=passport_status,
             group_size=group_size,
+            boys_count=boys_count,
+            girls_count=girls_count,
+            family_units=family_units,
             session_id=session_id,
             idempotency_key=idempotency_key,
         )
@@ -2212,6 +2218,9 @@ class UnifiedCRMService:
         passport_required: bool = False,
         passport_status: str = "",
         group_size: int | str = 1,
+        boys_count: int | str = 0,
+        girls_count: int | str = 0,
+        family_units: int | str = 0,
         session_id: str = "",
         idempotency_key: str = "",
     ) -> dict[str, Any]:
@@ -2330,6 +2339,13 @@ class UnifiedCRMService:
                     capacity_key = f"{group}_{req_room_type.lower()}"
                     hold_key = f"draft_holds_{capacity_key}"
                     category_capacity = self._as_int(self._row_value(trip, capacity_key), default=0) or 0
+                    opposite_group = "girls" if group == "boys" else "boys"
+                    opposite_capacity = self._as_int(
+                        self._row_value(trip, f"{opposite_group}_{req_room_type.lower()}"),
+                        default=0,
+                    ) or 0
+                    if not (category_capacity or opposite_capacity):
+                        continue
                     category_hold = self._as_int(self._row_value(trip, hold_key), default=0) or 0
                     category_available = category_capacity - category_hold
                     category_availability[capacity_key] = category_available
@@ -2374,7 +2390,8 @@ class UnifiedCRMService:
                 "booking_id", "trip_id", "trip_name", "traveler_id", "traveler_name", "room_type",
                 "flight_option", "date_option", "currency", "booking_status", "draft_created_at",
                 "booking_source", "lead_id", "interaction_id", "alert_id", "payment_status",
-                "passport_required", "passport_status", "group_size", "booking_notes",
+                "passport_required", "passport_status", "group_size", "boys_count", "girls_count",
+                "family_units", "booking_notes",
             ]
             booking_values = [
                 booking_id,
@@ -2396,6 +2413,9 @@ class UnifiedCRMService:
                 1 if passport_required else 0,
                 passport_status or None,
                 self._as_int(group_size, default=1) or 1,
+                self._as_int(boys_count, default=0) or 0,
+                self._as_int(girls_count, default=0) or 0,
+                self._as_int(family_units, default=0) or 0,
                 booking_notes or None,
             ]
             booking_table_columns = self._table_columns(connection, "trip_bookings")
@@ -2501,6 +2521,9 @@ class UnifiedCRMService:
             "refund_amount": None,
             "passport_required": bool(passport_required),
             "passport_status": passport_status or ("pending" if passport_required else ""),
+            "boys_count": self._as_int(boys_count, default=0) or 0,
+            "girls_count": self._as_int(girls_count, default=0) or 0,
+            "family_units": self._as_int(family_units, default=0) or 0,
             "available_before_draft": available,
             "available_after_draft": available - sum(int(item["rooms"]) for item in normalized_requirements),
             "interaction": {"interaction_id": interaction_id},
@@ -3596,7 +3619,7 @@ class UnifiedCRMService:
                 item_room_type = str(item.get("room_type") or room_type or "").strip().title()
                 group = str(item.get("room_group") or item.get("group") or "").strip().lower()
                 rooms = cls._as_int(item.get("rooms") or item.get("count"), default=0) or 0
-                if item_room_type in ROOM_HOLD_COLUMNS and group in {"", "boys", "girls"} and rooms > 0:
+                if item_room_type in ROOM_HOLD_COLUMNS and group in {"", "boys", "girls", "family"} and rooms > 0:
                     requirements.append({"room_type": item_room_type, "room_group": group, "rooms": rooms})
         if requirements:
             return requirements
@@ -3613,7 +3636,7 @@ class UnifiedCRMService:
                 requirements.append({"room_type": canonical_room_type, "room_group": "girls", "rooms": girls_rooms})
             return requirements
         group = str(room_group or "").strip().lower()
-        return [{"room_type": canonical_room_type, "room_group": group if group in {"boys", "girls"} else "", "rooms": 1}]
+        return [{"room_type": canonical_room_type, "room_group": group if group in {"boys", "girls", "family"} else "", "rooms": 1}]
 
     @staticmethod
     def _migrate_trip_booking_passport_columns(connection: sqlite3.Connection) -> None:
@@ -3630,6 +3653,12 @@ class UnifiedCRMService:
             connection.execute("ALTER TABLE trip_bookings ADD COLUMN passport_status TEXT")
         if 'group_size' not in existing_cols:
             connection.execute("ALTER TABLE trip_bookings ADD COLUMN group_size INTEGER DEFAULT 1")
+        if 'boys_count' not in existing_cols:
+            connection.execute("ALTER TABLE trip_bookings ADD COLUMN boys_count INTEGER DEFAULT 0")
+        if 'girls_count' not in existing_cols:
+            connection.execute("ALTER TABLE trip_bookings ADD COLUMN girls_count INTEGER DEFAULT 0")
+        if 'family_units' not in existing_cols:
+            connection.execute("ALTER TABLE trip_bookings ADD COLUMN family_units INTEGER DEFAULT 0")
         if 'room_group' not in existing_cols:
             connection.execute("ALTER TABLE trip_bookings ADD COLUMN room_group TEXT")
         if 'boys_rooms_requested' not in existing_cols:

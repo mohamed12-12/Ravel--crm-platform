@@ -490,6 +490,9 @@ def _serialize_session(gateway: ExcelSheetGateway, session) -> dict[str, Any]:
         "roomGroup": session.room_group,
         "roomRequirements": getattr(session, "room_requirements", {}),
         "groupSize": session.group_size,
+        "boysCount": getattr(session, "boys_count", 0),
+        "girlsCount": getattr(session, "girls_count", 0),
+        "familyUnits": getattr(session, "family_units", 0),
         "flightOption": session.flight_option,
         "preferredDate": getattr(session, "preferred_date", ""),
         "roomChoiceLabel": _room_choice_label(session.room_type, session.room_group) if session.room_type else "",
@@ -2108,6 +2111,10 @@ def create_app(
             lead_id=lead_id,
             source="Web Demo Booking",
             agent_notes="Created from redesigned web demo.",
+            group_size=getattr(session, "group_size", 1),
+            boys_count=getattr(session, "boys_count", 0),
+            girls_count=getattr(session, "girls_count", 0),
+            family_units=getattr(session, "family_units", 0),
         )
         session.booking_result = booking_result
         session.booking_status = str(booking_result.get("booking_status") or "Draft")

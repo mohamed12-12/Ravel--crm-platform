@@ -223,11 +223,15 @@ class ConversationWorkflowPolicy:
         room_type_collected = bool(collection_state.get("room_type"))
         room_group = str(session_context.get("room_group") or "").strip().lower()
         room_group_collected = bool(collection_state.get("room_group") or room_group)
+        boys_count = self._as_int(session_context.get("boys_count"))
+        girls_count = self._as_int(session_context.get("girls_count"))
         room_requirements = session_context.get("room_requirements") if isinstance(session_context.get("room_requirements"), dict) else {}
         mixed_room_requirements = list(room_requirements.get("requirements") or []) if isinstance(room_requirements.get("requirements"), list) else []
+        mixed_gender_counts_collected = bool(collection_state.get("gender_counts") or (boys_count > 0 and girls_count > 0))
+        family_units_collected = bool(collection_state.get("family_units") or room_group != "mixed" or mixed_room_requirements)
         if room_group == "mixed":
             room_type_collected = bool(mixed_room_requirements)
-        group_size_collected = bool(collection_state.get("group_size"))
+        group_size_collected = bool(collection_state.get("group_size") or (room_group == "mixed" and mixed_gender_counts_collected))
         group_nationality_type = str(session_context.get("group_nationality_type") or "").strip().lower()
         group_nationality_counts = session_context.get("group_nationality_counts") if isinstance(session_context.get("group_nationality_counts"), dict) else {}
         flights_supported = self._trip_supports_flights(selected_trip)
@@ -330,10 +334,33 @@ class ConversationWorkflowPolicy:
                 assistant_message=(
                     "هل المسافرون شباب أم بنات؟\n\n"
                     "1) شباب (Boys / Male)\n"
-                    "2) بنات (Girls / Female)"
+                    "2) بنات (Girls / Female)\n"
+                    "3) مختلط (Boys + Girls)"
                     if arabic
-                    else "Are the travelers boys/male or girls/female?\n\n1) Boys / Male\n2) Girls / Female"
+                    else "Are the travelers boys/male, girls/female, or mixed?\n\n1) Boys / Male\n2) Girls / Female\n3) Mixed boys + girls"
                 ),
+                **common,
+            )
+
+        if room_group == "mixed" and not mixed_gender_counts_collected:
+            return WorkflowDecision(
+                state="gender_counts_required",
+                customer_status="Waiting for customer response",
+                allowed_tools=SELECTED_TRIP_TOOLS,
+                required_step="collect_gender_counts",
+                customer_message_key="gender_counts_required",
+                assistant_message=self._gender_counts_prompt(arabic=arabic),
+                **common,
+            )
+
+        if room_group == "mixed" and not family_units_collected:
+            return WorkflowDecision(
+                state="family_units_required",
+                customer_status="Waiting for customer response",
+                allowed_tools=SELECTED_TRIP_TOOLS,
+                required_step="collect_family_units",
+                customer_message_key="family_units_required",
+                assistant_message=self._family_units_prompt(arabic=arabic),
                 **common,
             )
 
@@ -365,7 +392,7 @@ class ConversationWorkflowPolicy:
                 **common,
             )
 
-        requested_group_size = self._as_int(session_context.get("group_size")) or 1
+        requested_group_size = boys_count + girls_count if room_group == "mixed" and mixed_gender_counts_collected else self._as_int(session_context.get("group_size")) or 1
         mixed_capacity_issue = self._mixed_room_capacity_issue(selected_trip, mixed_room_requirements)
         if mixed_capacity_issue:
             return WorkflowDecision(
@@ -634,6 +661,22 @@ class ConversationWorkflowPolicy:
         )
 
     @staticmethod
+    def _gender_counts_prompt(*, arabic: bool = False) -> str:
+        return (
+            "كم عدد الشباب وكم عدد البنات في المجموعة؟ مثال: 2 شباب و2 بنات."
+            if arabic
+            else "How many boys/male travelers and how many girls/female travelers are in the group? Example: 2 boys and 2 girls."
+        )
+
+    @staticmethod
+    def _family_units_prompt(*, arabic: bool = False) -> str:
+        return (
+            "هل يوجد زوجين أو عائلة يمكنهم مشاركة غرفة؟ اكتب العدد، أو 0 إذا لا يوجد."
+            if arabic
+            else "How many couples/family units may share a room together? Reply with a number, or 0 if none."
+        )
+
+    @staticmethod
     def _group_nationality_counts_prompt(group_size: int, *, arabic: bool = False) -> str:
         return (
             f"من فضلك اكتب عدد المصريين وعدد الأجانب من إجمالي {group_size} مسافرين، مثل: 2 مصري و1 أجنبي."
@@ -895,12 +938,11 @@ class ConversationWorkflowPolicy:
     def _mixed_room_inventory_prompt(self, selected_trip: dict[str, Any], *, arabic: bool = False) -> str:
         if arabic:
             return (
-                "\u0644\u0644\u0645\u062c\u0645\u0648\u0639\u0629 \u0627\u0644\u0645\u062e\u062a\u0644\u0637\u0629\u060c \u0645\u0646 \u0641\u0636\u0644\u0643 \u062d\u062f\u062f \u0637\u0644\u0628 \u0627\u0644\u063a\u0631\u0641 \u0644\u0644\u0634\u0628\u0627\u0628 \u0648\u0627\u0644\u0628\u0646\u0627\u062a \u0628\u0634\u0643\u0644 \u0645\u0646\u0641\u0635\u0644.\n"
-                "\u0645\u062b\u0627\u0644: \u063a\u0631\u0641\u0629 \u0634\u0628\u0627\u0628 \u0648\u063a\u0631\u0641\u0629 \u0628\u0646\u0627\u062a."
+                "\u0644\u0644\u0645\u062c\u0645\u0648\u0639\u0629 \u0627\u0644\u0645\u062e\u062a\u0644\u0637\u0629\u060c \u0627\u062e\u062a\u0631 \u0646\u0648\u0639 \u0627\u0644\u063a\u0631\u0641\u0629 \u0648\u0633\u0623\u0642\u0633\u0645 \u0627\u0644\u063a\u0631\u0641 \u0628\u064a\u0646 \u0627\u0644\u0634\u0628\u0627\u0628 \u0648\u0627\u0644\u0628\u0646\u0627\u062a \u062d\u0633\u0628 \u0627\u0644\u0639\u062f\u062f.\n\n"
+                + self._room_inventory_prompt(selected_trip, room_group="")
             )
         return (
-            "For a mixed group, please specify the room request separately for boys and girls.\n"
-            "Example: 1 double boys room and 1 double girls room.\n\n"
+            "For a mixed group, choose the room type and I will split the rooms by boys/girls counts.\n\n"
             + self._room_inventory_prompt(selected_trip, room_group="")
         )
 
@@ -909,6 +951,22 @@ class ConversationWorkflowPolicy:
             return ""
         unavailable = []
         available = []
+        aggregate_requested: dict[str, int] = {}
+        for item in requirements:
+            if not isinstance(item, dict):
+                continue
+            room_type = str(item.get("room_type") or "").strip().lower()
+            rooms = self._as_int(item.get("rooms")) or 0
+            if room_type in {"single", "double", "triple"} and rooms > 0:
+                aggregate_requested[room_type] = aggregate_requested.get(room_type, 0) + rooms
+        for room_type, rooms in aggregate_requested.items():
+            capacity = self._as_int(selected_trip.get(f"available_{room_type}")) if f"available_{room_type}" in selected_trip else None
+            if capacity is not None and rooms > capacity:
+                return (
+                    f"The requested mixed-room plan needs {rooms} {room_type} room"
+                    f"{'' if rooms == 1 else 's'}, but CRM shows {capacity} available. "
+                    "I will send this request to the Ravel Traveler team to check suitable alternatives."
+                )
         for item in requirements:
             if not isinstance(item, dict):
                 continue

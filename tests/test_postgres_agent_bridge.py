@@ -207,6 +207,103 @@ def test_repeated_confirmation_does_not_duplicate_booking_in_postgres_mode(bridg
         assert db.session.query(TripBooking).count() == 1
 
 
+def test_mixed_booking_holds_increment_by_room_count_and_gender_pool(bridge_app):
+    app, db = bridge_app
+    client = app.test_client()
+    app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://staging/redacted"
+    from app.models import Trip, TripBooking
+
+    with app.app_context():
+        trip = db.session.get(Trip, "RTPG001")
+        trip.double_total = 5
+        trip.double_remaining = 5
+        trip.boys_double = 2
+        trip.girls_double = 1
+        db.session.commit()
+
+    response = client.post(
+        "/api/crm/agent/write",
+        json={
+            "action": "create_booking_draft",
+            "payload": {
+                "traveler_id": "TRPG001",
+                "trip_id": "RTPG001",
+                "room_type": "Double",
+                "room_group": "mixed",
+                "channel": "web",
+                "boys_count": 4,
+                "girls_count": 2,
+                "family_units": 1,
+                "group_size": 6,
+                "room_requirements": {
+                    "requirements": [
+                        {"room_type": "Double", "room_group": "family", "rooms": 1},
+                        {"room_type": "Double", "room_group": "boys", "rooms": 2},
+                        {"room_type": "Double", "room_group": "girls", "rooms": 1},
+                    ],
+                    "boys_rooms_requested": 2,
+                    "girls_rooms_requested": 1,
+                },
+            },
+            "session_context": {"session_id": "mixed-booking-holds", "language": "en", "booking_confirmed": True},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["result"]["booking_result"]["write_result_contract"]["status"] == "created"
+    with app.app_context():
+        trip = db.session.get(Trip, "RTPG001")
+        booking = db.session.query(TripBooking).one()
+        assert trip.draft_holds_double == 4
+        assert trip.draft_holds_boys_double == 2
+        assert trip.draft_holds_girls_double == 1
+        assert booking.boys_count == 4
+        assert booking.girls_count == 2
+        assert booking.family_units == 1
+
+
+def test_gendered_requirements_can_use_unsplit_aggregate_capacity(bridge_app):
+    app, db = bridge_app
+    client = app.test_client()
+    app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://staging/redacted"
+    from app.models import Trip
+
+    with app.app_context():
+        trip = db.session.get(Trip, "RTPG001")
+        trip.double_total = 3
+        trip.double_remaining = 3
+        trip.boys_double = 0
+        trip.girls_double = 0
+        db.session.commit()
+
+    response = client.post(
+        "/api/crm/agent/write",
+        json={
+            "action": "create_booking_draft",
+            "payload": {
+                "traveler_id": "TRPG001",
+                "trip_id": "RTPG001",
+                "room_type": "Double",
+                "channel": "web",
+                "room_requirements": {
+                    "requirements": [
+                        {"room_type": "Double", "room_group": "boys", "rooms": 1},
+                        {"room_type": "Double", "room_group": "girls", "rooms": 1},
+                    ],
+                },
+            },
+            "session_context": {"session_id": "unsplit-gendered-capacity", "language": "en", "booking_confirmed": True},
+        },
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        trip = db.session.get(Trip, "RTPG001")
+        assert trip.draft_holds_double == 2
+        assert trip.draft_holds_boys_double == 1
+        assert trip.draft_holds_girls_double == 1
+
+
 def test_repeated_create_lead_returns_structured_duplicate_in_postgres_mode(bridge_app):
     app, db = bridge_app
     client = app.test_client()

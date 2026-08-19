@@ -626,6 +626,9 @@ class GeminiWriteToolExecutor:
             room_requirements = session_context.get("room_requirements")
         boys_rooms_requested = self._value(payload, session_context, "boys_rooms_requested")
         girls_rooms_requested = self._value(payload, session_context, "girls_rooms_requested")
+        boys_count = self._as_int(self._value(payload, session_context, "boys_count"), default=0) or 0
+        girls_count = self._as_int(self._value(payload, session_context, "girls_count"), default=0) or 0
+        family_units = self._as_int(self._value(payload, session_context, "family_units"), default=0) or 0
         flight_option = normalize_flight_option(self._value(payload, session_context, "flight_option")) or self._value(
             payload, session_context, "flight_option"
         )
@@ -662,6 +665,9 @@ class GeminiWriteToolExecutor:
             passport_required=passport_required,
             passport_status=passport_status,
             group_size=self._as_int(self._value(payload, session_context, "group_size"), default=1) or 1,
+            boys_count=boys_count,
+            girls_count=girls_count,
+            family_units=family_units,
             session_id=str(session_context.get("session_id") or ""),
             require_explicit_confirmation="booking_confirmed" in session_context,
             customer_confirmed=session_context.get("booking_confirmed", True),

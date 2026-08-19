@@ -225,6 +225,64 @@ def test_group_composition_and_rooms_together(runtime: ToolCallingSessionRuntime
     assert by_gender["girls"] == {"room_type": "Double", "room_group": "girls", "rooms": 1}
 
 
+def test_mixed_group_counts_and_no_family_units_derive_gender_rooms(runtime: ToolCallingSessionRuntime) -> None:
+    session = _selected_trip_session(runtime)
+
+    session = _send(runtime, "3", session)
+    assert session.stage == "gender_counts_required"
+
+    session = _send(runtime, "2 boys and 2 girls", session)
+    assert session.stage == "family_units_required"
+    assert session.boys_count == 2
+    assert session.girls_count == 2
+    assert session.group_size == 4
+
+    session = _send(runtime, "0", session)
+    assert session.stage == "room_type_required"
+    assert session.family_units == 0
+
+    session = _send(runtime, "double", session)
+
+    by_gender = _by_gender(session)
+    assert by_gender["boys"] == {"room_type": "Double", "room_group": "boys", "rooms": 1}
+    assert by_gender["girls"] == {"room_type": "Double", "room_group": "girls", "rooms": 1}
+    assert session.room_requirements["boys_rooms_requested"] == 1
+    assert session.room_requirements["girls_rooms_requested"] == 1
+
+
+def test_mixed_family_units_share_rooms_before_gender_remainders(runtime: ToolCallingSessionRuntime) -> None:
+    session = _selected_trip_session(runtime)
+
+    session = _send(runtime, "mixed", session)
+    session = _send(runtime, "2 boys and 2 girls", session)
+    session = _send(runtime, "1 couple", session)
+    session = _send(runtime, "double", session)
+
+    by_gender = _by_gender(session)
+    assert by_gender["family"] == {"room_type": "Double", "room_group": "family", "rooms": 1}
+    assert by_gender["boys"] == {"room_type": "Double", "room_group": "boys", "rooms": 1}
+    assert by_gender["girls"] == {"room_type": "Double", "room_group": "girls", "rooms": 1}
+    assert session.room_requirements["family_units"] == 1
+
+
+def test_mixed_group_gendered_capacity_shortage_escalates(runtime: ToolCallingSessionRuntime) -> None:
+    trip = {
+        **MIXED_INVENTORY_TRIP,
+        "available_double": 4,
+        "boys_double": 3,
+        "girls_double": 0,
+    }
+    session = _selected_trip_session(runtime, trip)
+
+    session = _send(runtime, "mixed", session)
+    session = _send(runtime, "2 boys and 2 girls", session)
+    session = _send(runtime, "0", session)
+    session = _send(runtime, "double", session)
+
+    assert session.stage == "capacity_handoff_required"
+    assert session.handoff_state in {"handoff_pending", "handed_off", "handoff_failed", ""}
+
+
 # ===========================================================================
 # 7. Interruption between room selections (identity question) preserves both
 # ===========================================================================

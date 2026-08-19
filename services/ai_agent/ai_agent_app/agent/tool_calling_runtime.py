@@ -86,6 +86,8 @@ SAFE_STATUS_MAP = {
     "trip_results_available": "Searching trips",
     "room_type_required": "Waiting for customer response",
     "traveler_gender_required": "Waiting for customer response",
+    "gender_counts_required": "Waiting for customer response",
+    "family_units_required": "Waiting for customer response",
     "group_size_required": "Waiting for customer response",
     "group_nationality_type_required": "Waiting for customer response",
     "group_nationality_counts_required": "Waiting for customer response",
@@ -161,6 +163,8 @@ _BACKEND_OWNED_COLLECTION_STEPS = {
     "collect_trip_type",
     "select_trip",
     "collect_traveler_gender",
+    "collect_gender_counts",
+    "collect_family_units",
     "collect_room_type",
     "collect_group_size",
     "collect_group_nationality_type",
@@ -438,6 +442,9 @@ class ToolCallingSessionRuntime:
                 "room_type": session.room_type,
                 "room_requirements": dict(session.room_requirements or {}),
                 "group_size": session.group_size,
+                "boys_count": session.boys_count,
+                "girls_count": session.girls_count,
+                "family_units": session.family_units,
                 "group_nationality_type": session.group_nationality_type,
                 "group_nationality_counts": dict(session.group_nationality_counts or {}),
                 "flight_option": session.flight_option,
@@ -527,6 +534,9 @@ class ToolCallingSessionRuntime:
             "room_type": session.room_type,
             "room_group": session.room_group,
             "room_requirements": dict(session.room_requirements or {}),
+            "boys_count": session.boys_count,
+            "girls_count": session.girls_count,
+            "family_units": session.family_units,
             "group_nationality_type": session.group_nationality_type,
             "group_nationality_counts": dict(session.group_nationality_counts or {}),
             "currency": session.currency,
@@ -565,6 +575,9 @@ class ToolCallingSessionRuntime:
                 "room_type": session.room_type,
                 "room_group": session.room_group,
                 "room_requirements": dict(session.room_requirements or {}),
+                "boys_count": session.boys_count,
+                "girls_count": session.girls_count,
+                "family_units": session.family_units,
                 "group_nationality_type": session.group_nationality_type,
                 "group_nationality_counts": dict(session.group_nationality_counts or {}),
                 "currency": session.currency,
@@ -1099,6 +1112,8 @@ class ToolCallingSessionRuntime:
             "nationality": bool(stored.get("nationality") or session.nationality),
             "room_type": bool(stored.get("room_type") or session.room_type or session.room_requirements),
             "room_group": bool(stored.get("room_group") or session.room_group),
+            "gender_counts": bool(stored.get("gender_counts") or (session.boys_count and session.girls_count)),
+            "family_units": bool(stored.get("family_units") or session.room_group != "mixed"),
             "group_size": bool(stored.get("group_size")),
             "group_nationality_type": bool(stored.get("group_nationality_type") or session.group_nationality_type),
             "group_nationality_counts": bool(stored.get("group_nationality_counts") or session.group_nationality_counts),
@@ -2110,8 +2125,16 @@ class ToolCallingSessionRuntime:
                 )
             return (
                 f"No problem, I’m with you on {trip_name}. Let’s take it one step at a time: "
-                "are the travelers boys or girls? Reply with 1 for boys or 2 for girls."
+                "are the travelers boys, girls, or mixed? Reply with 1 for boys, 2 for girls, or 3 for mixed."
             )
+        if step == "collect_gender_counts":
+            if language.startswith("ar"):
+                return "محتاج عدد الشباب وعدد البنات عشان أظبط الغرف صح. مثال: 2 شباب و2 بنات."
+            return "I need the boys and girls counts so I can plan the rooms correctly. Example: 2 boys and 2 girls."
+        if step == "collect_family_units":
+            if language.startswith("ar"):
+                return "اكتب عدد الأزواج أو العائلات اللي ممكن يشاركوا غرفة، أو 0 لو مفيش."
+            return "Reply with the number of couples/family units that may share a room, or 0 if none."
         if step == "select_trip":
             if self._is_explanation_request(clean_text):
                 if language.startswith("ar"):
@@ -2183,7 +2206,11 @@ class ToolCallingSessionRuntime:
             return False
         required_step = str(decision.required_step or "")
         if required_step == "collect_traveler_gender":
-            return any(token in normalized for token in ("boys", "male", "girls", "female", "شباب", "بنات"))
+            return any(token in normalized for token in ("boys", "male", "girls", "female", "mixed", "شباب", "بنات", "مختلط"))
+        if required_step == "collect_gender_counts":
+            return any(token in normalized for token in ("boys", "male", "girls", "female", "count", "شباب", "بنات", "عدد"))
+        if required_step == "collect_family_units":
+            return any(token in normalized for token in ("family", "couple", "share", "none", "zero", "عائلة", "اسرة", "أسرة", "زوج", "0"))
         if required_step == "collect_room_type":
             return any(token in normalized for token in ("room", "single", "double", "triple", "غرفة"))
         if required_step == "collect_group_size":
@@ -2719,15 +2746,19 @@ class ToolCallingSessionRuntime:
             if language.startswith("ar"):
                 trip_part = f" \u0644\u0631\u062d\u0644\u0629 {trip_name}" if trip_name else ""
                 prompt = (
-                    f"\u0639\u0634\u0627\u0646 \u0623\u0631\u0627\u062c\u0639 \u0627\u0644\u063a\u0631\u0641 \u0627\u0644\u0645\u062a\u0627\u062d\u0629{trip_part}\u060c \u0647\u0644 \u0627\u0644\u0645\u0633\u0627\u0641\u0631\u0648\u0646 \u0634\u0628\u0627\u0628 \u0623\u0645 \u0628\u0646\u0627\u062a\u061f\n"
-                    "1. \u0634\u0628\u0627\u0628\n2. \u0628\u0646\u0627\u062a"
+                    f"\u0639\u0634\u0627\u0646 \u0623\u0631\u0627\u062c\u0639 \u0627\u0644\u063a\u0631\u0641 \u0627\u0644\u0645\u062a\u0627\u062d\u0629{trip_part}\u060c \u0647\u0644 \u0627\u0644\u0645\u0633\u0627\u0641\u0631\u0648\u0646 \u0634\u0628\u0627\u0628\u060c \u0628\u0646\u0627\u062a\u060c \u0623\u0645 \u0645\u062e\u062a\u0644\u0637\u061f\n"
+                    "1. \u0634\u0628\u0627\u0628\n2. \u0628\u0646\u0627\u062a\n3. \u0645\u062e\u062a\u0644\u0637"
                 )
             else:
                 trip_part = f" for {trip_name}" if trip_name else ""
                 prompt = (
-                    f"To check the right room availability{trip_part}, are the travelers boys/male or girls/female?\n"
-                    "1. Boys / Male\n2. Girls / Female"
+                    f"To check the right room availability{trip_part}, are the travelers boys/male, girls/female, or mixed?\n"
+                    "1. Boys / Male\n2. Girls / Female\n3. Mixed boys + girls"
                 )
+        elif step == "collect_gender_counts":
+            prompt = "\u0643\u0645 \u0639\u062f\u062f \u0627\u0644\u0634\u0628\u0627\u0628 \u0648\u0643\u0645 \u0639\u062f\u062f \u0627\u0644\u0628\u0646\u0627\u062a\u061f \u0645\u062b\u0627\u0644: 2 \u0634\u0628\u0627\u0628 \u06482 \u0628\u0646\u0627\u062a." if language.startswith("ar") else "How many boys/male travelers and how many girls/female travelers are in the group? Example: 2 boys and 2 girls."
+        elif step == "collect_family_units":
+            prompt = "\u0647\u0644 \u064a\u0648\u062c\u062f \u0632\u0648\u062c\u064a\u0646 \u0623\u0648 \u0639\u0627\u0626\u0644\u0629 \u064a\u0645\u0643\u0646\u0647\u0645 \u0645\u0634\u0627\u0631\u0643\u0629 \u063a\u0631\u0641\u0629\u061f \u0627\u0643\u062a\u0628 \u0627\u0644\u0639\u062f\u062f\u060c \u0623\u0648 0 \u0625\u0630\u0627 \u0644\u0627 \u064a\u0648\u062c\u062f." if language.startswith("ar") else "How many couples/family units may share a room together? Reply with a number, or 0 if none."
         elif step == "collect_group_size":
             prompt = "\u0643\u0645 \u0639\u062f\u062f \u0627\u0644\u0645\u0633\u0627\u0641\u0631\u064a\u0646 \u0641\u064a \u0637\u0644\u0628 \u0627\u0644\u062d\u062c\u0632\u061f" if language.startswith("ar") else "How many travelers should I put on this booking request?"
         elif step in {"collect_group_nationality_type", "collect_group_nationality_counts"}:
@@ -2837,10 +2868,42 @@ class ToolCallingSessionRuntime:
             return
         room_type = str(session.room_type or "").strip().title()
         room_group = str(session.room_group or "").strip().lower()
-        if room_type not in {"Single", "Double", "Triple"} or room_group not in {"boys", "girls"}:
+        if room_type not in {"Single", "Double", "Triple"} or room_group not in {"boys", "girls", "mixed"}:
             return
-        group_size = max(1, int(session.group_size or 1))
         occupancy = cls._room_occupancy(room_type)
+        if room_group == "mixed":
+            boys_count = max(0, int(session.boys_count or 0))
+            girls_count = max(0, int(session.girls_count or 0))
+            if not boys_count or not girls_count:
+                return
+            shared_rooms = min(max(0, int(session.family_units or 0)), boys_count, girls_count)
+            if room_type == "Single":
+                shared_rooms = 0
+            boys_remaining = max(0, boys_count - shared_rooms)
+            girls_remaining = max(0, girls_count - shared_rooms)
+            requirements: list[dict[str, Any]] = []
+            if shared_rooms:
+                requirements.append({"room_type": room_type, "room_group": "family", "rooms": shared_rooms})
+            if boys_remaining:
+                requirements.append({
+                    "room_type": room_type,
+                    "room_group": "boys",
+                    "rooms": (boys_remaining + occupancy - 1) // occupancy,
+                })
+            if girls_remaining:
+                requirements.append({
+                    "room_type": room_type,
+                    "room_group": "girls",
+                    "rooms": (girls_remaining + occupancy - 1) // occupancy,
+                })
+            consolidated = cls._consolidate_room_requirements(requirements)
+            consolidated["family_units"] = shared_rooms
+            consolidated["source"] = "derived_from_group_size"
+            session.room_requirements = consolidated
+            session.group_size = boys_count + girls_count
+            return
+
+        group_size = max(1, int(session.group_size or 1))
         rooms = (group_size + occupancy - 1) // occupancy
         session.room_requirements = {
             "requirements": [{"room_type": room_type, "room_group": room_group, "rooms": rooms}],
@@ -4993,6 +5056,9 @@ class ToolCallingSessionRuntime:
             "room_requirements": dict(requirements),
             "boys_rooms_requested": requirements.get("boys_rooms_requested") or 0,
             "girls_rooms_requested": requirements.get("girls_rooms_requested") or 0,
+            "boys_count": session.boys_count,
+            "girls_count": session.girls_count,
+            "family_units": session.family_units,
             "flight_option": session.flight_option,
             # A returning traveler is never re-asked for their currency, so fall
             # back to the preference already stored on their CRM profile instead
@@ -5555,11 +5621,15 @@ class ToolCallingSessionRuntime:
             r"|\u0648\u0627\u062d\u062f|\u0648\u0627\u062d\u062f\u0629|\u0627\u062a\u0646\u064a\u0646|\u0627\u062b\u0646\u064a\u0646|\u062a\u0644\u0627\u062a\u0629|\u062b\u0644\u0627\u062b\u0629"
         )
         for group, terms in group_terms.items():
+            seen_spans: set[tuple[int, int]] = set()
             for term in terms:
                 for match in re.finditer(
                     rf"(?:\b({number_pattern})\s+{re.escape(term)}s?\b)|(?:\b{re.escape(term)}s?\s+([1-9][0-9]?)\b)",
                     lowered,
                 ):
+                    if match.span() in seen_spans:
+                        continue
+                    seen_spans.add(match.span())
                     counts[group] += cls._number_from_text(match.group(1) or match.group(2) or "1") or 1
         return counts
 
@@ -5580,6 +5650,28 @@ class ToolCallingSessionRuntime:
                 ):
                     counts[group] += cls._number_from_text(match.group(1) or match.group(2) or "1") or 1
         return counts
+
+    @classmethod
+    def _extract_family_units(cls, text: str) -> int | None:
+        lowered = str(text or "").translate(_DIGIT_TRANSLATION).strip().casefold()
+        if not lowered:
+            return None
+        if lowered in {"0", "zero", "none", "no", "no family", "no couples", "مفيش", "لا", "ولا واحد"}:
+            return 0
+        family_terms = (
+            "family", "families", "couple", "couples", "shared", "share",
+            "عائلة", "عائلات", "اسرة", "أسرة", "اسر", "أسر", "زوج", "زوجين",
+        )
+        if not any(term in lowered for term in family_terms):
+            if re.fullmatch(r"[0-9]+", lowered):
+                return int(lowered)
+            if re.fullmatch(r"one|two|three|four|five|six|seven|eight|nine", lowered):
+                return cls._number_from_text(lowered)
+            return None
+        match = re.search(r"\b([0-9]+|one|two|three|four|five|six|seven|eight|nine)\b", lowered)
+        if match:
+            return cls._number_from_text(match.group(1)) or 0
+        return 1
 
     @staticmethod
     def _same_nationality_group_answer(text: str, option_number: int = 0) -> bool:
@@ -5954,6 +6046,9 @@ class ToolCallingSessionRuntime:
                 candidate_trip_type and ToolCallingSessionRuntime._is_explicit_trip_type_restart_signal(text)
             ),
             "candidate_group_size": group_size,
+            "candidate_boys_count": people_counts["boys"],
+            "candidate_girls_count": people_counts["girls"],
+            "candidate_family_units": ToolCallingSessionRuntime._extract_family_units(text),
             "candidate_raw_phone": raw_phone,
             "candidate_destination": destination_name,
             "candidate_preferred_date": "August" if "august" in lowered or "أغسطس" in lowered else "",
@@ -6056,6 +6151,14 @@ class ToolCallingSessionRuntime:
             self._update_collection_state(session, trip_type=True)
 
         group_size = int(hints.get("candidate_group_size") or 0)
+        boys_count = int(hints.get("candidate_boys_count") or 0)
+        girls_count = int(hints.get("candidate_girls_count") or 0)
+        if boys_count and girls_count and not is_exploratory:
+            session.boys_count = boys_count
+            session.girls_count = girls_count
+            session.group_size = boys_count + girls_count
+            session.room_group = "mixed"
+            self._update_collection_state(session, room_group=True, gender_counts=True, group_size=True)
         if group_size:
             session.group_size = group_size
             self._update_collection_state(session, group_size=True)
@@ -6344,11 +6447,13 @@ class ToolCallingSessionRuntime:
         if session.stage == "traveler_gender_required" and not session.room_group:
             people_counts = self._extract_mixed_people_counts(normalized_text)
             mixed_group_hint = self._has_mixed_group_hint(normalized_text)
-            if (people_counts["boys"] and people_counts["girls"]) or mixed_group_hint:
+            if option_number == 3 or (people_counts["boys"] and people_counts["girls"]) or mixed_group_hint:
                 session.room_group = "mixed"
                 if people_counts["boys"] and people_counts["girls"] and (not session.group_size or session.group_size == 1):
+                    session.boys_count = people_counts["boys"]
+                    session.girls_count = people_counts["girls"]
                     session.group_size = people_counts["boys"] + people_counts["girls"]
-                    self._update_collection_state(session, group_size=True)
+                    self._update_collection_state(session, gender_counts=True, group_size=True)
                 self._update_collection_state(session, room_group=True)
                 return True
             # Whole-answer match against the two presented options only -- a
@@ -6370,6 +6475,24 @@ class ToolCallingSessionRuntime:
             if option_number == 2 or lowered in girls_terms:
                 session.room_group = "girls"
                 self._update_collection_state(session, room_group=True)
+                return True
+            return False
+        if session.stage == "gender_counts_required":
+            people_counts = self._extract_mixed_people_counts(normalized_text)
+            if people_counts["boys"] and people_counts["girls"]:
+                session.boys_count = people_counts["boys"]
+                session.girls_count = people_counts["girls"]
+                session.group_size = people_counts["boys"] + people_counts["girls"]
+                session.room_group = "mixed"
+                self._update_collection_state(session, room_group=True, gender_counts=True, group_size=True)
+                return True
+            return False
+        if session.stage == "family_units_required":
+            family_units = self._extract_family_units(normalized_text)
+            if family_units is not None and family_units >= 0:
+                max_units = min(int(session.boys_count or 0), int(session.girls_count or 0))
+                session.family_units = min(int(family_units), max_units)
+                self._update_collection_state(session, family_units=True)
                 return True
             return False
         if session.stage == "room_type_required" and not session.room_type:
@@ -6426,6 +6549,7 @@ class ToolCallingSessionRuntime:
             if room_type:
                 session.room_type = room_type
                 self._update_collection_state(session, room_type=True)
+                self._ensure_room_requirements_for_group(session)
                 return True
             return False
         if session.stage == "group_size_required":
