@@ -1662,8 +1662,9 @@ class UnifiedCRMService:
                     request_id, traveler_id, lead_id, service_type, trip_scope, destination,
                     start_date_pref, end_date_pref, dates_flexible, party_size, boys_count,
                     girls_count, budget_amount, budget_currency, stage, stage_changed_at,
-                    consultation_due_at, notes, created_at, created_by, idempotency_key
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    consultation_due_at, deposit_is_refundable, notes, created_at, created_by,
+                    idempotency_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     request_id,
@@ -1683,6 +1684,14 @@ class UnifiedCRMService:
                     "registered",
                     now.isoformat(timespec="seconds"),
                     consultation_due.isoformat(timespec="seconds"),
+                    # NOT NULL in the SQLAlchemy schema (private_trip_request.py)
+                    # with only a Python-side ORM default, not a server_default --
+                    # a raw-SQL insert that omits this column hits a NOT NULL
+                    # constraint violation on any DB created from that model
+                    # (confirmed live: every private-trip save failed here).
+                    # Private-trip deposits are non-refundable by policy, so this
+                    # is always 0 at creation, never derived from the intake.
+                    0,
                     str(notes or "").strip() or None,
                     now.isoformat(timespec="seconds"),
                     created_by,
