@@ -31,6 +31,7 @@ from services.ai_agent.ai_agent_app.agent.tool_contracts import (
 from services.ai_agent.ai_agent_app.agent.tool_registry import ToolSpec, build_agent_tool_registry
 from services.ai_agent.ai_agent_app.agent.tool_routing_audit import evaluate_tool_route, should_enforce_tool_route
 from services.ai_agent.ai_agent_app.agent.workflow_policy import ConversationWorkflowPolicy
+from services.crm.system_services.private_trips import PRIVATE_SERVICE_TYPES
 from services.ai_agent.ai_agent_app.agent.write_tool_executor import GeminiWriteToolExecutor
 from services.ai_agent.ai_agent_app.agent.write_response_gating import detect_write_record_type, gate_customer_write_reply
 from services.ai_agent.ai_agent_app.agent.write_result import WriteOutcome, normalize_write_result
@@ -54,9 +55,17 @@ class GeminiToolLoopError(RuntimeError):
 # vocabulary only -- none of these ever become a session.required_step,
 # trip ID, or tool call directly; tool_calling_runtime.py's
 # _handle_off_script_classifier decides what (if anything) to do with a
-# category, using its own existing deterministic mechanisms.
+# category, using its own existing deterministic mechanisms. answer_current_step
+# is the one category that can mutate a required-step field, and even then
+# only via candidate_value being re-validated by the SAME deterministic
+# parser an exact-format answer would go through
+# (ToolCallingSessionRuntime._apply_required_step_capture) -- the classifier
+# itself never writes session state.
 OFF_SCRIPT_CLASSIFIER_CATEGORIES = frozenset(
     {
+        "answer_current_step",
+        "ask_about_current_step",
+        "recommendation_request",
         "side_question",
         "correction_trip_switch",
         "correction_trip_type_switch",
@@ -66,7 +75,30 @@ OFF_SCRIPT_CLASSIFIER_CATEGORIES = frozenset(
     }
 )
 
-_OFF_SCRIPT_CLASSIFIER_UNCLEAR_RESULT = {"category": "unclear", "target_hint": "", "confidence": 0.0}
+_OFF_SCRIPT_CLASSIFIER_UNCLEAR_RESULT = {
+    "category": "unclear", "target_hint": "", "candidate_value": "", "confidence": 0.0,
+}
+
+# Per-required_step guidance for answer_current_step's candidate_value --
+# formatted from the SAME canonical value sources the deterministic capture
+# code already validates against (never a second, independently-maintained
+# list). A step absent from this table gets no candidate guidance at all,
+# so the classifier has nothing to paraphrase into and naturally falls back
+# to side_question/unclear for free-text fields (destination, dates, names)
+# that have no fixed enum to map onto.
+SEMANTIC_CANDIDATE_DOMAIN_HINTS: dict[str, str] = {
+    "collect_private_service_type": "one of exactly: " + ", ".join(sorted(PRIVATE_SERVICE_TYPES.keys())),
+    "collect_trip_type": "one of exactly: local, international",
+    "collect_traveler_gender": "one of exactly: boys, girls, mixed",
+    "collect_room_type": "one of exactly: single, double, triple",
+    "collect_flight_preference": "one of exactly: With Flight, Without Flight",
+    "collect_payment_currency": "one of exactly: EGP, USD",
+    "collect_group_nationality_type": "one of exactly: single, mixed",
+    "collect_duplicate_lead_choice": "one of exactly: continue, new",
+    "collect_group_size": "a plain integer -- the total number of travelers",
+    "collect_private_party_size": "a plain integer -- the total number of travelers",
+    "collect_private_budget": "an amount plus currency, formatted like '5000 EGP' or '3000 USD'",
+}
 
 _OFF_SCRIPT_CLASSIFIER_SYSTEM_PROMPT = (
     "You are a conversational-intent classifier inside a travel-booking chat agent. "
@@ -75,9 +107,28 @@ _OFF_SCRIPT_CLASSIFIER_SYSTEM_PROMPT = (
     "system owns all of that. Your only job is to label what the customer's message "
     "is doing conversationally, given the current booking step and recent messages.\n\n"
     "Choose exactly one category:\n"
+    "- answer_current_step: the customer IS answering the current required question, "
+    "just not in the exact format it was asked (a paraphrase, a colloquial/Egyptian "
+    "Arabic phrasing, English, mixed language, or a reference like \"the third one\"/"
+    "\"التالت\" to an option already listed in the current question). Only use this "
+    "when 'valid_candidate_values' is provided below -- map the customer's meaning to "
+    "exactly one of those values and put it in candidate_value. If the message could "
+    "mean more than one of the valid values, or you are not confident, do NOT guess -- "
+    "use unclear instead. Never invent a value that is not in valid_candidate_values.\n"
+    "- ask_about_current_step: the customer is asking a question ABOUT one of the "
+    "currently presented options (what it includes, the difference between two "
+    "options) rather than choosing one. Example: \"what's the difference between the "
+    "second and third option?\", \"التالت ده شامل الفندق؟\". Set target_hint to which "
+    "option they mean if identifiable (e.g. \"option_3\"). This must NOT also be "
+    "answer_current_step -- a question about an option is never itself a selection.\n"
+    "- recommendation_request: the customer is asking the agent to recommend/decide "
+    "for them rather than failing to answer. Examples: \"مش عارف، إيه اللي تنصحني "
+    "بيه؟\", \"what do you suggest?\", \"إنت شايف إيه أنسب؟\". Distinct from unclear: "
+    "the customer is engaged and asking for guidance, not stuck or confused.\n"
     "- side_question: a question answerable from the given context/CRM facts, not a "
-    "request to change the booking. Examples: \"is Thailand cheaper?\", \"tell me "
-    "about Thailand\", \"what's the deposit?\", \"is this trip family friendly?\".\n"
+    "request to change the booking and not about a currently presented option. "
+    "Examples: \"is Thailand cheaper?\", \"tell me about Thailand\", \"what's the "
+    "deposit?\", \"is this trip family friendly?\", \"طب الرحلة دي فيها فندق؟\".\n"
     "- correction_trip_switch: the customer clearly wants to REPLACE the currently "
     "selected trip with a different one, whether or not they name a specific "
     "replacement. Examples: \"actually I want Thailand instead\", \"show me Thailand "
@@ -95,17 +146,25 @@ _OFF_SCRIPT_CLASSIFIER_SYSTEM_PROMPT = (
     "answered booking field other than the trip itself, such as room type, "
     "traveler count, boys/girls split, flight option, currency, or nationality. "
     "Examples: \"I want double not single\", \"make it 4 travelers\", "
-    "\"actually pay in USD\", \"no flights please\".\n"
+    "\"actually pay in USD\", \"no flights please\". If the field being revised IS "
+    "the current step, prefer answer_current_step instead -- this category is for "
+    "revising a DIFFERENT, already-answered field.\n"
     "- navigation: the customer wants to cancel, start over, or go back to an "
     "earlier step.\n"
-    "- unclear: none of the above fit with real confidence.\n\n"
+    "- unclear: none of the above fit with real confidence, OR the customer's answer "
+    "is genuinely too vague to map to any valid_candidate_values (e.g. \"عايز حاجة "
+    "كويسة\" with no further detail). Never guess the closest-sounding value.\n\n"
     "Be conservative. If you are not confident, answer unclear with a low "
-    "confidence score rather than guessing.\n\n"
+    "confidence score rather than guessing. candidate_value must be an empty string "
+    "for every category except answer_current_step.\n\n"
     "Respond with strict JSON only, no other text, no markdown fences, matching "
     "exactly this shape: "
-    '{"category": "<one of: side_question, correction_trip_switch, '
-    'correction_trip_type_switch, correction_field_change, navigation, unclear>", "target_hint": '
-    '"<short text or empty string>", "confidence": <number from 0 to 1>}'
+    '{"category": "<one of: answer_current_step, ask_about_current_step, '
+    'recommendation_request, side_question, correction_trip_switch, '
+    'correction_trip_type_switch, correction_field_change, navigation, unclear>", '
+    '"target_hint": "<short text or empty string>", '
+    '"candidate_value": "<short text or empty string, answer_current_step only>", '
+    '"confidence": <number from 0 to 1>}'
 )
 
 
@@ -733,12 +792,16 @@ class GeminiAgent:
     ) -> dict[str, Any]:
         """Classify what kind of conversational event an off-script message
         is -- a ROUTER only, never a decision-maker. Returns
-        {"category", "target_hint", "confidence"} with category always one
-        of OFF_SCRIPT_CLASSIFIER_CATEGORIES. Never returns or implies a
-        trip ID, tool call, or state mutation -- the caller
-        (tool_calling_runtime.py's _handle_off_script_classifier) is solely
-        responsible for deciding what, if anything, to do with the result,
-        using its own existing deterministic mechanisms.
+        {"category", "target_hint", "candidate_value", "confidence"} with
+        category always one of OFF_SCRIPT_CLASSIFIER_CATEGORIES.
+        candidate_value is only ever non-empty for "answer_current_step", and
+        even then is a proposed value, not a state mutation -- the caller
+        (tool_calling_runtime.py's _handle_off_script_classifier) re-runs it
+        through the exact same deterministic capture a hand-typed exact-format
+        answer would go through, and discards it if that rejects it. Never
+        returns or implies a trip ID, tool call, or direct state mutation --
+        the caller is solely responsible for deciding what, if anything, to
+        do with the result, using its own existing deterministic mechanisms.
 
         Fails closed to {"category": "unclear", "confidence": 0.0} on any
         provider error or malformed/unparseable output -- a classification
@@ -755,6 +818,8 @@ class GeminiAgent:
         required_step = str(workflow_context.get("required_step") or "")
         payload = {
             "current_required_step": required_step,
+            "current_required_step_question": str(workflow_context.get("assistant_message") or ""),
+            "valid_candidate_values": SEMANTIC_CANDIDATE_DOMAIN_HINTS.get(required_step, ""),
             "selected_trip_name": str(context.get("selected_trip_name") or ""),
             "trip_type": str(context.get("trip_type") or ""),
             "recent_conversation": list(conversation_history or [])[-6:],
@@ -830,11 +895,14 @@ class GeminiAgent:
             confidence = 0.0
         confidence = max(0.0, min(confidence, 1.0))
         target_hint = str(parsed.get("target_hint") or "").strip()
+        # candidate_value only ever means something for answer_current_step --
+        # never trust/use it for any other category, even if the model set it.
+        candidate_value = str(parsed.get("candidate_value") or "").strip() if category == "answer_current_step" else ""
         agent_logger.info(
-            "Off-script classifier outcome=parsed request_id=%s required_step=%s elapsed_ms=%s category=%s confidence=%.2f",
-            request_id, required_step, _elapsed_ms(), category, confidence,
+            "Off-script classifier outcome=parsed request_id=%s required_step=%s elapsed_ms=%s category=%s confidence=%.2f has_candidate=%s",
+            request_id, required_step, _elapsed_ms(), category, confidence, bool(candidate_value),
         )
-        return {"category": category, "target_hint": target_hint, "confidence": confidence}
+        return {"category": category, "target_hint": target_hint, "candidate_value": candidate_value, "confidence": confidence}
 
     @staticmethod
     def _part_is_function_call(part: dict[str, Any]) -> bool:

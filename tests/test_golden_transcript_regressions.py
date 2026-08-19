@@ -1710,9 +1710,14 @@ class _RaisingProviderStub:
         raise self.error
 
 
-def _classification_response(category: str, confidence: float, *, target_hint: str = ""):
+def _classification_response(category: str, confidence: float, *, target_hint: str = "", candidate_value: str = ""):
     return text_response(
-        json.dumps({"category": category, "target_hint": target_hint, "confidence": confidence}),
+        json.dumps({
+            "category": category,
+            "target_hint": target_hint,
+            "candidate_value": candidate_value,
+            "confidence": confidence,
+        }),
         response_id=f"resp-classify-{category}",
     )
 
@@ -1972,7 +1977,7 @@ def test_off_script_classifier_malformed_json_falls_back_to_unclear(
         session_context={},
         conversation_history=[],
     )
-    assert direct_result == {"category": "unclear", "target_hint": "", "confidence": 0.0}
+    assert direct_result == {"category": "unclear", "target_hint": "", "candidate_value": "", "confidence": 0.0}
     assert session.selected_trip_id == "RT-BALI-01"
     assert session.room_type == "Single"
 
@@ -3551,7 +3556,7 @@ def test_classify_off_script_turn_logs_non_object_json_outcome(runtime: ToolCall
             user_message="anything", session_context={}, conversation_history=[]
         )
 
-    assert result == {"category": "unclear", "target_hint": "", "confidence": 0.0}
+    assert result == {"category": "unclear", "target_hint": "", "candidate_value": "", "confidence": 0.0}
     messages = [r.getMessage() for r in caplog.records if r.name == "rahma_agent"]
     assert any("outcome=non_object_output" in m for m in messages)
 
@@ -3570,7 +3575,7 @@ def test_classify_off_script_turn_logs_invalid_category_outcome(runtime: ToolCal
             user_message="anything", session_context={}, conversation_history=[]
         )
 
-    assert result == {"category": "unclear", "target_hint": "", "confidence": 0.0}
+    assert result == {"category": "unclear", "target_hint": "", "candidate_value": "", "confidence": 0.0}
     messages = [r.getMessage() for r in caplog.records if r.name == "rahma_agent"]
     assert any("outcome=invalid_category" in m and "bogus_category" in m for m in messages)
 

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import calendar
 import re
-from datetime import date
+from datetime import date, timedelta
 
 
 _DIGIT_TRANSLATION = str.maketrans(
@@ -186,3 +186,95 @@ def _valid_date(year: int, month: int, day: int, *, today: date) -> str:
     if candidate > today:
         return ""
     return candidate.isoformat()
+
+
+_ARABIC_MONTHS = {
+    "يناير": 1, "فبراير": 2, "مارس": 3,
+    "ابريل": 4, "أبريل": 4, "إبريل": 4,
+    "مايو": 5, "يونيو": 6, "يونية": 6, "يوليو": 7, "يولية": 7,
+    "اغسطس": 8, "أغسطس": 8, "سبتمبر": 9,
+    "اكتوبر": 10, "أكتوبر": 10, "نوفمبر": 11, "ديسمبر": 12,
+}
+
+# Fixed-offset phrases only -- "بعد يومين" is the Arabic DUAL form of "day"
+# (unambiguously exactly 2, unlike a plural), so this is a literal mapping,
+# not a guess.
+_RELATIVE_DAY_OFFSET_TERMS = {
+    "بكرة": 1, "بكره": 1, "غدا": 1, "غداً": 1, "tomorrow": 1,
+    "بعد بكرة": 2, "بعد بكره": 2, "بعد يومين": 2, "بعد يومين ": 2,
+    "day after tomorrow": 2,
+}
+
+_END_OF_MONTH_TERMS = (
+    "اخر الشهر", "آخر الشهر", "نهاية الشهر",
+    "end of month", "end of the month", "later this month",
+)
+
+_END_OF_PERIOD_MARKERS = ("اخر", "آخر", "نهاية", "end of")
+
+_NEXT_WEEK_TERMS = (
+    "الاسبوع الجاي", "الأسبوع الجاي", "الاسبوع القادم", "الأسبوع القادم",
+    "next week", "next weekend",
+)
+
+
+def _last_day_of_month(year: int, month: int) -> date:
+    return date(year, month, calendar.monthrange(year, month)[1])
+
+
+def _nearest_future_day_of_month(today: date, day: int) -> str:
+    """"بعد يوم 25" names a day-of-month with no month stated -- resolve to
+    the nearest FUTURE occurrence (this month if that day hasn't passed yet,
+    otherwise next month), a documented deterministic rule rather than a
+    guessed date."""
+    last_day_this_month = calendar.monthrange(today.year, today.month)[1]
+    if today.day <= day <= last_day_this_month:
+        return date(today.year, today.month, day).isoformat()
+    year, month = today.year, today.month + 1
+    if month > 12:
+        month, year = 1, year + 1
+    clamped_day = min(day, calendar.monthrange(year, month)[1])
+    return date(year, month, clamped_day).isoformat()
+
+
+def normalize_relative_date_input(text: str, *, today: date | None = None) -> str:
+    """Resolve an unambiguous relative-date phrase ("بكره", "بعد يومين",
+    "آخر الشهر", "end of August", "next week") to an ISO date, anchored on
+    `today` (the caller's business "now", not this module's clock). Returns
+    "" for anything genuinely ambiguous (e.g. a bare day-of-month with no
+    other anchor is resolved via the documented nearest-future rule below,
+    never invented outright) or unrecognized -- callers must treat "" the
+    same as no date given, never as a computed empty date.
+    """
+    raw = str(text or "").strip().translate(_DIGIT_TRANSLATION)
+    if not raw:
+        return ""
+    today = today or date.today()
+    lowered = re.sub(r"\s+", " ", raw.casefold()).strip()
+
+    for phrase, offset in _RELATIVE_DAY_OFFSET_TERMS.items():
+        if phrase.strip() in lowered:
+            return (today + timedelta(days=offset)).isoformat()
+
+    match = re.search(r"(?:بعد|in)\s+(\d{1,2})\s*(?:يوم|ايام|أيام|days?)\b", lowered)
+    if match:
+        return (today + timedelta(days=int(match.group(1)))).isoformat()
+
+    match = re.search(r"(?:بعد يوم|after (?:the )?)\s*(\d{1,2})\b", lowered)
+    if match:
+        day = int(match.group(1))
+        if 1 <= day <= 31:
+            return _nearest_future_day_of_month(today, day)
+
+    if any(term in lowered for term in _END_OF_MONTH_TERMS):
+        return _last_day_of_month(today.year, today.month).isoformat()
+
+    for name, month in {**_MONTHS, **_ARABIC_MONTHS}.items():
+        if name in lowered and any(marker in lowered for marker in _END_OF_PERIOD_MARKERS):
+            year = today.year if month >= today.month else today.year + 1
+            return _last_day_of_month(year, month).isoformat()
+
+    if any(term in lowered for term in _NEXT_WEEK_TERMS):
+        return (today + timedelta(days=7)).isoformat()
+
+    return ""

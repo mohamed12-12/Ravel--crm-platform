@@ -22,6 +22,7 @@ from services.ai_agent.ai_agent_app.agent.date_parsing import (
     compute_age,
     normalize_birthdate_input,
     normalize_expiry_date_input,
+    normalize_relative_date_input,
 )
 from services.ai_agent.ai_agent_app.agent.identity_policy import AgentIdentityPolicy
 from services.ai_agent.ai_agent_app.agent.memory import AgentMemory
@@ -126,6 +127,27 @@ _PHONE_CANDIDATE_RE = re.compile(r"(?:\+|00)?[\d٠-٩۰-۹][\d٠-٩۰-۹\s().-]{
 
 _BIRTHDAY_RE = re.compile(r"\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b|\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b")
 _TRIP_MEDIA_URL_RE = re.compile(r"(?:https?://[^\s<>()]+)?/trips/media/[A-Za-z0-9._~:-]+")
+
+# Budget semantic-capture coverage: "خمسة آلاف"/"خمس تلاف"/"عشرة آلاف" -- a
+# bounded, well-known vocabulary of Arabic number words paired with a
+# "thousand" word, resolved deterministically rather than left to the LLM.
+_ARABIC_AMOUNT_UNIT_WORDS = {
+    "واحد": 1, "واحدة": 1,
+    "اتنين": 2, "إتنين": 2, "اثنين": 2, "اثنان": 2, "تنين": 2,
+    "تلاتة": 3, "ثلاثة": 3, "تلات": 3, "ثلاث": 3,
+    "اربعة": 4, "أربعة": 4, "اربع": 4, "أربع": 4,
+    "خمسة": 5, "خمس": 5,
+    "ستة": 6, "سته": 6, "ست": 6,
+    "سبعة": 7, "سبع": 7,
+    "تمانية": 8, "ثمانية": 8, "تمن": 8, "ثمن": 8,
+    "تسعة": 9, "تسع": 9,
+    "عشرة": 10, "عشر": 10,
+}
+_ARABIC_THOUSAND_WORD_RE = re.compile(r"\b(?:الف|ألف|الاف|آلاف|الآف|تلاف|تلافين)\b")
+_ARABIC_AMOUNT_WORD_RE = re.compile(
+    r"\b(" + "|".join(sorted(_ARABIC_AMOUNT_UNIT_WORDS, key=len, reverse=True))
+    + r")\s+(?:الف|ألف|الاف|آلاف|الآف|تلاف|تلافين)\b"
+)
 
 
 _AFFIRMATIVE_REPLIES = AFFIRMATIVE_TERMS
@@ -2539,6 +2561,7 @@ class ToolCallingSessionRuntime:
 
         category = str((classification or {}).get("category") or "unclear")
         target_hint = str((classification or {}).get("target_hint") or "").strip()
+        candidate_value = str((classification or {}).get("candidate_value") or "").strip()
         try:
             confidence = float((classification or {}).get("confidence") or 0.0)
         except (TypeError, ValueError):
@@ -2570,6 +2593,25 @@ class ToolCallingSessionRuntime:
             confidence,
             decision.required_step,
         )
+
+        if category == "answer_current_step":
+            # Semantic capture: candidate_value is untrusted LLM output --
+            # it only ever becomes state if the EXACT SAME deterministic
+            # capture function an exact-format answer goes through accepts
+            # it (_apply_required_step_capture). No new validation path, no
+            # new canonical-value list; a candidate outside the field's real
+            # domain is rejected exactly as a nonsense typed answer would be,
+            # and this returns False (fail-closed to the scripted re-ask).
+            if not candidate_value or not self._apply_required_step_capture(session, candidate_value):
+                return False
+            return self._reply_for_off_script_state_change(session, clean_text)
+
+        if category in ("ask_about_current_step", "recommendation_request"):
+            # Both need a grounded, non-fabricating explanation/nudge rather
+            # than a state mutation -- the same trusted conversational-turn
+            # mechanism side_question already uses (tool-permitted, response
+            # guard applied), not a second answer-generation path.
+            return self._run_conversational_llm_turn(session, decision, clean_text)
 
         if category == "side_question":
             return self._run_conversational_llm_turn(session, decision, clean_text)
@@ -7058,20 +7100,42 @@ class ToolCallingSessionRuntime:
         matches = re.findall(r"\b(\d{4}-\d{1,2}-\d{1,2})\b", normalized)
         if matches:
             return matches[0], matches[1] if len(matches) > 1 else "", flexible
+        if not flexible:
+            # Semantic-capture coverage: "\u0628\u0643\u0631\u0647"/"\u0628\u0639\u062f \u064a\u0648\u0645\u064a\u0646"/"\u0622\u062e\u0631 \u0627\u0644\u0634\u0647\u0631"/"end
+            # of August" are common natural answers here -- resolved by a
+            # deterministic day-math parser (never guessed by the LLM),
+            # anchored on real today() so it also respects a genuinely
+            # ambiguous phrase by returning "" rather than inventing a date.
+            relative = normalize_relative_date_input(normalized)
+            if relative:
+                return relative, "", flexible
         return "", "", flexible
 
     @staticmethod
     def _private_budget_from_text(text: str) -> tuple[float, str]:
         normalized = str(text or "").translate(_DIGIT_TRANSLATION)
-        amount = 0.0
-        match = re.search(r"\b(\d+(?:[,\s]\d{3})*(?:\.\d+)?)\b", normalized)
-        if match:
-            try:
-                amount = float(match.group(1).replace(",", "").replace(" ", ""))
-            except ValueError:
-                amount = 0.0
-        currency = ""
         lowered = normalized.casefold()
+        amount = 0.0
+        k_match = re.search(r"\b(\d+(?:\.\d+)?)\s*k\b", lowered)
+        if k_match:
+            amount = float(k_match.group(1)) * 1000
+        else:
+            match = re.search(r"\b(\d+(?:[,\s]\d{3})*(?:\.\d+)?)\b", normalized)
+            if match:
+                try:
+                    amount = float(match.group(1).replace(",", "").replace(" ", ""))
+                except ValueError:
+                    amount = 0.0
+            if not amount:
+                # "\u062e\u0645\u0633\u0629 \u0622\u0644\u0627\u0641"/"\u062e\u0645\u0633 \u062a\u0644\u0627\u0641" (5000) and a bare "\u0627\u0644\u0641"/"\u0623\u0644\u0641" (1000)
+                # with no unit word -- Arabic word-form amounts the digit
+                # regex above cannot see at all.
+                word_match = _ARABIC_AMOUNT_WORD_RE.search(lowered)
+                if word_match:
+                    amount = float(_ARABIC_AMOUNT_UNIT_WORDS[word_match.group(1)] * 1000)
+                elif _ARABIC_THOUSAND_WORD_RE.search(lowered):
+                    amount = 1000.0
+        currency = ""
         if any(token in lowered for token in ("usd", "dollar", "$", "\u062f\u0648\u0644\u0627\u0631")):
             currency = "USD"
         elif any(token in lowered for token in ("egp", "pound", "\u062c\u0646\u064a\u0647", "\u062c\u0646\u064a\u0629")):

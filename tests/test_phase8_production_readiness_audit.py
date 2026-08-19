@@ -175,7 +175,7 @@ def test_phase8_classifier_failure_falls_back_without_state_mutation(tmp_path: P
         },
     )
 
-    assert decision == {"category": "unclear", "target_hint": "", "confidence": 0.0}
+    assert decision == {"category": "unclear", "target_hint": "", "candidate_value": "", "confidence": 0.0}
 
 
 @pytest.mark.parametrize("tool_name", ["create_traveler", "update_traveler", "update_booking", "upload_passport"])
