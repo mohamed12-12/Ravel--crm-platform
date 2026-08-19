@@ -54,19 +54,39 @@ def normalize_private_service_type(value: str | None) -> str:
         "1": "consultation",
         "consult": "consultation",
         "consultation": "consultation",
+        # Field-capture audit: this had no Arabic entries at all, despite
+        # the question always being asked bilingually -- a customer who
+        # answered with the Arabic service name instead of a digit got
+        # "معلش، يمكن سؤالي ما كان واضح" every time.
+        "استشارة": "consultation",
+        "استشاره": "consultation",
         "2": "bookings_only",
         "booking": "bookings_only",
         "bookings": "bookings_only",
         "bookings_only": "bookings_only",
+        "حجوزات": "bookings_only",
+        "حجوزات_فقط": "bookings_only",
+        "حجز": "bookings_only",
+        "حجز_فقط": "bookings_only",
         "3": "full_package",
         "full": "full_package",
         "package": "full_package",
         "full_package": "full_package",
+        "برنامج_كامل": "full_package",
+        "باقة_كاملة": "full_package",
+        "باكدج": "full_package",
+        "بكدج": "full_package",
         "4": "design_only",
         "design": "design_only",
         "design_only": "design_only",
+        "تصميم": "design_only",
+        "تصميم_برنامج": "design_only",
+        "تصميم_فقط": "design_only",
         "5": "chaperone",
         "chaperone": "chaperone",
+        "مرافق": "chaperone",
+        "مرافقة": "chaperone",
+        "مرافق_رحلة": "chaperone",
     }
     return aliases.get(raw, "")
 

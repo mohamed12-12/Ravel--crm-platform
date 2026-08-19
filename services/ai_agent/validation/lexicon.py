@@ -275,6 +275,17 @@ EXPLANATION_REQUEST_EXACT_TERMS: set[str] = {
     "ليه",
     "لماذا",
     "ليش",
+    # Field-capture audit: a customer asking "what do you mean?" in any of
+    # these phrasings was previously only caught by _is_exploratory_question
+    # (hypothetical-only) or not at all -- "يعني ايه" was already here, but
+    # "زي ايه"/"مثل ايه"/"تقصد ايه" are the same clarification request in
+    # other common phrasings and were missing.
+    "زي ايه",
+    "زي إيه",
+    "مثل ايه",
+    "مثل إيه",
+    "تقصد ايه",
+    "تقصد إيه",
 }
 EXPLANATION_REQUEST_SUBSTRING_TERMS: set[str] = {
     "why do",
@@ -286,6 +297,10 @@ EXPLANATION_REQUEST_SUBSTRING_TERMS: set[str] = {
     "ليش",
     "عشان ايه",
     "ليه محتاج",
+    "what do you mean",
+    "what does that mean",
+    "can you explain",
+    "like what",
 }
 
 # An unambiguous "I changed my mind, start over" signal -- canonical source
@@ -424,4 +439,49 @@ ONLY_OPTION_QUESTION_TERMS: set[str] = {
     "nothing else",
     "no other trips",
     "no other options",
+}
+
+# Field-capture audit: a numbered-choice question ("1. X / 2. Y / 3. Z")
+# only ever recognized a BARE digit ("3") -- "رقم 3"/"اختيار 3"/"option 3"
+# and ordinal words ("التالت"/"third") fell through as unparsed, forcing the
+# customer to re-answer with a naked digit even though the intent was
+# perfectly clear the first time. Canonical source for
+# ToolCallingSessionRuntime._extract_option_number, used only by the
+# genuinely fixed-menu fields (trip type, service type, room type, flight
+# option, currency, gender, group nationality type, duplicate-lead choice,
+# trip selection) -- deliberately NOT used by any "how many" free-number
+# field (group size, party size), where a bare 3 already means "3 people"
+# and an ordinal word has no sensible meaning.
+OPTION_NUMBER_PREFIX_TERMS: set[str] = {
+    "رقم",
+    "اختيار",
+    "الاختيار",
+    "الخيار",
+    "خيار",
+    "option",
+    "choice",
+}
+OPTION_ORDINAL_TERMS: dict[str, int] = {
+    "الاول": 1,
+    "الأول": 1,
+    "اول": 1,
+    "أول": 1,
+    "first": 1,
+    "الثاني": 2,
+    "الثانى": 2,
+    "التاني": 2,
+    "ثاني": 2,
+    "تاني": 2,
+    "second": 2,
+    "الثالث": 3,
+    "التالت": 3,
+    "ثالث": 3,
+    "تالت": 3,
+    "third": 3,
+    "الرابع": 4,
+    "رابع": 4,
+    "fourth": 4,
+    "الخامس": 5,
+    "خامس": 5,
+    "fifth": 5,
 }

@@ -57,6 +57,8 @@ from services.ai_agent.validation.lexicon import (
     GENERIC_TRIP_CHANGE_TERMS,
     HUMAN_HANDOFF_TERMS,
     ONLY_OPTION_QUESTION_TERMS,
+    OPTION_NUMBER_PREFIX_TERMS,
+    OPTION_ORDINAL_TERMS,
     SELF_SERVICE_HELP_TERMS,
     RESTART_SIGNAL_TERMS,
     TRIP_DISCOVERY_TERMS,
@@ -1497,9 +1499,12 @@ class ToolCallingSessionRuntime:
             return
         normalized = self._normalize_trip_reference(text)
         chosen: dict[str, Any] | None = None
-        option_match = re.fullmatch(r"\s*([1-9])[\s.)_\-]*", str(text or "").translate(_DIGIT_TRANSLATION))
-        if option_match and int(option_match.group(1)) <= len(candidates):
-            chosen = candidates[int(option_match.group(1)) - 1]
+        # Trip selection is the same kind of fixed numbered menu as
+        # trip_type/room_type/etc. -- reuses _extract_option_number so
+        # "رقم 2"/"التاني" resolve here too, not just a bare digit.
+        option_number = self._extract_option_number(text)
+        if option_number and option_number <= len(candidates):
+            chosen = candidates[option_number - 1]
         elif len(candidates) == 1 and self._looks_affirmative(text):
             chosen = candidates[0]
         else:
@@ -4818,14 +4823,10 @@ class ToolCallingSessionRuntime:
         if workflow_decision.required_step == "create_private_trip_request":
             if self._execute_private_trip_request(session, session_context):
                 request_id = session.private_trip_request_id
-                reply = (
-                    f"Private trip request {request_id} has been saved. "
-                    "The team will contact you within 24-48 hours to scope it and confirm next steps."
-                )
                 self._append_authoritative_reply(
                     session,
                     message_key="workflow.private_trip_request.created",
-                    base_text=reply,
+                    base_text=self._private_trip_request_created_message(session, request_id),
                 )
                 session.stage = "post_booking_support"
                 session.tools_used = ["create_private_trip_request", "create_handoff"]
@@ -5644,6 +5645,23 @@ class ToolCallingSessionRuntime:
         )
 
     @staticmethod
+    def _private_trip_request_created_message(session: SessionState, request_id: str) -> str:
+        # Bilingual coverage audit: this was an inline English-only f-string
+        # sent via _append_authoritative_reply, which posts base_text verbatim
+        # with no LLM rewrite (unlike the sibling failure-path message, which
+        # goes through _append_agent_reply and gets translated there) -- so an
+        # all-Arabic private-trip intake ended with a pure-English closing line.
+        if session.language.startswith("ar"):
+            return (
+                f"تم حفظ طلب الرحلة الخاصة برقم {request_id}. "
+                "فريق Ravel هيتواصل معاك خلال 24-48 ساعة لتحديد التفاصيل والخطوات القادمة."
+            )
+        return (
+            f"Private trip request {request_id} has been saved. "
+            "The team will contact you within 24-48 hours to scope it and confirm next steps."
+        )
+
+    @staticmethod
     def _new_traveler_lead_failed_message(session: SessionState) -> str:
         if session.language.startswith("ar"):
             return (
@@ -6419,28 +6437,69 @@ class ToolCallingSessionRuntime:
             "ماذا لو",
             "what if",
         )
-        if any(marker in lowered for marker in hypothetical_markers):
-            return True
-        # A "what do you mean?" clarification is the same category of "not a
-        # real decision" as a hypothetical -- a customer replying "يعني ايه"
-        # to "what destination?" is asking the agent to explain the
-        # question, not naming a destination called "يعني ايه". Missing this
-        # meant it was silently accepted as literal field text (confirmed
-        # live: private_destination_required captured it, then the flow
-        # jumped straight to the next question instead of re-explaining).
-        clarification_markers = (
-            "يعني ايه",
-            "يعني إيه",
-            "تقصد ايه",
-            "تقصد إيه",
-            "زي ايه",
-            "زي إيه",
-            "مثل ايه",
-            "مثل إيه",
-            "what do you mean",
-            "like what",
-        )
-        return any(marker in lowered for marker in clarification_markers)
+        return any(marker in lowered for marker in hypothetical_markers)
+
+    @classmethod
+    def _is_not_a_field_value(cls, text: str) -> bool:
+        """True when `text` is a hypothetical/clarification question, or a
+        conversational interruption (side question, identity/human-agent
+        request, greeting, hostile message, "i want to book", ...) --
+        never a genuine answer. The shared guard a free-text capture
+        branch should combine with its own field-specific checks before
+        accepting anything non-empty as the field's value.
+
+        Deliberately does NOT also check _has_trip_reference_words: a
+        legitimate destination/trip-type answer routinely contains
+        "رحلة"/"trip" ("عايز رحلة للغردقة" IS a valid destination answer
+        naming الغردقة), so folding that check in here would reject real
+        answers at exactly the two call sites (trip_type, private
+        destination) that most need to keep accepting them. Trip
+        vocabulary is only ever wrong in a NAME (see _validate_name_tokens,
+        which checks it separately, in addition to this method).
+
+        Composes two already-existing, independently-scoped checks instead
+        of maintaining a third Arabic phrase list; both stay exactly as
+        narrowly defined everywhere else they are used on their own (in
+        particular, _is_exploratory_question must stay hypothetical-only
+        for _merge_hints/_handle_revision_intent, which this method does
+        not touch).
+        """
+        return cls._is_exploratory_question(text) or cls._is_conversational_interruption(text)
+
+    @classmethod
+    def _extract_option_number(cls, text: str) -> int:
+        """Resolve a numbered-choice answer (1-9) from a bare digit
+        ("3"), a labelled digit ("رقم 3"/"اختيار 3"/"option 3"), or an
+        ordinal word ("التالت"/"third") -- see OPTION_NUMBER_PREFIX_TERMS/
+        OPTION_ORDINAL_TERMS in lexicon.py for why "رقم 3" and "التالت"
+        did not resolve at all before this.
+
+        Whole-answer only, for all three forms -- the same "Task 3.1"
+        discipline the bare-digit case already used (see currency_required
+        below: a bare digit substring-matched anywhere used to misfire on
+        "room 2"/"call at 2pm"). A labelled digit needs the same guard --
+        "الاوضة رقم 2 في الفيلا" must not resolve to option 2 -- so this
+        never uses re.search against the whole message, only fullmatch (or
+        an exact match once trivial trailing punctuation is stripped).
+
+        Deliberately only used by the fields that present a genuine fixed
+        menu (trip type, service type, room type, flight option, currency,
+        gender, group nationality type, duplicate-lead choice, trip
+        selection) -- NOT by a free-number field like group/party size,
+        where a bare "3" already means "3 people" and an ordinal word has
+        no sensible meaning; those keep using the original bare-digit-only
+        computation untouched.
+        """
+        normalized = str(text or "").translate(_DIGIT_TRANSLATION).strip()
+        bare = re.fullmatch(r"([1-9])[\s.)_\-]*", normalized)
+        if bare:
+            return int(bare.group(1))
+        prefix_pattern = "|".join(re.escape(term) for term in OPTION_NUMBER_PREFIX_TERMS)
+        labelled = re.fullmatch(rf"(?:{prefix_pattern})\s*([1-9])[\s.)_\-]*", normalized, re.IGNORECASE)
+        if labelled:
+            return int(labelled.group(1))
+        stripped = normalized.strip(" .!؟?،,").casefold()
+        return OPTION_ORDINAL_TERMS.get(stripped, 0)
 
     @staticmethod
     def _is_explicit_correction_signal(text: str) -> bool:
@@ -6834,9 +6893,14 @@ class ToolCallingSessionRuntime:
         normalized = cls._normalize_trip_reference(name)
         if not normalized:
             return "", ""
-        if cls._is_name_step_clarification(name) or cls._is_asking_for_known_name(name):
-            return "", ""
-        if cls._is_explanation_request(name) or cls._is_identity_question(name) or cls._is_human_agent_request(name):
+        # Field-capture audit: this used to check _is_name_step_clarification/
+        # _is_asking_for_known_name/_is_explanation_request/
+        # _is_identity_question/_is_human_agent_request individually -- all
+        # five are already inside _is_conversational_interruption (reused
+        # here via _is_not_a_field_value), which ALSO catches a greeting,
+        # a hostile message, or "i want to book" said instead of a name --
+        # none of which the five-check list above ever covered.
+        if cls._is_not_a_field_value(name):
             return "", ""
         if normalized in {
             "hi",
@@ -7089,24 +7153,41 @@ class ToolCallingSessionRuntime:
         normalized_text = str(text or "").translate(_DIGIT_TRANSLATION).strip()
         option_match = re.fullmatch(r"([1-9])[\s.)_\-]*", normalized_text)
         option_number = int(option_match.group(1)) if option_match else 0
+        # A widened superset of option_number that also resolves "رقم 3"/
+        # "اختيار 3"/ordinal words ("التالت"/"third") -- used only by the
+        # branches below that present a genuine fixed menu. Deliberately
+        # NOT used wherever option_number is instead repurposed as a raw
+        # headcount (group_size/private_party_size), where a bare digit
+        # already means "N people" and an ordinal word would not.
+        menu_option_number = self._extract_option_number(text)
         lowered = " ".join(normalized_text.casefold().split())
 
         if session.stage == "duplicate_lead_choice_required" and not session.duplicate_lead_choice:
             compact = self._compact_intent(text)
-            if option_number == 1 or compact in {"continue", "resume", "continuewiththesame", "same"}:
+            # Field-capture audit: _duplicate_lead_prompt (workflow_policy.py)
+            # asks this bilingually, but the answer-matching below was
+            # English-word-only -- an Arabic "استمر"/"كمل" answer to a
+            # bilingual question never resolved at all.
+            if menu_option_number == 1 or compact in {
+                "continue", "resume", "continuewiththesame", "same",
+                "استمر", "كمل", "نفسالطلب", "الطلبالحالي",
+            }:
                 session.duplicate_lead_choice = "continue"
                 session.resumed_lead_id = session._open_lead_id
                 if session._open_lead_trip_type and not session.trip_type:
                     session.trip_type = session._open_lead_trip_type
                     self._update_collection_state(session, trip_type=True)
                 return True
-            if option_number == 2 or compact in {"new", "newrequest", "startnew", "startnewrequest"}:
+            if menu_option_number == 2 or compact in {
+                "new", "newrequest", "startnew", "startnewrequest",
+                "جديد", "طلبجديد", "منجديد",
+            }:
                 session.duplicate_lead_choice = "new"
                 return True
             return False
 
         if session.stage == "private_service_type_required":
-            service_type = self._private_service_type_from_text(normalized_text, option_number)
+            service_type = self._private_service_type_from_text(normalized_text, menu_option_number)
             if service_type:
                 session.private_service_type = service_type
                 self._update_collection_state(session, private_service_type=True)
@@ -7115,7 +7196,7 @@ class ToolCallingSessionRuntime:
 
         if session.stage == "private_destination_required":
             destination = str(normalized_text or "").strip()
-            if destination and not self._is_exploratory_question(text):
+            if destination and not self._is_not_a_field_value(text):
                 session.private_destination = destination[:200]
                 self._update_collection_state(session, private_destination=True)
                 return True
@@ -7159,8 +7240,8 @@ class ToolCallingSessionRuntime:
             return False
 
         if session.stage == "trip_type_required":
-            trip_type = {1: "local", 2: "international"}.get(option_number)
-            if not trip_type and not self._is_exploratory_question(text):
+            trip_type = {1: "local", 2: "international"}.get(menu_option_number)
+            if not trip_type and not self._is_not_a_field_value(text):
                 # normalize_trip_type does substring/word-boundary matching,
                 # not whole-answer matching -- "لو دولية؟" ("what if
                 # international?") would otherwise be captured here as a
@@ -7169,7 +7250,7 @@ class ToolCallingSessionRuntime:
                 # run (this branch mutates session.trip_type directly).
                 trip_type = normalize_trip_type(normalized_text)
             destination_name = ""
-            if not trip_type and not self._is_exploratory_question(text):
+            if not trip_type and not self._is_not_a_field_value(text):
                 # The customer named a specific place ("شرم" / "شرم الشيخ")
                 # instead of answering the abstract local/international
                 # question -- that IS an answer, just not one
@@ -7198,7 +7279,7 @@ class ToolCallingSessionRuntime:
         if session.stage == "traveler_gender_required" and not session.room_group:
             people_counts = self._extract_mixed_people_counts(normalized_text)
             mixed_group_hint = self._has_mixed_group_hint(normalized_text)
-            if option_number == 3 or (people_counts["boys"] and people_counts["girls"]) or mixed_group_hint:
+            if menu_option_number == 3 or (people_counts["boys"] and people_counts["girls"]) or mixed_group_hint:
                 session.room_group = "mixed"
                 if people_counts["boys"] and people_counts["girls"] and (not session.group_size or session.group_size == 1):
                     session.boys_count = people_counts["boys"]
@@ -7219,11 +7300,11 @@ class ToolCallingSessionRuntime:
                 "girls", "girl", "female", "women", "woman",
                 "\u0628\u0646\u0627\u062a", "\u0625\u0646\u0627\u062b", "\u0627\u0646\u0627\u062b", "\u0646\u0633\u0627\u0621",
             }
-            if option_number == 1 or lowered in boys_terms:
+            if menu_option_number == 1 or lowered in boys_terms:
                 session.room_group = "boys"
                 self._update_collection_state(session, room_group=True)
                 return True
-            if option_number == 2 or lowered in girls_terms:
+            if menu_option_number == 2 or lowered in girls_terms:
                 session.room_group = "girls"
                 self._update_collection_state(session, room_group=True)
                 return True
@@ -7258,8 +7339,8 @@ class ToolCallingSessionRuntime:
                 return True
             available_types = self._available_room_types(session)
             room_type = ""
-            if option_number and option_number <= len(available_types):
-                room_type = available_types[option_number - 1]
+            if menu_option_number and menu_option_number <= len(available_types):
+                room_type = available_types[menu_option_number - 1]
             else:
                 # Whole-answer match only -- "double" must be the entire reply, not
                 # a word found inside an unrelated longer sentence (Task 3.1).
@@ -7318,12 +7399,12 @@ class ToolCallingSessionRuntime:
                 return True
             return False
         if session.stage == "group_nationality_type_required" and not session.group_nationality_type:
-            if self._same_nationality_group_answer(normalized_text, option_number):
+            if self._same_nationality_group_answer(normalized_text, menu_option_number):
                 session.group_nationality_type = "single"
                 session.group_nationality_counts = {}
                 self._update_collection_state(session, group_nationality_type=True, group_nationality_counts=False)
                 return True
-            if self._mixed_nationality_group_answer(normalized_text, option_number):
+            if self._mixed_nationality_group_answer(normalized_text, menu_option_number):
                 session.group_nationality_type = "mixed"
                 counts = self._extract_nationality_group_counts(normalized_text)
                 if counts["egyptian"] or counts["foreigner"]:
@@ -7340,7 +7421,7 @@ class ToolCallingSessionRuntime:
                 return True
             return False
         if session.stage == "flight_option_required" and not session.flight_option:
-            flight_option = {1: "With Flight", 2: "Without Flight"}.get(option_number) or normalize_flight_option(normalized_text)
+            flight_option = {1: "With Flight", 2: "Without Flight"}.get(menu_option_number) or normalize_flight_option(normalized_text)
             if not flight_option:
                 flight_option = self._strict_flight_option_from_answer(normalized_text)
             if flight_option:
@@ -7414,11 +7495,11 @@ class ToolCallingSessionRuntime:
                     return True
                 return any(term in lowered for term in arabic)
 
-            if option_number == 2 or _currency_matches(usd_latin, usd_arabic):
+            if menu_option_number == 2 or _currency_matches(usd_latin, usd_arabic):
                 session.currency = "USD"
                 self._update_collection_state(session, currency=True)
                 return True
-            elif option_number == 1 or _currency_matches(egp_latin, egp_arabic):
+            elif menu_option_number == 1 or _currency_matches(egp_latin, egp_arabic):
                 session.currency = "EGP"
                 self._update_collection_state(session, currency=True)
                 return True
