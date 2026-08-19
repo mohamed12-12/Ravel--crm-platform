@@ -278,9 +278,7 @@ class ConversationWorkflowPolicy:
                     allowed_tools=PRE_TRIP_SEARCH_TOOLS,
                     required_step="collect_trip_type",
                     customer_message_key="trip_type_required",
-                    assistant_message=(
-                        "Is this private trip local inside Egypt or international?\n\n1. Local trip\n2. International trip"
-                    ),
+                    assistant_message=self._private_trip_type_prompt(arabic=arabic),
                     **common,
                 )
             private_service_type = normalize_private_service_type(session_context.get("private_service_type"))
@@ -291,10 +289,7 @@ class ConversationWorkflowPolicy:
                     allowed_tools=PRE_TRIP_SEARCH_TOOLS,
                     required_step="collect_private_service_type",
                     customer_message_key="private_service_type_required",
-                    assistant_message=(
-                        "What kind of private service do you need?\n\n"
-                        "1. Consultation\n2. Bookings only\n3. Full package\n4. Design only\n5. Chaperone"
-                    ),
+                    assistant_message=self._private_service_type_prompt(arabic=arabic),
                     **common,
                 )
             if not str(session_context.get("private_destination") or "").strip():
@@ -304,7 +299,7 @@ class ConversationWorkflowPolicy:
                     allowed_tools=PRE_TRIP_SEARCH_TOOLS,
                     required_step="collect_private_destination",
                     customer_message_key="private_destination_required",
-                    assistant_message="What destination should the private trip cover?",
+                    assistant_message=self._private_destination_prompt(arabic=arabic),
                     **common,
                 )
             if not (
@@ -317,7 +312,7 @@ class ConversationWorkflowPolicy:
                     allowed_tools=PRE_TRIP_SEARCH_TOOLS,
                     required_step="collect_private_dates",
                     customer_message_key="private_dates_required",
-                    assistant_message="What dates do you prefer? You can also say the dates are flexible.",
+                    assistant_message=self._private_dates_prompt(arabic=arabic),
                     **common,
                 )
             if self._as_int(session_context.get("private_party_size")) <= 0:
@@ -327,7 +322,7 @@ class ConversationWorkflowPolicy:
                     allowed_tools=PRE_TRIP_SEARCH_TOOLS,
                     required_step="collect_private_party_size",
                     customer_message_key="private_party_size_required",
-                    assistant_message="How many travelers are in the private trip request?",
+                    assistant_message=self._private_party_size_prompt(arabic=arabic),
                     **common,
                 )
             if not str(session_context.get("private_budget_currency") or "").strip():
@@ -337,7 +332,7 @@ class ConversationWorkflowPolicy:
                     allowed_tools=PRE_TRIP_SEARCH_TOOLS,
                     required_step="collect_private_budget",
                     customer_message_key="private_budget_required",
-                    assistant_message="What budget range should the team keep in mind? Please include EGP or USD.",
+                    assistant_message=self._private_budget_prompt(arabic=arabic),
                     **common,
                 )
             if not str(session_context.get("private_trip_request_id") or "").strip():
@@ -652,6 +647,53 @@ class ConversationWorkflowPolicy:
             "1. Continue the existing request\n"
             "2. Start a new request"
         )
+
+    # The six private-trip intake questions below used to be bare English
+    # strings with no `arabic` branch at all, unlike every other prompt in
+    # this function (e.g. _duplicate_lead_prompt just above) -- in an
+    # otherwise all-Arabic conversation, hitting one of these mid-flow read
+    # as the agent suddenly switching languages for no reason.
+    @staticmethod
+    def _private_trip_type_prompt(*, arabic: bool = False) -> str:
+        if arabic:
+            return "الرحلة الخاصة دي محلية داخل مصر ولا دولية؟\n\n1. رحلة محلية\n2. رحلة دولية"
+        return "Is this private trip local inside Egypt or international?\n\n1. Local trip\n2. International trip"
+
+    @staticmethod
+    def _private_service_type_prompt(*, arabic: bool = False) -> str:
+        if arabic:
+            return (
+                "إيه نوع الخدمة الخاصة اللي محتاجها؟\n\n"
+                "1. استشارة\n2. حجوزات فقط\n3. برنامج كامل\n4. تصميم برنامج فقط\n5. مرافق رحلة"
+            )
+        return (
+            "What kind of private service do you need?\n\n"
+            "1. Consultation\n2. Bookings only\n3. Full package\n4. Design only\n5. Chaperone"
+        )
+
+    @staticmethod
+    def _private_destination_prompt(*, arabic: bool = False) -> str:
+        if arabic:
+            return "الرحلة الخاصة تكون لوجهة إيه؟"
+        return "What destination should the private trip cover?"
+
+    @staticmethod
+    def _private_dates_prompt(*, arabic: bool = False) -> str:
+        if arabic:
+            return "تحب المواعيد تكون إمتى؟ ممكن كمان تقول إن المواعيد مرنة."
+        return "What dates do you prefer? You can also say the dates are flexible."
+
+    @staticmethod
+    def _private_party_size_prompt(*, arabic: bool = False) -> str:
+        if arabic:
+            return "الرحلة الخاصة دي لعدد كام شخص؟"
+        return "How many travelers are in the private trip request?"
+
+    @staticmethod
+    def _private_budget_prompt(*, arabic: bool = False) -> str:
+        if arabic:
+            return "الميزانية التقريبية قد إيه؟ من فضلك حدد بالجنيه المصري أو الدولار."
+        return "What budget range should the team keep in mind? Please include EGP or USD."
 
     def _new_traveler_decision(self, session_context: dict[str, Any]) -> WorkflowDecision:
         collection_state = session_context.get("collection_state") if isinstance(session_context.get("collection_state"), dict) else {}

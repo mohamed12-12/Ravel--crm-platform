@@ -400,12 +400,32 @@ class ToolCallingSessionRuntime:
         preview_traveler = preview.get("traveler") if isinstance(preview.get("traveler"), dict) else {}
         traveler = final_result.get("traveler") if isinstance(final_result.get("traveler"), dict) else {}
         return {
+            # session.traveler_id/lead_id (set once in _build_context and never
+            # cleared -- see the comment there) are the last-resort fallback
+            # here, not the primary source, because they can legitimately lag
+            # a same-turn write. But without them at all, a returning customer
+            # whose identity lives only in session.preview["traveler"] from an
+            # earlier turn could still come up empty here if a write action in
+            # between replaced final_result wholesale with a shape that has no
+            # "traveler"/"lead_id" key (write_tool_executor.py's session_update
+            # is a full replacement, not a merge) -- exactly what happened in a
+            # live transcript where the session-level fields were confirmed
+            # correct by a direct DB dump while this function still returned "".
             "traveler_id": str(
                 created_traveler.get("traveler_id")
                 or traveler.get("traveler_id")
                 or preview_traveler.get("traveler_id")
+                or session.traveler_id
                 or ""
             ).strip(),
+            # No session.lead_id fallback here, unlike traveler_id above:
+            # session.lead_id gets latched onto session._open_lead_id (the
+            # customer's OLD open lead) the moment identity lookup finds one,
+            # regardless of duplicate_lead_choice -- falling back to it would
+            # silently re-attach a request the customer explicitly chose to
+            # start fresh ("new", not "continue") back onto the old lead.
+            # traveler_id alone is enough to satisfy validation (it's an
+            # either/or check), so there's no correctness reason to risk it.
             "lead_id": str(
                 lead_update.get("lead_id") or final_result.get("lead_id") or session.resumed_lead_id or ""
             ).strip(),
@@ -2216,14 +2236,24 @@ class ToolCallingSessionRuntime:
                 return "تمام، عشان أكمل الحجز محتاج اختيار الغرفة فقط. اكتب اسم الغرفة أو رقمها من الاختيارات الظاهرة."
             return "I’m with you. To continue, I only need the room choice. Reply with the room name or its number."
         if step == "collect_private_service_type":
+            if language.startswith("ar"):
+                return "إيه الخدمة الخاصة اللي محتاجها؟ رد بـ 1 استشارة، 2 حجوزات فقط، 3 برنامج كامل، 4 تصميم برنامج فقط، أو 5 مرافق رحلة."
             return "What private service do you need? Reply 1 consultation, 2 bookings only, 3 full package, 4 design only, or 5 chaperone."
         if step == "collect_private_destination":
+            if language.startswith("ar"):
+                return "الرحلة الخاصة تكون لوجهة إيه؟"
             return "What destination should the private trip cover?"
         if step == "collect_private_dates":
+            if language.startswith("ar"):
+                return "تحب المواعيد تكون إمتى؟ ممكن تبعت التاريخ بصيغة YYYY-MM-DD، أو تقول إن المواعيد مرنة."
             return "What dates do you prefer? You can send YYYY-MM-DD, or say the dates are flexible."
         if step == "collect_private_party_size":
+            if language.startswith("ar"):
+                return "الرحلة الخاصة دي لعدد كام شخص؟"
             return "How many travelers are in the private trip request?"
         if step == "collect_private_budget":
+            if language.startswith("ar"):
+                return "الميزانية التقريبية قد إيه؟ من فضلك حدد بالجنيه المصري أو الدولار."
             return "What budget range should the team keep in mind? Please include EGP or USD."
         if step in ("collect_new_traveler_name", "collect_guardian_name"):
             if session._name_rejection_reason == "repeated_tokens":
@@ -6389,7 +6419,28 @@ class ToolCallingSessionRuntime:
             "ماذا لو",
             "what if",
         )
-        return any(marker in lowered for marker in hypothetical_markers)
+        if any(marker in lowered for marker in hypothetical_markers):
+            return True
+        # A "what do you mean?" clarification is the same category of "not a
+        # real decision" as a hypothetical -- a customer replying "يعني ايه"
+        # to "what destination?" is asking the agent to explain the
+        # question, not naming a destination called "يعني ايه". Missing this
+        # meant it was silently accepted as literal field text (confirmed
+        # live: private_destination_required captured it, then the flow
+        # jumped straight to the next question instead of re-explaining).
+        clarification_markers = (
+            "يعني ايه",
+            "يعني إيه",
+            "تقصد ايه",
+            "تقصد إيه",
+            "زي ايه",
+            "زي إيه",
+            "مثل ايه",
+            "مثل إيه",
+            "what do you mean",
+            "like what",
+        )
+        return any(marker in lowered for marker in clarification_markers)
 
     @staticmethod
     def _is_explicit_correction_signal(text: str) -> bool:

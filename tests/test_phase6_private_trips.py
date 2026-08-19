@@ -129,3 +129,129 @@ def test_agent_private_trip_intake_saves_request_then_handoff(runtime: ToolCalli
     assert session.messages[-1]["role"] == "assistant"
     actions = [call.kwargs["action"] for call in runtime._write_executor.execute.call_args_list]
     assert actions == ["create_private_trip_request", "create_handoff"]
+
+
+# ---------------------------------------------------------------------------
+# Live transcript bug: a private trip request kept failing to save for
+# returning customers with "for the following reasons: unable to save right
+# now" even though every collected field looked valid. Traced to
+# _linked_ids() sourcing traveler_id/lead_id ONLY from session.preview/
+# final_result/booking_result -- volatile nested dicts that a later write
+# action's session_update can wholesale replace (write_tool_executor.py's
+# various actions each build a differently-shaped final_result, some with
+# no "traveler" key, some with no "lead_id" key) -- never from
+# session.traveler_id/session.lead_id, the flat fields _build_context()
+# latches once a real identity is resolved specifically so this kind of
+# lookup never goes blank. Confirmed against a real production session dump
+# where those flat fields were correct while _linked_ids() would still have
+# returned "".
+# ---------------------------------------------------------------------------
+def test_linked_ids_falls_back_to_the_latched_session_fields_when_preview_is_empty() -> None:
+    session = SessionState(id="s1", agent_mode="tool_calling")
+    session.preview = {}
+    session.final_result = {}
+    session.booking_result = {}
+    session.resumed_lead_id = ""
+    session.traveler_id = "TR100"
+    session.lead_id = "LD00002"
+
+    linked = ToolCallingSessionRuntime._linked_ids(session)
+
+    assert linked["traveler_id"] == "TR100"
+    # Deliberately NOT "LD00002": session.lead_id gets latched onto the
+    # customer's OLD open lead the moment identity lookup finds one,
+    # regardless of whether they later chose to start a brand new private
+    # request -- falling back to it here would silently re-attach a fresh
+    # request onto the old lead the customer explicitly declined to reuse.
+    assert linked["lead_id"] == ""
+
+
+def test_linked_ids_still_prefers_the_fresher_nested_sources_over_the_latched_fields() -> None:
+    session = SessionState(id="s2", agent_mode="tool_calling")
+    session.preview = {"traveler": {"traveler_id": "TR200"}}
+    session.final_result = {"lead_id": "LD00050"}
+    session.traveler_id = "TR100"
+    session.lead_id = "LD00002"
+
+    linked = ToolCallingSessionRuntime._linked_ids(session)
+
+    assert linked["traveler_id"] == "TR200"
+    assert linked["lead_id"] == "LD00050"
+
+
+# ---------------------------------------------------------------------------
+# Live transcript bug: an Arabic-speaking customer got every greeting, side
+# question, and clarification wrapper correctly in Arabic, but all six
+# private-trip intake questions (trip scope, service type, destination,
+# dates, party size, budget) always rendered in English -- both the
+# first-ask copy (workflow_policy.py's assistant_message) and the
+# unclear-answer retry copy (tool_calling_runtime.py's
+# _natural_interruption_fallback) had no `arabic` branch at all, unlike
+# every other required-step prompt in either file.
+# ---------------------------------------------------------------------------
+def test_private_trip_intake_questions_render_in_arabic_for_an_arabic_session(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    session = _private_verified_session(runtime)
+    session.language = "ar"
+
+    session = _send(runtime, "عايز رحلة خاصة", session)
+    assert session.stage == "trip_type_required"
+    assert "local inside Egypt" not in session.messages[-1]["text"]
+    assert "محلية" in session.messages[-1]["text"]
+
+    for answer, expected_stage, must_contain in (
+        ("محلي", "private_service_type_required", "الخدمة"),
+        ("3", "private_destination_required", "وجهة"),
+        ("سيوة", "private_dates_required", "المواعيد"),
+        ("مرنة", "private_party_size_required", "شخص"),
+        ("4 مسافرين", "private_budget_required", "الميزانية"),
+    ):
+        session = _send(runtime, answer, session)
+        assert session.stage == expected_stage, session.messages[-1]["text"]
+        reply = session.messages[-1]["text"]
+        assert must_contain in reply, reply
+        assert not any(word in reply for word in ("What ", "Reply ", "How many"))
+
+
+def test_private_trip_unclear_answer_retry_copy_renders_in_arabic(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    """The bug above has a second, separate rendering path: a customer
+    answer that fails to parse (not the first ask of a step) goes through
+    _natural_interruption_fallback, not workflow_policy's assistant_message
+    -- confirmed live by the "معلش، يمكن سؤالي ما كان واضح" wrapper still
+    embedding English private-service-type copy even though the wrapper
+    itself was in Arabic.
+    """
+    session = _private_verified_session(runtime)
+    session.language = "ar"
+    session = _send(runtime, "عايز رحلة خاصة", session)
+    session = _send(runtime, "محلي", session)
+    assert session.stage == "private_service_type_required"
+
+    session = _send(runtime, "اتكلم عربي بقولك رقم 3", session)
+
+    assert session.stage == "private_service_type_required"
+    reply = session.messages[-1]["text"]
+    assert "الخدمة" in reply, reply
+    assert "What private service" not in reply
+
+
+def test_private_trip_destination_clarification_question_is_not_captured_as_the_destination(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    session = _private_verified_session(runtime)
+    session = _send(runtime, "I want a private trip", session)
+    session = _send(runtime, "Local", session)
+    session = _send(runtime, "3", session)
+    assert session.stage == "private_destination_required"
+
+    session = _send(runtime, "يعني ايه", session)
+
+    assert session.stage == "private_destination_required"
+    assert session.private_destination == ""
+
+    session = _send(runtime, "Siwa", session)
+    assert session.private_destination == "Siwa"
+    assert session.stage == "private_dates_required"
