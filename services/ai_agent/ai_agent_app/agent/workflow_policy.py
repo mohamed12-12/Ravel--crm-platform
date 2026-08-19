@@ -342,7 +342,11 @@ class ConversationWorkflowPolicy:
                     allowed_tools=PRE_TRIP_SEARCH_TOOLS,
                     required_step="create_private_trip_request",
                     customer_message_key="private_request_ready",
-                    assistant_message="I will save this private trip request for the team now.",
+                    assistant_message=(
+                        "هسجل طلب الرحلة الخاصة دي لفريق العمل دلوقتي."
+                        if arabic
+                        else "I will save this private trip request for the team now."
+                    ),
                     **common,
                 )
             return WorkflowDecision(
@@ -351,10 +355,23 @@ class ConversationWorkflowPolicy:
                 allowed_tools=PRE_TRIP_SEARCH_TOOLS,
                 required_step="human_review",
                 customer_message_key="private_trip_consultation",
-                assistant_message="Your private trip request is saved. The team will contact you within 24-48 hours.",
+                assistant_message=(
+                    "تم حفظ طلب الرحلة الخاصة، وفريق العمل هيتواصل معاك خلال 24-48 ساعة."
+                    if arabic
+                    else "Your private trip request is saved. The team will contact you within 24-48 hours."
+                ),
                 handoff_required=True,
-                reason="private_trip_consultation",
-                **common,
+                # `common` already carries "reason": "crm_identity_verified" --
+                # passing reason= directly here too, then unpacking **common
+                # after it, raised "got multiple values for keyword argument
+                # 'reason'" on every single hit of this branch. Never caught
+                # before because _execute_private_trip_request always creates
+                # the handoff in the same turn it saves the request, so this
+                # state (private request saved, still no explicit handoff)
+                # only fires if that same-turn handoff creation is retried on
+                # a later turn -- a real, if narrow, live path that would have
+                # crashed instead of handing off.
+                **{**common, "reason": "private_trip_consultation"},
             )
 
         if trip_type not in {"local", "international"}:
@@ -383,7 +400,11 @@ class ConversationWorkflowPolicy:
                     allowed_tools=PRE_BOOKING_TOOLS,
                     required_step="select_trip",
                     customer_message_key="trip_selection_required",
-                    assistant_message="I found matching trips for your choice. Please pick the trip you want to continue with.",
+                    assistant_message=(
+                        "لقيت رحلات مطابقة لاختيارك. من فضلك اختار الرحلة اللي تحب تكمل بيها."
+                        if arabic
+                        else "I found matching trips for your choice. Please pick the trip you want to continue with."
+                    ),
                     **common,
                 )
             # A trip_result dict with both list keys present (even if both are
@@ -409,7 +430,11 @@ class ConversationWorkflowPolicy:
                 allowed_tools=PRE_BOOKING_TOOLS,
                 required_step="search_matching_trips",
                 customer_message_key="trip_search_ready",
-                assistant_message="Thanks. I will check the available trips that match your choice now.",
+                assistant_message=(
+                    "شكرا. هراجع الرحلات المتاحة اللي تطابق اختيارك دلوقتي."
+                    if arabic
+                    else "Thanks. I will check the available trips that match your choice now."
+                ),
                 **common,
             )
 
@@ -603,7 +628,11 @@ class ConversationWorkflowPolicy:
             allowed_tools=SELECTED_TRIP_BOOKING_TOOLS,
             required_step="create_booking_draft",
             customer_message_key="booking_ready",
-            assistant_message="I have the trip details needed to prepare your booking draft.",
+            assistant_message=(
+                "معايا كل تفاصيل الرحلة المطلوبة لتحضير طلب الحجز."
+                if arabic
+                else "I have the trip details needed to prepare your booking draft."
+            ),
             **common,
         )
 
