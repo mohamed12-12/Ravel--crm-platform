@@ -5410,6 +5410,13 @@ class ToolCallingSessionRuntime:
         """
         if session.new_traveler_lead_saved:
             return False
+        if session.private_trip_active:
+            # A private/custom trip is its own CRM record (private_trip_requests,
+            # written later by _execute_private_trip_request) -- it must never
+            # also produce a Lead as a side effect of identity intake, or every
+            # private-trip customer gets a duplicate, unworked entry in the
+            # regular Leads pipeline.
+            return self._execute_new_traveler_identity_only(session, session_context, decision)
         traveler = self._ensure_traveler_record(session, session_context)
         payload = {
             "customer_name": session.customer_name,
@@ -5507,6 +5514,52 @@ class ToolCallingSessionRuntime:
             "New traveler lead persisted session=%s lead=%s traveler=%s next_step=%s",
             session.id,
             lead_id,
+            traveler.get("traveler_id") or "",
+            next_decision.required_step,
+        )
+        return True
+
+    def _execute_new_traveler_identity_only(
+        self,
+        session: SessionState,
+        session_context: dict[str, Any],
+        decision,
+    ) -> bool:
+        """Save a private-trip customer's Traveler identity with no Lead.
+
+        Mirrors _execute_new_traveler_lead's contract (deterministic write,
+        verified-traveler persistence, next-step reply) minus the create_lead
+        call and the LD-number confirmation message, which do not apply here.
+        """
+        traveler = self._ensure_traveler_record(session, session_context)
+        if not traveler.get("traveler_id"):
+            agent_logger.warning(
+                "Private-trip traveler creation did not return an id session=%s",
+                session.id,
+            )
+            self._append_authoritative_reply(
+                session,
+                message_key="private_trip.new_traveler_save_failed",
+                base_text=self._new_traveler_lead_failed_message(session),
+            )
+            session.tools_used = []
+            session.fallback_used = True
+            return True
+        session.new_traveler_lead_saved = True
+        self._mark_traveler_verified(session, traveler)
+        self._persist_guardian_consent(session, str(traveler.get("traveler_id") or ""))
+        next_decision = self._resolve_next_step_decision(session)
+        self._append_authoritative_reply(
+            session,
+            message_key="private_trip.new_traveler_identity_saved",
+            base_text=self._new_traveler_identity_saved_message(session, next_decision),
+        )
+        session.tools_used = ["create_traveler"]
+        session.fallback_used = False
+        session.stage = next_decision.state or decision.state
+        agent_logger.info(
+            "Private-trip traveler identity saved without a lead session=%s traveler=%s next_step=%s",
+            session.id,
             traveler.get("traveler_id") or "",
             next_decision.required_step,
         )
@@ -5937,6 +5990,15 @@ class ToolCallingSessionRuntime:
         greeting = f"Thanks {name}. " if name else "Thanks. "
         next_question = next_question or "Are you looking for a local trip or an international trip?"
         return f"{greeting}Your details are saved and your request number is {lead_id}.\n\n{next_question}"
+
+    def _new_traveler_identity_saved_message(self, session: SessionState, decision=None) -> str:
+        name = str(session.customer_name or "").strip()
+        next_question = self._next_step_prompt(session, decision).strip() if decision is not None else ""
+        if session.language.startswith("ar"):
+            greeting = f"شكرا {name}. " if name else "شكرا. "
+            return f"{greeting}تم حفظ بياناتك.\n\n{next_question}".strip()
+        greeting = f"Thanks {name}. " if name else "Thanks. "
+        return f"{greeting}Your details are saved.\n\n{next_question}".strip()
 
     def handle_passport_attachment(self, session: SessionState, attachment_ref: str) -> None:
         ref = str(attachment_ref or "").strip()

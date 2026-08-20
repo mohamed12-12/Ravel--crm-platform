@@ -322,6 +322,155 @@ def test_create_still_accepts_traveler_and_lead_ids_from_the_picker(private_requ
         assert item.destination == "Luxor"
 
 
+def _login_as(app, client, *, role: str) -> str:
+    """Same contract as _login_as_employee, but lets a test pick the role --
+    needed here because assign_work is admin/manager-only (see security.py's
+    ROLE_PERMISSIONS), unlike _login_as_employee's hardcoded 'agent'.
+    """
+    from app.models.user import User
+
+    with app.app_context():
+        db_module = __import__("app.extensions", fromlist=["db"]).db
+        user = User(username=f"{role}-{uuid.uuid4().hex[:8]}", full_name=f"Test {role.title()}", password_hash="x", role=role, is_active=True)
+        db_module.session.add(user)
+        db_module.session.commit()
+        user_id, username = user.id, user.username
+    csrf_token = uuid.uuid4().hex
+    with client.session_transaction() as sess:
+        sess["logged_in"] = True
+        sess["user_id"] = user_id
+        sess["username"] = username
+        sess["csrf_token"] = csrf_token
+    return csrf_token
+
+
+# ---------------------------------------------------------------------------
+# Employee follow-up parity with Leads: private requests used to have no
+# "who's on this / are we waiting on the customer" tracking at all, only the
+# consultation/deposit/design pipeline stage -- so this pins the new
+# quick-action, follow-up, and assignment routes actually persist.
+# ---------------------------------------------------------------------------
+def test_quick_action_updates_followup_fields_without_touching_stage(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    csrf_token = _login_as_employee(app, client)
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000010", stage="consultation_scheduled")
+
+    response = client.post(
+        "/admin/private-requests/PRT-000010/quick-action",
+        json={"action": "mark_contacted"},
+        headers={"X-CSRF-Token": csrf_token},
+    )
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "ok"
+
+    with app.app_context():
+        from app.models.private_trip_request import PrivateTripRequest
+
+        item = db.session.get(PrivateTripRequest, "PRT-000010")
+        assert item.stage == "consultation_scheduled"
+        assert item.customer_response_status == "Contacted"
+        assert item.follow_up_status == "Contacted"
+        assert item.last_contact_at is not None
+
+
+def test_quick_action_rejects_unknown_action(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    csrf_token = _login_as_employee(app, client)
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000011", stage="registered")
+
+    response = client.post(
+        "/admin/private-requests/PRT-000011/quick-action",
+        json={"action": "not_a_real_action"},
+        headers={"X-CSRF-Token": csrf_token},
+    )
+    assert response.status_code == 400
+
+
+def test_update_followup_sets_priority_and_next_followup_date(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    csrf_token = _login_as_employee(app, client)
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000012", stage="registered")
+
+    response = client.post(
+        "/admin/private-requests/PRT-000012/followup",
+        data={"csrf_token": csrf_token, "priority": "High", "follow_up_due_date": "2026-09-01", "channel": "whatsapp"},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        from app.models.private_trip_request import PrivateTripRequest
+
+        item = db.session.get(PrivateTripRequest, "PRT-000012")
+        assert item.priority == "High"
+        assert item.follow_up_due_date == date(2026, 9, 1)
+        assert item.channel == "whatsapp"
+
+
+def test_assign_requires_assign_work_permission(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    csrf_token = _login_as(app, client, role="agent")
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000013", stage="registered")
+
+    response = client.post(
+        "/admin/private-requests/PRT-000013/assign",
+        data={"csrf_token": csrf_token, "assigned_to_user_id": ""},
+    )
+    assert response.status_code == 403
+
+
+def test_manager_can_assign_a_private_request_to_an_employee(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    csrf_token = _login_as(app, client, role="manager")
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000014", stage="registered")
+        from app.models.user import User
+
+        employee = User(username="employee-1", full_name="Sales Person", password_hash="x", role="sales", is_active=True)
+        db.session.add(employee)
+        db.session.commit()
+        employee_id = employee.id
+
+    response = client.post(
+        f"/admin/private-requests/PRT-000014/assign",
+        data={"csrf_token": csrf_token, "assigned_to_user_id": str(employee_id), "assignment_reason": "New request"},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        from app.models.private_trip_request import PrivateTripRequest
+
+        item = db.session.get(PrivateTripRequest, "PRT-000014")
+        assert item.assigned_to_user_id == employee_id
+        assert item.assigned_to == "Sales Person"
+
+    detail = client.get("/admin/private-requests/PRT-000014").get_data(as_text=True)
+    assert "Sales Person" in detail
+
+
+def test_detail_page_renders_employee_followup_panel(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    _login_as_employee(app, client)
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000015", stage="registered")
+
+    body = client.get("/admin/private-requests/PRT-000015").get_data(as_text=True)
+    assert "Employee Follow-up" in body
+    assert "Mark Customer Contacted" in body
+    assert "Waiting for Customer" in body
+
+
 if __name__ == "__main__":  # pragma: no cover
     import unittest
 

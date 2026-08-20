@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import math
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import or_
 
 from app.extensions import db
 from app.models import BookingTransaction, Lead, PrivateTripRequest, Traveler, Trip, TripBooking
 from app.models.booking_transaction import ENTRY_PAYMENT, SOURCE_PRIVATE_TRIP_DEPOSIT
-from app.security import current_user_id, employee_session_required
+from app.security import current_user, current_user_id, employee_session_required, has_permission
+from app.services.assignments import active_assignees, apply_assignment, assignment_history, resolve_user_id
 from services.crm.system_services.private_trips import (
     PRIVATE_BUDGET_CURRENCIES,
     PRIVATE_REQUEST_STAGES,
@@ -209,7 +210,90 @@ def detail(request_id: str):
         service_types=PRIVATE_SERVICE_TYPES,
         scopes=PRIVATE_TRIP_SCOPES,
         currencies=PRIVATE_BUDGET_CURRENCIES,
+        employees=active_assignees(),
+        can_assign=has_permission("assign_work"),
+        assigned_user=item.assigned_user,
+        assigned_history=assignment_history("private_trip_request", item.request_id),
     )
+
+
+@private_requests_bp.route("/<string:request_id>/assign", methods=["POST"])
+@employee_session_required
+def assign(request_id: str):
+    if not has_permission("assign_work"):
+        abort(403)
+    item = db.get_or_404(PrivateTripRequest, request_id)
+    try:
+        new_user_id = resolve_user_id(request.form.get("assigned_to_user_id"))
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("private_requests.detail", request_id=item.request_id))
+    changed = apply_assignment(
+        item,
+        resource_type="private_trip_request",
+        resource_id=item.request_id,
+        new_user_id=new_user_id,
+        actor=current_user(),
+        reason=str(request.form.get("assignment_reason") or "").strip(),
+    )
+    if changed:
+        db.session.commit()
+        flash(f"{item.request_id} assignment updated.", "success")
+    return redirect(url_for("private_requests.detail", request_id=item.request_id))
+
+
+@private_requests_bp.route("/<string:request_id>/followup", methods=["POST"])
+@employee_session_required
+def update_followup(request_id: str):
+    item = db.get_or_404(PrivateTripRequest, request_id)
+    priority = str(request.form.get("priority") or "").strip()
+    if priority in {"High", "Medium", "Low"}:
+        item.priority = priority
+    item.follow_up_due_date = _parse_date(request.form.get("follow_up_due_date")) or item.follow_up_due_date
+    item.channel = str(request.form.get("channel") or item.channel or "").strip() or item.channel
+    db.session.commit()
+    flash(f"{item.request_id} follow-up details updated.", "success")
+    return redirect(url_for("private_requests.detail", request_id=item.request_id))
+
+
+@private_requests_bp.route("/<string:request_id>/quick-action", methods=["POST"])
+@employee_session_required
+def quick_action(request_id: str):
+    item = db.get_or_404(PrivateTripRequest, request_id)
+    data = request.get_json(silent=True) or request.form.to_dict()
+    action = str(data.get("action") or "").strip()
+    now = datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None)
+
+    # Deliberately does not touch `stage` -- that's the consultation/deposit/
+    # design pipeline milestone (moved via update_stage, its own state
+    # machine), while these track whether an employee is actively on top of
+    # the request, same distinction as leads.py's quick_action but without
+    # reusing its lead-stage-transition semantics, which do not apply here.
+    action_map = {
+        "mark_contacted": {
+            "follow_up_status": "Contacted",
+            "current_step": "Follow up on private trip details",
+            "customer_response_status": "Contacted",
+            "last_contact_at": now,
+        },
+        "waiting_customer": {
+            "follow_up_status": "Awaiting customer reply",
+            "current_step": "Wait for customer response",
+            "customer_response_status": "Waiting Customer",
+        },
+    }
+    if action not in action_map:
+        return jsonify({"error": "Invalid quick action"}), 400
+
+    patch = action_map[action]
+    item.follow_up_status = patch.get("follow_up_status", item.follow_up_status)
+    item.current_step = patch.get("current_step", item.current_step)
+    item.customer_response_status = patch.get("customer_response_status", item.customer_response_status)
+    item.last_contact_at = patch.get("last_contact_at", item.last_contact_at)
+    if data.get("follow_up_due_date"):
+        item.follow_up_due_date = _parse_date(data.get("follow_up_due_date"))
+    db.session.commit()
+    return jsonify({"status": "ok"})
 
 
 @private_requests_bp.route("/<string:request_id>/stage", methods=["POST"])

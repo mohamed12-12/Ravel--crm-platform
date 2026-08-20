@@ -24,6 +24,7 @@ const els = {
   phoneInput: document.getElementById("phone-input"),
   submitIntakeBtn: document.getElementById("submit-intake-btn"),
   quickActions: document.getElementById("quick-actions"),
+  tripTypePicker: document.getElementById("trip-type-picker"),
 };
 
 async function api(path, options = {}) {
@@ -220,7 +221,19 @@ function renderSession(session) {
   els.messageInput.placeholder = messagePlaceholder(session, runtimeMode);
   els.sendBtn.disabled = state.messagePending || (!canChat && !hasActiveHandoff) || isCompleted;
   renderQuickActions(session);
+  renderTripTypePicker(session, { isGeminiMode, isToolCallingMode, isCompleted });
   renderPassportUpload(session);
+}
+
+function renderTripTypePicker(session, { isGeminiMode, isToolCallingMode, isCompleted }) {
+  if (!els.tripTypePicker) return;
+  // Only offered on the very first turn, before the customer has said
+  // anything -- once a message exists (button click or typed text), trip
+  // type/private-trip intent is already resolved from it, so re-showing
+  // the picker after that would just be a redundant, confusing prompt.
+  const hasUserMessage = (session.messages || []).some((message) => message.role === "user");
+  const shouldShow = (isGeminiMode || isToolCallingMode) && !hasUserMessage && !isCompleted;
+  els.tripTypePicker.hidden = !shouldShow;
 }
 
 function messagePlaceholder(session, runtimeMode = "deterministic") {
@@ -541,6 +554,25 @@ els.quickActions?.addEventListener("click", async (event) => {
     renderSession(data.session);
   } catch (err) {
     alert(err.message);
+  }
+});
+
+els.tripTypePicker?.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-reply]");
+  if (!button || !state.sessionId || state.messagePending) return;
+  state.messagePending = true;
+  els.tripTypePicker.hidden = true;
+  try {
+    const data = await api(`/api/session/${state.sessionId}/message`, {
+      method: "POST",
+      body: JSON.stringify({ text: button.dataset.reply }),
+    });
+    renderSession(data.session);
+  } catch (err) {
+    els.tripTypePicker.hidden = false;
+    alert(err.message);
+  } finally {
+    state.messagePending = false;
   }
 });
 

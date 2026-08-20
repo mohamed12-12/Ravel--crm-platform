@@ -75,6 +75,83 @@
     </aside>
 </div>
 
+<div class="grid" style="margin-top:1rem">
+    <section class="panel">
+        <h2>Employee Follow-up</h2>
+        <div class="facts">
+            <div class="fact"><span>Next Action</span><strong>{{ item.current_step or 'Review request' }}</strong></div>
+            <div class="fact"><span>Assigned Employee</span><strong>{{ assigned_user.display_name if assigned_user else (item.assigned_to or 'Unassigned') }}</strong></div>
+            <div class="fact"><span>Priority</span><strong>{{ item.priority or 'Medium' }}</strong></div>
+            <div class="fact"><span>Next Follow-up</span><strong>{{ item.follow_up_due_date or 'Not scheduled' }}</strong></div>
+            <div class="fact"><span>Last Customer Contact</span><strong>{{ item.last_contact_at or 'No employee contact recorded' }}</strong></div>
+            <div class="fact"><span>Customer Response</span><strong>{{ item.customer_response_status or item.follow_up_status or 'Open' }}</strong></div>
+            <div class="fact"><span>Channel</span><strong>{{ item.channel or 'Unknown' }}</strong></div>
+        </div>
+
+        <form class="form-grid" method="post" action="{{ url_for('private_requests.update_followup', request_id=item.request_id) }}" style="margin-top:1rem">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label>Priority
+                <select name="priority">
+                    {% for p in ['High', 'Medium', 'Low'] %}
+                    <option value="{{ p }}" {% if item.priority == p %}selected{% endif %}>{{ p }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>Next Follow-up Date
+                <input type="date" name="follow_up_due_date" value="{{ item.follow_up_due_date or '' }}">
+            </label>
+            <label>Channel
+                <input type="text" name="channel" value="{{ item.channel or '' }}" placeholder="e.g. whatsapp, web">
+            </label>
+            <div class="full">
+                <button type="submit">Save Follow-up</button>
+            </div>
+        </form>
+    </section>
+
+    <aside class="panel">
+        <h2>Actions</h2>
+        <div style="display:grid;gap:.5rem">
+            <button type="button" onclick="runPrivateRequestQuickAction('mark_contacted')">Mark Customer Contacted</button>
+            <button type="button" onclick="runPrivateRequestQuickAction('waiting_customer')">Waiting for Customer</button>
+        </div>
+
+        {% if can_assign %}
+        <form method="post" action="{{ url_for('private_requests.assign', request_id=item.request_id) }}" style="margin-top:1rem">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label>Assigned Employee
+                <select name="assigned_to_user_id">
+                    <option value="">Unassigned</option>
+                    {% for employee in employees %}
+                    <option value="{{ employee.id }}" {% if item.assigned_to_user_id == employee.id %}selected{% endif %}>{{ employee.display_name }} · {{ employee.role }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            {% if item.assigned_to and not assigned_user %}<p class="muted" style="font-size:.75rem">Legacy owner text: {{ item.assigned_to }}. Choose an employee to link it.</p>{% endif %}
+            <label style="margin-top:.5rem">Reassignment Reason
+                <input type="text" name="assignment_reason" placeholder="Optional">
+            </label>
+            <div style="margin-top:.5rem">
+                <button type="submit">Save Assignment</button>
+            </div>
+        </form>
+        {% endif %}
+
+        {% if assigned_history %}
+        <div style="margin-top:1rem;display:grid;gap:.4rem">
+            {% for entry in assigned_history %}
+            <div class="muted" style="font-size:.75rem;border:1px solid var(--border);border-radius:6px;padding:.5rem .6rem">
+                <strong style="color:var(--text-main)">{{ entry.new_user.display_name if entry.new_user else 'Unassigned' }}</strong>
+                from {{ entry.previous_user.display_name if entry.previous_user else 'Unassigned' }}
+                · {{ entry.created_at.strftime('%d %b %Y %H:%M') if entry.created_at else 'Unknown time' }}
+                {% if entry.reason %} · {{ entry.reason }}{% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </aside>
+</div>
+
 {% if not item.converted_booking_id and item.stage == 'paid' %}
 <section class="panel" style="margin-top:1rem">
     <h2>Convert To Booking</h2>
@@ -113,4 +190,27 @@
     <p style="color:var(--text-muted)">Conversion is available once this request reaches the <strong>paid</strong> stage (currently <strong>{{ item.stage }}</strong>).</p>
 </section>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function runPrivateRequestQuickAction(action) {
+    fetch('{{ url_for("private_requests.quick_action", request_id=item.request_id) }}', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': window.CRM_CSRF_TOKEN
+        },
+        body: JSON.stringify({ action })
+    }).then(r => r.json()).then(d => {
+        if (d.status === 'ok') {
+            location.reload();
+        } else {
+            alert(d.error || 'Something went wrong completing this action. Please try again.');
+        }
+    }).catch(() => alert('Something went wrong completing this action. Please try again.'));
+}
+</script>
 {% endblock %}

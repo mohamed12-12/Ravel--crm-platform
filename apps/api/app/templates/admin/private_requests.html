@@ -139,6 +139,7 @@
             {% else %}
             <span class="sla sla-ok">On track</span>
             {% endif %}
+            {% if item.priority == 'High' %}<span class="sla sla-late">High priority</span>{% endif %}
         </a>
         {% else %}
         <div class="request-meta">No requests in this stage.</div>

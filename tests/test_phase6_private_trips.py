@@ -10,6 +10,7 @@ from unittest.mock import Mock
 from services.ai_agent.ai_agent_app.agent.session_flow import SessionState
 from services.ai_agent.ai_agent_app.agent.tool_calling_runtime import ToolCallingSessionRuntime
 from tests.test_booking_ledger import BookingLedgerTests as _BookingLedgerTests
+from tests.test_golden_transcript_regressions import NEW_TRAVELER_WRITE, _write_results_by_action
 from tests.test_payment_write_hardening import _create_temp_app
 from tests.test_phase12_booking_state import _send, runtime as runtime
 
@@ -303,6 +304,85 @@ def test_private_trip_unclear_answer_retry_copy_renders_in_arabic(
     reply = session.messages[-1]["text"]
     assert "الخدمة" in reply, reply
     assert "What private service" not in reply
+
+
+# ---------------------------------------------------------------------------
+# Live-transcript bug: a brand-new traveler ("جاد ماجد العوينه") who opened
+# with "رحله خاصه" (private trip) still ended up with a Lead created (LD00004)
+# as a side effect of identity intake (name/nationality/birthday ->
+# save_new_traveler_lead), even though private trip requests are their own
+# CRM record (private_trip_requests, saved separately once the private-trip
+# fields are collected) and must never also leave an unworked duplicate in
+# the regular Leads pipeline.
+# ---------------------------------------------------------------------------
+def test_new_traveler_private_trip_intake_saves_traveler_only_no_lead(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    runtime._write_executor.execute.side_effect = _write_results_by_action(
+        create_traveler=NEW_TRAVELER_WRITE,
+        create_private_trip_request={
+            "result_id": "PRT-000001",
+            "executed": True,
+            "write_result": {"private_trip_request": {"request_id": "PRT-000001"}},
+            "write_result_contract": {
+                "status": "created",
+                "executed": True,
+                "reused": False,
+                "record_type": "private_trip_request",
+                "record_id": "PRT-000001",
+            },
+            "session_update": {"private_trip_request_id": "PRT-000001"},
+        },
+        create_handoff={
+            "result_id": "H-00000002",
+            "executed": True,
+            "write_result": {"handoff_case": {"handoff_id": "H-00000002"}},
+            "write_result_contract": {
+                "status": "created",
+                "executed": True,
+                "reused": False,
+                "record_type": "handoff",
+                "record_id": "H-00000002",
+            },
+            "session_update": {"handoff_state": "handed_off"},
+        },
+    )
+    session = runtime.create_session()
+    session = _send(runtime, "عايز رحلة خاصة", session)
+    assert session.private_trip_active is True
+
+    for text in ("01270482380", "Maged Samir Adly", "Egyptian", "28/4/2006"):
+        session = _send(runtime, text, session)
+
+    reply = session.messages[-1]["text"]
+    assert session.new_traveler_lead_saved is True
+    assert session.stage == "trip_type_required"
+    assert "تم حفظ بياناتك" in reply
+    assert "LD0" not in reply
+    assert "طلبك برقم" not in reply
+
+    actions_so_far = [call.kwargs["action"] for call in runtime._write_executor.execute.call_args_list]
+    assert actions_so_far == ["create_traveler"]
+    assert ToolCallingSessionRuntime._linked_ids(session)["lead_id"] == ""
+    final_result = session.final_result if isinstance(session.final_result, dict) else {}
+    assert not final_result.get("lead_id")
+
+    for answer, expected_stage in (
+        ("Local", "private_service_type_required"),
+        ("3", "private_destination_required"),
+        ("Siwa", "private_dates_required"),
+        ("flexible dates", "private_party_size_required"),
+        ("4 travelers", "private_budget_required"),
+    ):
+        session = _send(runtime, answer, session)
+        assert session.stage == expected_stage
+
+    session = _send(runtime, "around 50000 EGP", session)
+
+    assert session.private_trip_request_id == "PRT-000001"
+    actions = [call.kwargs["action"] for call in runtime._write_executor.execute.call_args_list]
+    assert actions == ["create_traveler", "create_private_trip_request", "create_handoff"]
+    assert "create_lead" not in actions
 
 
 def test_private_trip_destination_clarification_question_is_not_captured_as_the_destination(

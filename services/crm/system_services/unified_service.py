@@ -3562,6 +3562,7 @@ class UnifiedCRMService:
                 self._migrate_trips_room_columns(connection)
                 self._migrate_trip_booking_passport_columns(connection)
                 self._migrate_lead_columns(connection)
+                self._migrate_private_trip_request_followup_columns(connection)
                 self._migrate_idempotency_columns(connection)
                 self._migrate_interaction_message_key_unique_index(connection)
                 self._migrate_booking_transaction_private_columns(connection)
@@ -3612,6 +3613,16 @@ class UnifiedCRMService:
                 stage TEXT NOT NULL DEFAULT 'registered',
                 stage_changed_at TEXT NOT NULL,
                 assigned_to_user_id INTEGER,
+                assigned_to TEXT,
+                assigned_at TEXT,
+                assigned_by_user_id INTEGER,
+                priority TEXT DEFAULT 'Medium',
+                current_step TEXT,
+                channel TEXT,
+                follow_up_status TEXT,
+                follow_up_due_date TEXT,
+                last_contact_at TEXT,
+                customer_response_status TEXT,
                 consultation_due_at TEXT,
                 consultation_done_at TEXT,
                 design_due_at TEXT,
@@ -3923,6 +3934,34 @@ class UnifiedCRMService:
             connection.execute("ALTER TABLE leads ADD COLUMN passport_status TEXT")
         if 'requires_guardian_approval' not in existing_cols:
             connection.execute("ALTER TABLE leads ADD COLUMN requires_guardian_approval INTEGER")
+
+    @staticmethod
+    def _migrate_private_trip_request_followup_columns(connection: sqlite3.Connection) -> None:
+        """Adds employee follow-up/assignment columns to a private_trip_requests
+        table created before those columns existed (CREATE TABLE IF NOT EXISTS
+        in _ensure_private_trip_requests_table only covers brand-new DBs).
+        """
+        try:
+            rows = connection.execute("PRAGMA table_info(private_trip_requests)").fetchall()
+        except Exception:
+            return
+        if not rows:
+            return
+        existing_cols = {row[1] for row in rows}
+        for column, ddl in (
+            ("assigned_to", "TEXT"),
+            ("assigned_at", "TEXT"),
+            ("assigned_by_user_id", "INTEGER"),
+            ("priority", "TEXT DEFAULT 'Medium'"),
+            ("current_step", "TEXT"),
+            ("channel", "TEXT"),
+            ("follow_up_status", "TEXT"),
+            ("follow_up_due_date", "TEXT"),
+            ("last_contact_at", "TEXT"),
+            ("customer_response_status", "TEXT"),
+        ):
+            if column not in existing_cols:
+                connection.execute(f"ALTER TABLE private_trip_requests ADD COLUMN {column} {ddl}")
 
     @staticmethod
     def _migrate_idempotency_columns(connection: sqlite3.Connection) -> None:

@@ -40,6 +40,22 @@ class PrivateTripRequest(db.Model):
     stage = db.Column(db.String(40), nullable=False, default="registered", index=True)
     stage_changed_at = db.Column(db.DateTime, nullable=False, default=utc_now)
     assigned_to_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), index=True)
+    assigned_to = db.Column(db.String(100))
+    assigned_at = db.Column(db.DateTime)
+    assigned_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), index=True)
+
+    # Employee follow-up bookkeeping -- distinct from `stage` (the
+    # consultation/design/deposit pipeline milestone): these track whether an
+    # employee is actively on top of the request, mirroring leads.py's
+    # equivalent fields so private requests get the same "Employee
+    # Follow-up" panel leads already have.
+    priority = db.Column(db.String(50), default="Medium")
+    current_step = db.Column(db.String(200))
+    channel = db.Column(db.String(50))
+    follow_up_status = db.Column(db.String(100))
+    follow_up_due_date = db.Column(db.Date)
+    last_contact_at = db.Column(db.DateTime)
+    customer_response_status = db.Column(db.String(100))
 
     consultation_due_at = db.Column(db.DateTime)
     consultation_done_at = db.Column(db.DateTime)
@@ -62,6 +78,7 @@ class PrivateTripRequest(db.Model):
     traveler = db.relationship("Traveler", foreign_keys=[traveler_id])
     lead = db.relationship("Lead", foreign_keys=[lead_id])
     assigned_user = db.relationship("User", foreign_keys=[assigned_to_user_id])
+    assigned_by_user = db.relationship("User", foreign_keys=[assigned_by_user_id])
     converted_booking = db.relationship("TripBooking", foreign_keys=[converted_booking_id])
 
     def __init__(self, **kwargs):
@@ -127,6 +144,16 @@ class PrivateTripRequest(db.Model):
             "stage": self.stage,
             "stage_changed_at": self.stage_changed_at.isoformat() if self.stage_changed_at else None,
             "assigned_to_user_id": self.assigned_to_user_id,
+            "assigned_to": self.assigned_to,
+            "assigned_at": self.assigned_at.isoformat() if self.assigned_at else None,
+            "assigned_by_user_id": self.assigned_by_user_id,
+            "priority": self.priority,
+            "current_step": self.current_step,
+            "channel": self.channel,
+            "follow_up_status": self.follow_up_status,
+            "follow_up_due_date": self.follow_up_due_date.isoformat() if self.follow_up_due_date else None,
+            "last_contact_at": self.last_contact_at.isoformat() if self.last_contact_at else None,
+            "customer_response_status": self.customer_response_status,
             "consultation_due_at": self.consultation_due_at.isoformat() if self.consultation_due_at else None,
             "consultation_done_at": self.consultation_done_at.isoformat() if self.consultation_done_at else None,
             "design_due_at": self.design_due_at.isoformat() if self.design_due_at else None,
