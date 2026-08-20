@@ -754,3 +754,110 @@ def test_direct_booking_bypass_remains_blocked():
 
     assert response.status_code == 409
     assert response.get_json()["write_result_contract"]["status"] == "blocked"
+
+
+def _seed_two_leads(app, db):
+    """One lead from the current chat intake, one unrelated historical lead for
+    the SAME traveler. Reconciliation must only ever touch the first."""
+    from app.models import Lead
+
+    with app.app_context():
+        db.session.add(
+            Lead(
+                lead_id="LD-INTAKE-1",
+                customer_name="Postgres Bridge Traveler",
+                raw_phone="01012345678",
+                traveler_id="TRPG001",
+                lead_stage="New Lead",
+            )
+        )
+        db.session.add(
+            Lead(
+                lead_id="LD-HISTORICAL-1",
+                customer_name="Postgres Bridge Traveler",
+                raw_phone="01012345678",
+                traveler_id="TRPG001",
+                lead_stage="Qualified",
+            )
+        )
+        db.session.commit()
+
+
+def test_handoff_lead_stage_override_reconciles_only_the_named_lead(bridge_app):
+    """PostgresAgentBridgeService.create_handoff_case only assigns
+    lead.lead_stage when lead_stage_override is passed (its SQLite sibling
+    defaults to "Needs Review" instead) -- and GeminiWriteToolExecutor never
+    forwarded the parameter at all, so on the production Postgres path a
+    private-trip handoff left its intake Lead sitting in the ordinary pipeline
+    as an unworked "New Lead". Overriding must move exactly that one lead and
+    nothing else.
+    """
+    app, db = bridge_app
+    client = app.test_client()
+    _seed_two_leads(app, db)
+    app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://staging/redacted"
+    from app.models import Lead
+
+    response = client.post(
+        "/api/crm/agent/write",
+        json={
+            "action": "create_handoff",
+            "payload": {
+                "traveler_id": "TRPG001",
+                "lead_id": "LD-INTAKE-1",
+                "reason_code": "private_trip_consultation",
+                "reason_text": "Private/custom trip request requires human consultation and pricing.",
+                "lead_stage_override": "Handoff Needed",
+                "update_lead": True,
+            },
+            "session_context": {"session_id": "handoff-override-pg-1", "language": "en"},
+        },
+    )
+
+    assert response.status_code == 200, response.get_json()
+    with app.app_context():
+        intake = db.session.get(Lead, "LD-INTAKE-1")
+        historical = db.session.get(Lead, "LD-HISTORICAL-1")
+        # Reconciled, not deleted: the row, its traveler link and its history
+        # all survive, it just leaves the ordinary pipeline.
+        assert intake is not None
+        assert intake.lead_stage == "Handoff Needed"
+        assert intake.handoff_required is True
+        assert str(intake.handoff_id or "").strip() != ""
+        assert intake.traveler_id == "TRPG001"
+        # Untouched historical CRM data.
+        assert historical.lead_stage == "Qualified"
+        assert not historical.handoff_required
+        assert not (historical.handoff_id or "")
+
+
+def test_handoff_without_a_stage_override_leaves_the_lead_stage_untouched(bridge_app):
+    """The new parameter is strictly opt-in: every pre-existing create_handoff
+    caller passes no override and must keep its exact prior behaviour."""
+    app, db = bridge_app
+    client = app.test_client()
+    _seed_two_leads(app, db)
+    app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://staging/redacted"
+    from app.models import Lead
+
+    response = client.post(
+        "/api/crm/agent/write",
+        json={
+            "action": "create_handoff",
+            "payload": {
+                "traveler_id": "TRPG001",
+                "lead_id": "LD-INTAKE-1",
+                "reason_code": "customer_requested_human",
+                "reason_text": "Customer asked for an agent.",
+                "user_requested_human": True,
+            },
+            "session_context": {"session_id": "handoff-nooverride-pg-1", "language": "en"},
+        },
+    )
+
+    assert response.status_code == 200, response.get_json()
+    with app.app_context():
+        intake = db.session.get(Lead, "LD-INTAKE-1")
+        assert intake.lead_stage == "New Lead"
+        # The handoff itself is still recorded against the lead as before.
+        assert intake.handoff_required is True

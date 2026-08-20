@@ -148,6 +148,17 @@ class SessionState:
     booking_confirmation_requested: bool = False
     booking_confirmed: bool = False
     new_traveler_lead_saved: bool = False
+    # The ordinary Lead THIS session's own new-traveler intake created, and
+    # whether it has since been reconciled because the same intake turned out
+    # to be a private-trip request.
+    #
+    # Deliberately NOT read from _linked_ids()["lead_id"]: that also resolves
+    # session.resumed_lead_id, i.e. a pre-existing lead the customer chose to
+    # continue. Reconciling on that value would mutate historical CRM data
+    # this conversation did not create. Only _execute_new_traveler_lead ever
+    # writes intake_lead_id, and only on a verified successful create_lead.
+    intake_lead_id: str = ""
+    intake_lead_reconciled: bool = False
     # Passport fields (populated for international trips)
     passport_name: str = ""
     passport_number: str = ""

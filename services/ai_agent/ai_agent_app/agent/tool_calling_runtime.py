@@ -5673,6 +5673,12 @@ class ToolCallingSessionRuntime:
 
         lead_id = str(result.get("result_id") or "").strip()
         session.new_traveler_lead_saved = True
+        # The ONE place intake_lead_id is ever written: a verified-successful
+        # create_lead that this conversation's own identity intake caused. It is
+        # the reconciliation target if the customer later turns out to want a
+        # private trip -- see _reconcilable_intake_lead_id for why this cannot
+        # be read back out of _linked_ids instead.
+        session.intake_lead_id = lead_id
         self._apply_result(session, {"write_results": [result], "tool_requests": []})
         # The response guard validates any "saved" claim against session.final_result,
         # so record the lead id there or the honest confirmation gets blocked.
@@ -7530,11 +7536,41 @@ class ToolCallingSessionRuntime:
             currency = "EGP"
         return amount, currency
 
+    @staticmethod
+    def _reconcilable_intake_lead_id(session: SessionState) -> str:
+        """The ordinary Lead this conversation's own intake created and that has
+        not been reconciled yet, or "".
+
+        Business invariant: a traveler whose final intent is a private-trip
+        request must not leave behind an ordinary Lead representing the same
+        acquisition/intake event. `_execute_new_traveler_lead` already prevents
+        the Lead when private intent is known BEFORE identity intake; this
+        covers the reverse ordering, where the Lead is already persisted by the
+        time the customer says "private trip".
+
+        Reads session.intake_lead_id and nothing else. _linked_ids()["lead_id"]
+        deliberately also resolves session.resumed_lead_id -- a pre-existing
+        lead the customer chose to continue -- and reconciling on that value
+        would mutate historical CRM data this conversation never created.
+        """
+
+        if session.intake_lead_reconciled:
+            return ""
+        return str(session.intake_lead_id or "").strip()
+
     def _execute_private_trip_request(self, session: SessionState, session_context: dict[str, Any]) -> bool:
         linked_ids = self._linked_ids(session)
+        # intake_lead_id is the fallback, not the primary source, for the same
+        # reason _linked_ids prefers live write results: it is only set for a
+        # lead this session created, whereas linked_ids also covers a resumed
+        # lead the customer explicitly chose to continue. Either way the
+        # private request should point at the lead it supersedes -- without the
+        # fallback that link was silently dropped whenever a later write had
+        # already replaced final_result wholesale.
+        lead_id = linked_ids["lead_id"] or str(session.intake_lead_id or "").strip()
         payload = {
             "traveler_id": linked_ids["traveler_id"],
-            "lead_id": linked_ids["lead_id"],
+            "lead_id": lead_id,
             "service_type": session.private_service_type,
             "trip_scope": normalize_private_scope(session.trip_type) or session.trip_type,
             "destination": session.private_destination,
@@ -7577,9 +7613,31 @@ class ToolCallingSessionRuntime:
             return False
         session.private_trip_request_id = request_id
         self._apply_result(session, {"write_results": [result], "tool_requests": []})
+        # Reconcile the ordinary intake Lead, if this conversation created one
+        # before the customer said "private trip". Deliberately reached only
+        # AFTER the private request is confirmed persisted: a failed request
+        # must leave the Lead exactly as it was.
+        #
+        # It rides on the handoff write that already targets this same lead_id
+        # and already stamps handoff_required/handoff_id on it, rather than
+        # issuing a separate update_lead_stage. That keeps the stage change in
+        # the SAME transaction as the handoff insert in both backends (so there
+        # is no window where the Lead claims a handoff that does not exist, or
+        # vice versa), adds no second CRM round-trip, and cannot touch any lead
+        # the handoff was not already going to touch.
+        #
+        # "Handoff Needed" is the stage apps/api/app/routes/leads.py:899 already
+        # uses when a handoff is raised for a lead, it is a canonical
+        # PIPELINE_STAGES entry with legal transitions out of it (so staff are
+        # not trapped), and it is NOT in BOOKING_DRAFT_STAGE_ALIASES -- so it
+        # cannot trip create_handoff's sibling auto_create_booking_from_lead
+        # into inventing a booking. Nothing is deleted: the row, its traveler
+        # link and its history survive, and the private request stores the
+        # lead_id for the reverse reference.
+        reconcile_lead_id = self._reconcilable_intake_lead_id(session)
         handoff_payload = {
             "traveler_id": linked_ids["traveler_id"],
-            "lead_id": linked_ids["lead_id"],
+            "lead_id": lead_id,
             "flow_key": "private_trip_request",
             "reason_code": "private_trip_consultation",
             "reason_text": "Private/custom trip request requires human consultation and pricing.",
@@ -7592,14 +7650,108 @@ class ToolCallingSessionRuntime:
             "metadata": {"private_trip_request_id": request_id, "destination": session.private_destination},
             "update_lead": True,
         }
+        if reconcile_lead_id and reconcile_lead_id == lead_id:
+            # Only when the lead the handoff is already updating IS this
+            # session's own unreconciled intake lead. If they differ, the
+            # handoff is attached to something else (e.g. a resumed historical
+            # lead) and must keep its existing, unchanged behaviour.
+            handoff_payload["lead_stage_override"] = "Handoff Needed"
         handoff_result = self._write_executor.execute(
             action="create_handoff",
             payload=handoff_payload,
             session_context={**session_context, "reason_code": "private_trip_consultation"},
         )
-        if isinstance(handoff_result, dict) and str(handoff_result.get("result_id") or "").strip():
+        handoff_id = str((handoff_result or {}).get("result_id") or "").strip() if isinstance(handoff_result, dict) else ""
+        # A DEDUPLICATED handoff returns an existing handoff_id with
+        # executed=False, and both backends' create_handoff_case return from the
+        # dedupe branch BEFORE their `if update_lead and lead_id:` block ever
+        # runs -- so a reused handoff carries no lead update at all, and the
+        # stage override silently does nothing. Reusing a handoff is normal
+        # (same traveler, same reason, e.g. a second private request), so this
+        # is not an error path; it just means the stage has to be written
+        # explicitly instead of riding along.
+        handoff_created = bool(handoff_id) and bool(handoff_result.get("executed", True))
+        if handoff_id:
             self._apply_result(session, {"write_results": [handoff_result], "tool_requests": []})
+        if reconcile_lead_id and reconcile_lead_id == lead_id:
+            if handoff_created:
+                session.intake_lead_reconciled = True
+                agent_logger.info(
+                    "Intake lead reconciled to a private trip request session=%s lead=%s request=%s",
+                    session.id,
+                    reconcile_lead_id,
+                    request_id,
+                )
+            elif self._reconcile_intake_lead_stage(session, session_context, reconcile_lead_id):
+                session.intake_lead_reconciled = True
+                agent_logger.info(
+                    "Intake lead reconciled by explicit stage update (handoff reused or failed) "
+                    "session=%s lead=%s request=%s",
+                    session.id,
+                    reconcile_lead_id,
+                    request_id,
+                )
+            else:
+                # The private request IS persisted (verified above), so the
+                # customer is told the truth about it -- but the Lead is still
+                # sitting in the ordinary pipeline. Deliberately left unmarked
+                # so nothing claims the reconciliation happened, and logged at
+                # ERROR with both ids because only staff can finish it now.
+                agent_logger.error(
+                    "Private trip request %s saved but intake lead %s was NOT reconciled session=%s",
+                    request_id,
+                    reconcile_lead_id,
+                    session.id,
+                )
         return True
+
+    def _reconcile_intake_lead_stage(
+        self,
+        session: SessionState,
+        session_context: dict[str, Any],
+        lead_id: str,
+    ) -> bool:
+        """Move one specific intake Lead out of the ordinary pipeline explicitly.
+
+        The fallback for when the private-trip handoff could not carry the stage
+        change itself (a deduplicated handoff never runs its own lead update).
+        Uses the existing update_lead_stage write action -- no new write path,
+        no new validation -- and reports success only when that action's own
+        verified-write contract says the stage really persisted, so a failure
+        here can never be mistaken for a completed reconciliation.
+
+        Never raises: the private request this reconciles for is already saved
+        and the customer must still be told so.
+        """
+
+        if not lead_id:
+            return False
+        try:
+            result = self._write_executor.execute(
+                action="update_lead_stage",
+                payload={
+                    "lead_id": lead_id,
+                    # Same stage the handoff override uses. Not in
+                    # BOOKING_DRAFT_STAGE_ALIASES, so update_lead_stage's own
+                    # auto_create_booking_from_lead call is a no-op and cannot
+                    # invent a booking here.
+                    "requested_stage": "Handoff Needed",
+                    "flow_key": "private_trip_request",
+                    "current_step": "private_trip_request",
+                    # No notes: update_lead_stage OVERWRITES lead.notes rather
+                    # than appending, and the linkage is already recorded on
+                    # both the handoff and the private request itself.
+                },
+                session_context=session_context,
+            )
+        except Exception:
+            agent_logger.exception(
+                "Intake lead stage reconciliation raised session=%s lead=%s",
+                session.id,
+                lead_id,
+            )
+            return False
+        return bool(isinstance(result, dict) and write_result_allows_success(result, "lead"))
 
     def _apply_required_step_capture(self, session: SessionState, text: str) -> bool:
         normalized_text = str(text or "").translate(_DIGIT_TRANSLATION).strip()

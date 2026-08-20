@@ -780,6 +780,17 @@ class GeminiWriteToolExecutor:
                 "session_id": session_context.get("session_id", ""),
             },
             update_lead=self._as_bool(self._value(payload, session_context, "update_lead", "handoff_required"), default=True),
+            # Both backends have accepted lead_stage_override since they were
+            # written, but this executor never forwarded it, so the agent could
+            # not use it at all. That mattered because the two backends differ
+            # when it is absent: UnifiedCRMService (SQLite) falls back to
+            # "Needs Review", while PostgresAgentBridgeService (production)
+            # leaves lead_stage completely untouched. A private-trip handoff
+            # therefore left its intake Lead sitting in the ordinary pipeline
+            # as an unworked "New Lead" in production only. Strictly opt-in:
+            # "" reproduces each backend's prior behaviour exactly, so no
+            # existing caller changes.
+            lead_stage_override=self._value(payload, session_context, "lead_stage_override") or "",
             deduplicate_open=self._as_bool(self._value(payload, session_context, "deduplicate_open"), default=True),
             session_id=str(session_context.get("session_id") or ""),
         )
