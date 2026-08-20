@@ -60,15 +60,21 @@ from services.ai_agent.validation.lexicon import (
     ONLY_OPTION_QUESTION_TERMS,
     OPTION_NUMBER_PREFIX_TERMS,
     OPTION_ORDINAL_TERMS,
+    REQUEST_STATUS_QUESTION_TERMS,
     SELF_SERVICE_HELP_TERMS,
     RESTART_SIGNAL_TERMS,
+    SERVICE_CAPABILITY_QUESTION_TERMS,
     TRIP_DISCOVERY_TERMS,
     TRIP_QUALITY_TERMS,
 )
 from services.ai_agent.validation.validation_rules import CLOSED_LEAD_STAGES, normalize_flight_option, normalize_trip_type
 from services.ai_agent.llm import build_llm_provider
 from services.crm.system_services.trip_pricing import price_for_room_and_currency
-from services.crm.system_services.private_trips import normalize_private_scope, normalize_private_service_type
+from services.crm.system_services.private_trips import (
+    PRIVATE_SERVICE_TYPES,
+    normalize_private_scope,
+    normalize_private_service_type,
+)
 from services.crm.system_services.phone_normalization import normalize_phone_input
 
 
@@ -405,9 +411,22 @@ class ToolCallingSessionRuntime:
         return str(text or "").strip()[:120]
 
     def _opening_message(self) -> str:
+        """The very first message of every session.
+
+        Kept short and bilingual on purpose: it is seeded with
+        message_key="session.opening", which _agent_reply deliberately never
+        sends through the LLM, so whatever is written here is exactly what the
+        customer reads -- and most customers open in Arabic. The Arabic line
+        comes first for that reason. It points at the trip-type buttons the web
+        widget renders directly underneath it on turn 1
+        (web/templates/index.html's #trip-type-picker) while still offering the
+        WhatsApp number, which is what the workflow actually asks for next.
+        """
+
         return (
-            f"Hi, I'm {self.agent_persona_name} from Ravel Traveler! I'd love to help you plan your trip. "
-            "Could you share your WhatsApp number first so I can pull up your profile safely, then we'll get started?"
+            f"أهلاً! أنا {self.agent_persona_name} من Ravel Traveler 👋 "
+            "اختار نوع الرحلة من تحت، أو ابعتلي رقم الواتساب ونبدأ.\n\n"
+            f"Hi! I'm {self.agent_persona_name} 👋 Pick a trip type below, or send your WhatsApp number to start."
         )
 
     def _safe_status(self, raw: str) -> str:
@@ -1125,7 +1144,27 @@ class ToolCallingSessionRuntime:
             context = dict(session_context or self._build_context(session, user_text))
             workflow = context.get("workflow") if isinstance(context.get("workflow"), dict) else {}
             verified = bool(workflow.get("identity_verified") or workflow.get("verified_traveler"))
-            if not verified and message_key.startswith(("trip.reference.", "trip.media.", "workflow.required_step.")):
+            # Blocked pre-verification because these carry real CRM trip facts
+            # (names, dates, prices, media) that must not be reworded by a model
+            # before identity is established.
+            #
+            # `workflow.required_step.` used to be blocked WHOLESALE here, which
+            # meant the entire new-traveler onboarding stretch (name ->
+            # nationality -> birthday) could never be voiced by the persona
+            # layer -- a new customer is unverified by definition, so every one
+            # of those turns shipped as raw scripted copy and read like a form.
+            # Narrowed to just the trip-listing steps: the identity/private-trip
+            # collection prompts contain no traveler or CRM facts at all, and
+            # every rewrite still has to pass _customer_reply_validation_issue
+            # (response guard + leak checks) below before it can reach anyone.
+            trip_fact_bearing_steps = (
+                "workflow.required_step.select_trip",
+                "workflow.required_step.handle_empty_trip_results",
+                "workflow.required_step.search_matching_trips",
+            )
+            if not verified and message_key.startswith(
+                ("trip.reference.", "trip.media.", *trip_fact_bearing_steps)
+            ):
                 return fallback
             context = self._traveler_safe_context(context)
             context["response_contract"] = {
@@ -2068,6 +2107,25 @@ class ToolCallingSessionRuntime:
         return any(phrase in normalized for phrase in TRIP_QUALITY_TERMS)
 
     @classmethod
+    def _is_service_capability_question(cls, text: str) -> bool:
+        """"Do you people actually offer this?" -- a question about what Ravel
+        does as a company, asked instead of answering the pending step.
+
+        Deliberately its own predicate rather than a widening of an existing
+        one: it is not _is_explanation_request ("why do you need that?"), not
+        _is_trip_quality_question ("is this trip any good?"), and not
+        _is_trip_discovery_request ("what trips do you have?") -- it asks
+        whether a whole SERVICE exists. Live 2026-08-20 transcript: asked
+        mid name-collection, it matched none of those, so the only reply the
+        customer got was the name question repeated back word for word.
+        """
+
+        normalized = cls._normalize_trip_reference(text)
+        if not normalized:
+            return False
+        return any(phrase in normalized for phrase in SERVICE_CAPABILITY_QUESTION_TERMS)
+
+    @classmethod
     def _is_identity_question(cls, text: str) -> bool:
         normalized = cls._normalize_trip_reference(text)
         if not normalized:
@@ -2169,6 +2227,7 @@ class ToolCallingSessionRuntime:
             or cls._is_name_step_clarification(text)
             or cls._is_asking_for_known_name(text)
             or cls._is_trip_quality_question(text)
+            or cls._is_service_capability_question(text)
         ):
             return True
         if cls._is_hostile_message(text):
@@ -2198,6 +2257,15 @@ class ToolCallingSessionRuntime:
             or ("الرحلة" if language.startswith("ar") else "the trip")
         )
         step = str(decision.required_step or "")
+        # A "do you offer X?" question is the one interruption shape where the
+        # customer is owed a real ANSWER, not a rephrased version of the pending
+        # question -- this branch is what guarantees they get one even with no
+        # LLM available (see _service_capability_answer). Placed first because
+        # every branch below is only ever a re-ask.
+        if self._is_service_capability_question(clean_text):
+            answer = self._service_capability_answer(session)
+            follow_up = self._backend_required_step_reply(session, decision)
+            return f"{answer}\n\n{follow_up}" if follow_up else answer
         if step == "collect_group_size":
             if self._is_explanation_request(clean_text):
                 if language.startswith("ar"):
@@ -2389,6 +2457,58 @@ class ToolCallingSessionRuntime:
             return any(token in normalized for token in ("continue", "new", "existing", "request", "استمرار", "جديد", "طلب"))
         return bool(language.startswith("ar") == ("".join(ch for ch in candidate if "\u0600" <= ch <= "\u06ff") != ""))
 
+    @staticmethod
+    def _company_capability_facts() -> dict[str, Any]:
+        """What Ravel Traveler offers as a company -- verified, not per-traveler.
+
+        Deliberately contains no CRM data, no prices, no availability and no
+        trip names: it answers "do you do X?" and nothing else. Service types
+        are read from PRIVATE_SERVICE_TYPES (services/crm/system_services/
+        private_trips.py), the same canonical list the private-trip workflow
+        and the CRM admin page validate against, so this can never drift into
+        advertising a service the backend does not accept.
+        """
+
+        return {
+            "local_trips": "Ravel Traveler organizes local trips inside Egypt.",
+            "international_trips": "Ravel Traveler organizes international trips outside Egypt.",
+            "private_trips": "Ravel Traveler arranges fully private, custom-built trips on request.",
+            "private_trip_service_types": [
+                PRIVATE_SERVICE_TYPES[key] for key in sorted(PRIVATE_SERVICE_TYPES)
+            ],
+            "private_request_process": (
+                "A private trip request is collected in this chat and reviewed by the Ravel "
+                "operations team, who then contact the customer to confirm the details."
+            ),
+            "not_covered": (
+                "Prices, availability, dates and any traveler's own records are never stated from "
+                "these facts -- only from a verified lookup."
+            ),
+        }
+
+    def _service_capability_answer(self, session: SessionState) -> str:
+        """One-line, deterministic answer to "do you offer this?".
+
+        Used when no LLM reply is available (provider down, or its draft was
+        rejected by the response guard) so the customer still gets a real
+        answer instead of the pending question repeated at them. Wording
+        deliberately avoids every write-success word in
+        write_response_gating._SUCCESS_WORDS -- it describes what the company
+        does, and must never read as "your request was saved".
+        """
+
+        if session.language.startswith("ar"):
+            return (
+                "أيوه، إحنا بننظم رحلات محلية جوه مصر، ورحلات دولية بره مصر، "
+                "وكمان رحلات خاصة بالكامل حسب طلبك: استشارة، حجوزات بس، برنامج كامل، "
+                "تصميم برنامج بس، أو مرافق رحلة."
+            )
+        return (
+            "Yes, we organize local trips inside Egypt, international trips abroad, and fully "
+            "private trips built around what you want: consultation, bookings only, a full "
+            "package, program design only, or a chaperone."
+        )
+
     def _run_conversational_llm_turn(self, session: SessionState, decision, clean_text: str) -> bool:
         """Give the model one grounded, tool-permitted turn to answer the
         customer's actual message in the current required_step's context,
@@ -2405,14 +2525,22 @@ class ToolCallingSessionRuntime:
         """
         session_context = self._build_context(session, clean_text)
         session_context["workflow_policy"] = decision.to_context()
+        # Without these facts the model has nothing it is ALLOWED to answer a
+        # "do you offer X?" question with -- it is told never to invent Ravel
+        # facts, so the safest output it can produce is the base question
+        # repeated back, which is exactly what the customer got live on
+        # 2026-08-20. These are verified, non-CRM, non-per-traveler facts.
+        session_context["company_capabilities"] = self._company_capability_facts()
         session_context["conversation_turn_guidance"] = (
-            "Answer the customer's actual interruption first. Do not repeat the previous question verbatim. "
+            "Answer the customer's actual interruption first, using company_capabilities when they "
+            "asked what Ravel Traveler offers. Do not repeat the previous question verbatim. "
             "Briefly explain or acknowledge it, then ask only for the one required field. "
             "Never say or imply that this required field has already been recorded, confirmed, or accepted, "
             "and never say or imply that the booking workflow has moved forward -- only the backend can "
             "confirm that, and it has not happened yet this turn. Keep the field itself an open question."
         )
         candidate = ""
+        needs_step_prompt_appended = False
         candidate_media: list[dict[str, Any]] = []
         if isinstance(self._conversation_ai, GeminiAgent):
             try:
@@ -2422,20 +2550,30 @@ class ToolCallingSessionRuntime:
                     conversation_history=session.messages[-12:],
                 )
                 candidate = self._normalize_reply(str(result.get("reply") or ""), session.language)
-                if not self._candidate_is_relevant_to_required_step(candidate, decision, session.language):
-                    candidate = ""
                 # Phase 3B: every other LLM-authored customer-facing reply in
                 # this file (_agent_reply's rewrite path) is checked against
                 # this same guard before it can reach the customer -- this
                 # was the one path that skipped it, so a leak/false
                 # write-success claim from a side-question turn had nothing
                 # to catch it. Reuses the existing guard, not a new one.
-                elif self._customer_reply_validation_issue(
+                #
+                # The safety guard now runs FIRST, and the (non-safety)
+                # relevance check no longer discards the answer: an otherwise
+                # safe reply that simply never mentions the pending field used
+                # to be thrown away wholesale, which is how a genuine answer to
+                # "do you organise private trips?" was replaced by the bare name
+                # question. Keep the answer and append the deterministic step
+                # prompt to it instead -- the customer gets answered AND the
+                # required question is always asked verbatim, so the workflow
+                # cannot be lost either way.
+                if self._customer_reply_validation_issue(
                     candidate,
                     known_record_ids=self._session_known_record_ids(session),
                 ):
                     candidate = ""
-                elif isinstance(result, dict):
+                elif not self._candidate_is_relevant_to_required_step(candidate, decision, session.language):
+                    needs_step_prompt_appended = True
+                if candidate and isinstance(result, dict):
                     # Phase 11: this turn can tool-call get_trip_media just
                     # like the deterministic media handler does -- without
                     # this, any media it used stayed embedded as a raw
@@ -2450,6 +2588,16 @@ class ToolCallingSessionRuntime:
 
         if candidate:
             reply = candidate
+            if needs_step_prompt_appended:
+                # No clean_text: _backend_required_step_reply would otherwise
+                # prepend its own acknowledgement (hostile/identity/human-agent)
+                # on top of the acknowledgement the model already wrote. What
+                # gets appended here is only ever the bare pending question.
+                step_prompt = self._normalize_reply(
+                    self._next_step_prompt(session, decision), session.language
+                )
+                if step_prompt and step_prompt not in reply:
+                    reply = f"{reply}\n\n{step_prompt}"
         else:
             # Clarification is an input-understanding case, not an output failure.
             candidate_media = []
@@ -3290,6 +3438,12 @@ class ToolCallingSessionRuntime:
     @staticmethod
     def _post_booking_status_intent(text: str) -> bool:
         lowered = " ".join(str(text or "").strip().casefold().split())
+        # Booking-shaped phrasings. A customer whose session produced a PRIVATE
+        # TRIP REQUEST rather than a booking naturally asks about a "\u0637\u0644\u0628"
+        # (request), not a "\u062d\u062c\u0632" -- "\u0637\u0644\u0628\u064a \u0641\u064a\u0646" matched nothing here and fell all
+        # the way through to _post_booking_reply's generic "I need one more
+        # detail" non-answer (live 2026-08-20 transcript), so the
+        # request-shaped vocabulary is checked as a second tier.
         return any(term in lowered for term in (
             "\u062d\u0627\u0644\u0629 \u0627\u0644\u062d\u062c\u0632",
             "\u062d\u062c\u0632\u064a",
@@ -3299,7 +3453,7 @@ class ToolCallingSessionRuntime:
             "booking status",
             "was my booking created",
             "who will contact",
-        ))
+        )) or any(term in lowered for term in REQUEST_STATUS_QUESTION_TERMS)
 
     @staticmethod
     def _post_booking_ack(text: str) -> bool:
@@ -3334,6 +3488,13 @@ class ToolCallingSessionRuntime:
             "booking_status": str(booking.get("booking_status") or session.booking_status or "Draft").strip(),
             "handoff_id": str(final_result.get("handoff_id") or booking.get("handoff_id") or "").strip(),
             "handoff_state": str(session.handoff_state or final_result.get("handoff_state") or "").strip(),
+            # A private-trip session never produces a booking_id, so every
+            # answer built from this record used to talk about a booking the
+            # customer does not have. The request id is set by
+            # create_private_trip_request's session_update.
+            "private_request_id": str(
+                getattr(session, "private_trip_request_id", "") or final_result.get("request_id") or ""
+            ).strip(),
         }
 
     def _start_new_booking_after_completion(self, session: SessionState) -> None:
@@ -3379,6 +3540,23 @@ class ToolCallingSessionRuntime:
     def _post_booking_reply(self, session: SessionState, clean_text: str) -> str:
         record = self._post_booking_record(session)
         if self._post_booking_status_intent(clean_text):
+            # A private-trip session has a request id and no booking id, so the
+            # booking-shaped answer below would have named "your saved booking"
+            # for a customer who never made one. Answer about the record that
+            # actually exists, and only claim it exists when the id is really
+            # on the session (a failed save leaves it empty -- fall through to
+            # the honest no-id wording rather than inventing a saved request).
+            if record["private_request_id"] and not record["booking_id"]:
+                request_id = record["private_request_id"]
+                if session.language.startswith("ar"):
+                    return (
+                        f"طلب الرحلة الخاصة بتاعك رقمه {request_id} وهو مع فريق Operations في Ravel للمراجعة. "
+                        "هيتواصلوا معاك خلال 24-48 ساعة لتحديد التفاصيل."
+                    )
+                return (
+                    f"Your private trip request is {request_id} and it is with the Ravel operations team "
+                    "for review. They will contact you within 24-48 hours to scope the details."
+                )
             if session.language.startswith("ar"):
                 booking_id = record["booking_id"] or "\u0627\u0644\u062d\u062c\u0632 \u0627\u0644\u0645\u062d\u0641\u0648\u0638"
                 status = record["booking_status"] or "\u0645\u062d\u0641\u0648\u0638"
@@ -3396,7 +3574,23 @@ class ToolCallingSessionRuntime:
                 return "\u0628\u0627\u0644\u062a\u0623\u0643\u064a\u062f\u060c \u064a\u0645\u0643\u0646\u0646\u0627 \u0628\u062f\u0621 \u062d\u062c\u0632 \u062c\u062f\u064a\u062f. \u0647\u0644 \u062a\u0631\u064a\u062f \u0627\u0644\u062d\u062c\u0632 \u0641\u064a \u0646\u0641\u0633 \u0627\u0644\u0631\u062d\u0644\u0629 \u0623\u0645 \u062a\u0628\u062d\u062b \u0639\u0646 \u0631\u062d\u0644\u0629 \u0623\u062e\u0631\u0649\u061f" if session.language.startswith("ar") else "Of course. We can start a new booking. Would you like the same trip, or are you looking for another trip?"
             session.stage = "post_booking_support"
             return "\u0647\u0644 \u062a\u0631\u064a\u062f \u0628\u062f\u0621 \u062d\u062c\u0632 \u062c\u062f\u064a\u062f\u060c \u0623\u0645 \u062a\u0631\u064a\u062f \u0645\u062a\u0627\u0628\u0639\u0629 \u0627\u0644\u062d\u062c\u0632 \u0627\u0644\u062d\u0627\u0644\u064a\u061f" if session.language.startswith("ar") else "Do you want to start a new booking, or follow up on the current booking?"
-        return "\u0645\u062d\u062a\u0627\u062c \u0623\u0639\u0631\u0641 \u062a\u0641\u0635\u064a\u0644\u0629 \u0625\u0636\u0627\u0641\u064a\u0629 \u0639\u0644\u0634\u0627\u0646 \u0623\u0642\u062f\u0631 \u0623\u0633\u0627\u0639\u062f\u0643 \u0628\u0634\u0643\u0644 \u0635\u062d\u064a\u062d." if session.language.startswith("ar") else "I need one more detail so I can help you correctly."
+        # This used to be "I need one more detail" -- a dead end, because once
+        # stage == post_booking_support this handler swallows EVERY message, so
+        # anything it did not recognize got that non-answer with no way out
+        # (live 2026-08-20: a customer asking where their request was). Offer
+        # the two things that are actually possible from here instead.
+        if record["private_request_id"] and not record["booking_id"]:
+            if session.language.startswith("ar"):
+                return (
+                    "\u0623\u0646\u0627 \u0645\u0639\u0627\u0643. \u062a\u062d\u0628 \u0623\u0642\u0648\u0644\u0643 \u062d\u0627\u0644\u0629 \u0637\u0644\u0628 \u0627\u0644\u0631\u062d\u0644\u0629 \u0627\u0644\u062e\u0627\u0635\u0629 \u0628\u062a\u0627\u0639\u0643\u060c \u0648\u0644\u0627 \u0646\u0628\u062f\u0623 \u0631\u062d\u0644\u0629 \u062c\u062f\u064a\u062f\u0629\u061f"
+                )
+            return (
+                "I'm here to help. Would you like the status of your private trip request, or shall "
+                "we start a new trip?"
+            )
+        if session.language.startswith("ar"):
+            return "\u0623\u0646\u0627 \u0645\u0639\u0627\u0643. \u062a\u062d\u0628 \u0623\u0642\u0648\u0644\u0643 \u062d\u0627\u0644\u0629 \u0637\u0644\u0628\u0643 \u0627\u0644\u062d\u0627\u0644\u064a\u060c \u0648\u0644\u0627 \u0646\u0628\u062f\u0623 \u062d\u062c\u0632 \u062c\u062f\u064a\u062f\u061f"
+        return "I'm here to help. Would you like the status of your current request, or shall we start a new booking?"
 
     def _handle_post_booking_message(self, session: SessionState, clean_text: str) -> bool:
         if not self._has_completed_booking_context(session):
@@ -7242,10 +7436,39 @@ class ToolCallingSessionRuntime:
             "\u0631\u062d\u0644\u0629 \u0645\u062e\u0635\u0635\u0629",
             "\u0639\u0627\u064a\u0632 \u0631\u062d\u0644\u0629 \u0644\u064a\u0646\u0627",
         )
-        return any(term in lowered for term in english) or any(term in lowered for term in arabic) or compact in {"privatetrip", "customtrip"}
+        # Every entry above is SINGULAR, so the extremely common plural
+        # ("\u0639\u0627\u064a\u0632 \u0631\u062d\u0644\u0627\u062a \u062e\u0627\u0635\u0629" / "\u0628\u062a\u0646\u0638\u0645\u0648\u0627 \u0631\u062d\u0644\u0627\u062a \u062e\u0627\u0635\u0647\u061f") matched nothing and the
+        # customer never entered the private-trip flow at all -- confirmed in a
+        # live 2026-08-20 transcript. Rather than adding each plural twice (once
+        # per taa-marbuta spelling), fold the message with the same table
+        # _normalize_trip_reference already uses and match pre-folded plural
+        # forms. The literal `arabic` tuple above is left untouched so no
+        # existing match can regress.
+        folded = lowered.translate(_ARABIC_TRIP_REFERENCE_TRANSLATION)
+        arabic_plural_folded = (
+            "\u0631\u062d\u0644\u0627\u062a \u062e\u0627\u0635\u0647",
+            "\u0631\u062d\u0644\u0627\u062a \u0645\u062e\u0635\u0635\u0647",
+            "\u0628\u0631\u0627\u0645\u062c \u062e\u0627\u0635\u0647",
+            "\u0628\u0631\u0627\u0645\u062c \u0645\u062e\u0635\u0635\u0647",
+        )
+        return (
+            any(term in lowered for term in english)
+            or any(term in lowered for term in arabic)
+            or any(term in folded for term in arabic_plural_folded)
+            or compact in {"privatetrip", "customtrip"}
+        )
 
     def _detect_private_trip_intent(self, session: SessionState, text: str) -> None:
-        if session.private_trip_active or self._private_trip_intent(text):
+        if session.private_trip_active:
+            self._update_collection_state(session, private_trip_active=True)
+            return
+        # "بتنظموا رحلات خاصة؟" names the service but is a question ABOUT it,
+        # not a request for one -- the same "a question is not a decision"
+        # rule _is_exploratory_question already enforces for every other
+        # free-text field. Answering it must not silently switch a customer
+        # who is mid regular-booking into the private-trip workflow; if they
+        # do want one, their next message says so and this fires then.
+        if self._private_trip_intent(text) and not self._is_service_capability_question(text):
             session.private_trip_active = True
             self._update_collection_state(session, private_trip_active=True)
 

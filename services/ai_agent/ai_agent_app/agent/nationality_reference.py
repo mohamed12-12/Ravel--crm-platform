@@ -134,10 +134,51 @@ CURRENCY_CODES: frozenset[str] = frozenset(
 )
 
 
+# Arabic orthographic variation that carries no meaning: a tied taa marbuta
+# typed as a plain haa, alef with any hamza form typed bare, alef maqsura typed
+# as a plain yaa. Live transcript (2026-08-20): a customer answered "مصريه" --
+# the dominant Egyptian typing habit for "مصرية" -- and was told
+# "مش قادر أتعرف على الجنسية دي", because the lookup below is an exact
+# whole-string dict match and casefold() is a no-op for Arabic. Every Arabic
+# feminine row in _NATIONALITIES had the same hole, and the hamza forms were
+# only partly covered row by row (e.g. "اماراتي"/"إماراتي" both listed, but
+# "سورية" only in one spelling). Folding once here fixes the whole table
+# instead of adding spelling variants per row forever.
+#
+# Same substitutions as tool_calling_runtime.py's
+# _ARABIC_TRIP_REFERENCE_TRANSLATION, which already normalizes trip and person
+# names this way -- it is deliberately duplicated rather than imported, because
+# this module is a leaf reference table and must not import the 7k-line runtime
+# (which imports this module).
+_ARABIC_FOLD_TRANSLATION = str.maketrans(
+    {"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي", "ة": "ه", "ؤ": "و", "ئ": "ي"}
+)
+
+
+def _fold_arabic(value: str) -> str:
+    return value.translate(_ARABIC_FOLD_TRANSLATION)
+
+
+# Built once at import from _NATIONALITIES itself, so it can never drift out of
+# sync with the canonical table. First writer wins on a collision (two spellings
+# folding to the same key always map to the same canonical nationality in
+# practice, and preferring the earlier row keeps the table's own ordering
+# authoritative).
+_FOLDED_NATIONALITIES: dict[str, str] = {}
+for _form, _canonical in _NATIONALITIES.items():
+    _FOLDED_NATIONALITIES.setdefault(_fold_arabic(_form), _canonical)
+
+
 def resolve_nationality(text: str) -> str:
     """Return the canonical nationality for a recognized demonym/country name, or ''."""
     normalized = " ".join(str(text or "").strip().casefold().split())
-    return _NATIONALITIES.get(normalized, "")
+    exact = _NATIONALITIES.get(normalized, "")
+    if exact:
+        return exact
+    # Only reached when the literal spelling is unknown, so an unrecognized
+    # nationality still fails closed exactly as before -- folding widens what
+    # counts as the SAME word, it never invents a new nationality.
+    return _FOLDED_NATIONALITIES.get(_fold_arabic(normalized), "")
 
 
 def looks_like_currency_code(text: str) -> bool:

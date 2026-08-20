@@ -211,6 +211,40 @@ class TestAgentPersonaName(unittest.TestCase):
         self.assertIn("postTripHandoffEnabled", cfg)
 
 
+class TestChatAssetCacheBusting(unittest.TestCase):
+    """The chat page's asset URLs must change when the assets change.
+
+    index.html used to hardcode `?v=live-chat-1`. app.js changed twice on
+    2026-08-20 -- adding the trip-type picker, then fixing that picker
+    permanently disabling the message composer -- while the token stayed
+    identical, so the URL was byte-for-byte the same before and after the fix.
+    Every browser that had already cached app.js kept running the broken build
+    and the chat kept looking closed to the customer.
+    """
+
+    def setUp(self):
+        self.tmp = Path(".tmp-test-phase11") / uuid.uuid4().hex
+        self.tmp.mkdir(parents=True, exist_ok=True)
+        self.original_env = dict(os.environ)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.original_env)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_chat_page_asset_urls_are_versioned_from_the_files_themselves(self):
+        client, _ = _make_app_with_db(self.tmp)
+        page = client.get("/").get_data(as_text=True)
+
+        self.assertNotIn("v=live-chat-1", page, "the hardcoded cache-buster is back")
+        static_dir = (
+            PROJECT_ROOT / "services" / "ai_agent" / "ai_agent_app" / "web" / "static"
+        )
+        for asset in ("app.js", "styles.css"):
+            expected = str(int((static_dir / asset).stat().st_mtime))
+            self.assertIn(f"{asset}?v={expected}", page, f"{asset} is not versioned from the file")
+
+
 class TestLanguageDetection(unittest.TestCase):
     """Language detection should update session language from Arabic messages."""
 

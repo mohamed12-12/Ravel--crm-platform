@@ -250,8 +250,13 @@ class SessionFlowManager:
                 "text": self._copy_text(
                     gateway,
                     "session.ask_phone_first",
-                    f"Hi, I'm {self.agent_persona_name} from Ravel Traveler! I'd love to help you plan your trip. "
-                    "Could you share your WhatsApp number first so I can pull up your profile safely?",
+                    # Shortened alongside ToolCallingSessionRuntime._opening_message
+                    # so both modes greet the same way. "WhatsApp number" must
+                    # stay in the wording: _rewrite_violates_constraints
+                    # requires both words to survive the optional AI rewrite of
+                    # this copy, and drops the rewrite otherwise.
+                    f"Hi! I'm {self.agent_persona_name} from Ravel Traveler. "
+                    "Send me your WhatsApp number and let's plan your trip.",
                     language=session.language,
                     agent_name=self.agent_persona_name,
                 ),

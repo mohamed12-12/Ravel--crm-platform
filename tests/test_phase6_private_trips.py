@@ -402,3 +402,157 @@ def test_private_trip_destination_clarification_question_is_not_captured_as_the_
     session = _send(runtime, "Siwa", session)
     assert session.private_destination == "Siwa"
     assert session.stage == "private_dates_required"
+
+
+# ---------------------------------------------------------------------------
+# Live 2026-08-20 transcript: the agent ignored the customer's questions.
+# ---------------------------------------------------------------------------
+
+
+def test_plural_arabic_private_trip_phrasing_is_recognized() -> None:
+    """_private_trip_intent's Arabic list was singular-only, so the very common
+    plural ("رحلات خاصه") matched nothing and the customer never
+    entered the private-trip flow at all."""
+
+    assert ToolCallingSessionRuntime._private_trip_intent("عايز رحلات خاصه") is True
+    assert ToolCallingSessionRuntime._private_trip_intent("عاوز رحلات خاصة") is True
+    assert ToolCallingSessionRuntime._private_trip_intent("بتعملوا برامج خاصة؟") is True
+    # Still not a private-trip request.
+    assert ToolCallingSessionRuntime._private_trip_intent("عايز رحلة للغردقة") is False
+
+
+def test_service_capability_question_is_answered_and_still_asks_for_the_name(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    """The reported bug: mid name-collection the customer asked
+    "هو انتم بتنظموا رحلات خاصه؟" and the ONLY thing they got back was
+    the name question repeated word for word. The answer must come first and
+    the pending required step must still be asked in the same message.
+    """
+
+    session = runtime.create_session()
+    session = _send(runtime, "01270482380", session)
+    assert session.stage == "traveler_not_found"
+
+    session = _send(runtime, "هو انتم بتنظموا رحلات خاصه؟", session)
+
+    reply = session.messages[-1]["text"]
+    # It answered the actual question ...
+    assert "أيوه" in reply
+    assert "رحلات خاصة" in reply
+    # ... and still asked for the pending field, in the same turn.
+    assert "اسم" in reply
+    # ... without advancing or capturing anything.
+    assert session.stage == "traveler_not_found"
+    assert session.customer_name == ""
+
+    session = _send(runtime, "Maged Samir Adly", session)
+    assert session.customer_name == "Maged Samir Adly"
+
+
+def test_service_capability_question_does_not_flip_a_regular_session_into_private_mode(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    """Asking whether private trips exist is a question, not a request for one.
+    Answering it must not silently abandon the customer's current flow."""
+
+    session = runtime.create_session()
+    session = _send(runtime, "01270482380", session)
+    session = _send(runtime, "هو انتم بتنظموا رحلات خاصه؟", session)
+
+    assert session.private_trip_active is False
+
+    # An actual request still switches it on.
+    session = _send(runtime, "طب عايز رحلة خاصة", session)
+    assert session.private_trip_active is True
+
+
+def test_request_status_question_after_a_private_request_names_the_request(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    """"طلبي فين" matched none of _post_booking_status_intent's
+    booking-shaped terms, so it fell through to a generic "I need one more
+    detail" non-answer -- and even when it did match, the reply was built from
+    booking fields a private-trip session never has.
+    """
+
+    def execute_side_effect(*, action, payload, session_context):
+        if action == "create_private_trip_request":
+            return {
+                "result_id": "PRT-000001",
+                "executed": True,
+                "write_result": {"private_trip_request": {"request_id": "PRT-000001"}},
+                "write_result_contract": {
+                    "status": "created",
+                    "executed": True,
+                    "reused": False,
+                    "record_type": "private_trip_request",
+                    "record_id": "PRT-000001",
+                },
+                "session_update": {"private_trip_request_id": "PRT-000001"},
+            }
+        if action == "create_handoff":
+            return {
+                "result_id": "H-00000001",
+                "executed": True,
+                "write_result": {"handoff_case": {"handoff_id": "H-00000001"}},
+                "write_result_contract": {
+                    "status": "created",
+                    "executed": True,
+                    "reused": False,
+                    "record_type": "handoff",
+                    "record_id": "H-00000001",
+                },
+                "session_update": {"handoff_state": "handed_off"},
+            }
+        raise AssertionError(action)
+
+    runtime._write_executor = Mock()
+    runtime._write_executor.execute.side_effect = execute_side_effect
+    session = _private_verified_session(runtime)
+    session = _send(runtime, "I want a private trip just for us", session)
+    for answer in ("Local", "3", "Siwa", "flexible dates", "4 travelers", "around 50000 EGP"):
+        session = _send(runtime, answer, session)
+    assert session.private_trip_request_id == "PRT-000001"
+
+    session = _send(runtime, "where is my request", session)
+
+    reply = session.messages[-1]["text"]
+    assert "PRT-000001" in reply
+    assert "your saved booking" not in reply
+    assert "I need one more detail" not in reply
+
+
+def test_a_safe_llm_answer_that_omits_the_pending_field_keeps_the_answer_and_appends_the_question(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    """_run_conversational_llm_turn used to DISCARD an otherwise-safe reply
+    outright whenever _candidate_is_relevant_to_required_step could not find a
+    literal per-step token in it, falling back to the bare scripted re-ask --
+    which is how a genuine answer to "do you organise private trips?" was
+    replaced by nothing but the name question. The answer must survive, with
+    the required question appended so the workflow is still carried forward.
+    """
+
+    from services.ai_agent.ai_agent_app.agent.gemini_agent import GeminiAgent
+    from services.ai_agent.ai_agent_app.agent.tool_registry import build_tool_calling_registry
+    from tests.test_phase2_gemini_tool_loop import LoopProviderStub, text_response
+
+    answer = "أيوه، إحنا بننظم رحلات خاصة بالكامل حسب ما تحب."
+    runtime._conversation_ai = GeminiAgent(
+        settings=runtime.settings,
+        provider=LoopProviderStub([text_response(answer)]),
+        tool_registry=build_tool_calling_registry(),
+    )
+
+    session = runtime.create_session()
+    session = _send(runtime, "01270482380", session)
+    assert session.stage == "traveler_not_found"
+
+    session = _send(runtime, "هو انتم بتنظموا رحلات خاصه؟", session)
+
+    reply = session.messages[-1]["text"]
+    assert answer in reply, reply
+    assert "اسم" in reply, reply
+    assert session.stage == "traveler_not_found"
+    assert session.customer_name == ""

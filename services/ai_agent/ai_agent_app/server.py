@@ -458,6 +458,30 @@ def _room_choice_label(room_type: str, room_group: str = "") -> str:
     return f"{room_type} room"
 
 
+def _static_asset_version(filename: str) -> str:
+    """Cache-busting token for a file in web/static, derived from the file itself.
+
+    index.html previously hardcoded `?v=live-chat-1`, a literal that was added
+    once and never bumped again. app.js changed twice on 2026-08-20 (the
+    trip-type picker, then the fix for the picker permanently disabling the
+    message composer) while that token stayed identical, so the asset URL was
+    byte-for-byte the same before and after the fix -- every browser and proxy
+    that had already cached app.js kept serving the broken build, and customers
+    kept hitting a chat that looked closed. Deriving the token from the file's
+    own mtime means shipping a new asset is enough; there is nothing left to
+    remember to bump.
+
+    Falls back to a fixed token if the file cannot be stat'ed, so a template
+    never fails to render over a cache hint.
+    """
+
+    try:
+        path = Path(__file__).resolve().parent / "web" / "static" / str(filename or "")
+        return str(int(path.stat().st_mtime))
+    except OSError:
+        return "0"
+
+
 def _serialize_session(gateway: ExcelSheetGateway, session) -> dict[str, Any]:
     runtime_mode = str(getattr(session, "agent_mode", "deterministic") or "deterministic").strip().lower() or "deterministic"
     chat_enabled = runtime_mode in {"tool_calling", "gemini"}
@@ -1639,6 +1663,7 @@ def create_app(
         template_folder=str((Path(__file__).resolve().parent / "web" / "templates")),
         static_folder=str((Path(__file__).resolve().parent / "web" / "static")),
     )
+    app.jinja_env.globals["static_asset_version"] = _static_asset_version
     # Created fresh per create_app() call (this app has no separate blueprint
     # modules that need to import a shared limiter), so each app instance
     # gets its own in-memory counters -- no risk of one test's requests

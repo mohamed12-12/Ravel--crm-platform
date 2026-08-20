@@ -469,6 +469,88 @@ OPTION_NUMBER_PREFIX_TERMS: set[str] = {
     "option",
     "choice",
 }
+# "Do you people actually DO this?" -- a question about what Ravel offers as a
+# company, asked mid-flow instead of answering the pending required step. Live
+# transcript (2026-08-20): a customer mid name-collection asked
+# "هو انتم بتنظموا رحلات خاصه؟" and got the name question repeated back
+# verbatim, because no existing predicate recognized it: it is not an
+# EXPLANATION_REQUEST ("why do you need that?"), not a TRIP_QUALITY question
+# ("is this trip good?"), and not a TRIP_DISCOVERY request ("what trips do you
+# have?") -- it asks whether a whole SERVICE EXISTS. Canonical source for
+# ToolCallingSessionRuntime._is_service_capability_question, matched as a
+# substring against _normalize_trip_reference output, so entries are
+# pre-normalized (bare alef, ه for tied taa marbuta, no punctuation).
+SERVICE_CAPABILITY_QUESTION_TERMS: set[str] = {
+    "do you organize",
+    "do you organise",
+    "do you arrange",
+    "do you offer",
+    "do you provide",
+    "do you handle",
+    "do you also do",
+    "can you organize",
+    "can you organise",
+    "can you arrange",
+    "is that something you do",
+    "do you guys do",
+    "بتنظموا",
+    "بتنظمون",
+    "تنظموا",
+    "تنظمون",
+    "بتعملوا",
+    "بتعملون",
+    "بتوفروا",
+    "بتوفرون",
+    "بتصمموا",
+    "بتظبطوا",
+    "بتساعدوا",
+    "هو انتم",
+    "هو انتو",
+    "انتم بتعملوا",
+    "انتو بتعملوا",
+    # Deliberately NOT "عندكم رحلات"/"عندكو رحلات": TRIP_DISCOVERY_TERMS above
+    # already owns those, and "do you have trips?" wants the trip LIST, not a
+    # description of the company. Only the phrasing discovery does not cover is
+    # listed here.
+    "عندكم برامج",
+    "ممكن تنظموا",
+    "ممكن تعملوا",
+}
+
+# "Where did my request go?" -- a status question about an ALREADY-submitted
+# request, as distinct from _post_booking_status_intent's existing
+# booking-shaped vocabulary ("حالة الحجز", "booking status"). Live transcript
+# (2026-08-20): right after a private trip request was submitted, "طلبي فين"
+# matched none of the booking terms and fell through to the generic
+# "I need one more detail" non-answer. Canonical source for
+# ToolCallingSessionRuntime._post_booking_status_intent's request-shaped tier.
+# Matched against casefolded, whitespace-collapsed text (that function's own
+# convention), NOT against _normalize_trip_reference output -- so entries keep
+# their natural taa marbuta spelling and both hamza forms are listed.
+REQUEST_STATUS_QUESTION_TERMS: set[str] = {
+    "طلبي فين",
+    "فين طلبي",
+    "طلبي وصل",
+    "وصل طلبي",
+    "حالة طلبي",
+    "حاله طلبي",
+    "ايه اخبار طلبي",
+    "إيه اخبار طلبي",
+    "اخبار طلبي",
+    "طلبي اتسجل",
+    "الطلب فين",
+    "فين الطلب",
+    "حالة الطلب",
+    "حاله الطلب",
+    "where is my request",
+    "where's my request",
+    "my request status",
+    "status of my request",
+    "request status",
+    "was my request created",
+    "did my request go through",
+}
+
 OPTION_ORDINAL_TERMS: dict[str, int] = {
     "الاول": 1,
     "الأول": 1,

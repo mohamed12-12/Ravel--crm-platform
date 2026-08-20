@@ -92,6 +92,52 @@ def test_recognized_nationalities_resolve_in_english_and_arabic() -> None:
     assert resolve_nationality("\u0645\u0635\u0631\u064a") == "Egyptian"
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Live 2026-08-20 regression: the customer answered "مصريه" -- taa
+        # marbuta typed as a plain haa, the dominant Egyptian typing habit --
+        # and was told "مش قادر أتعرف على الجنسية دي" because the lookup was an
+        # exact whole-string dict match. Every Arabic feminine form and both
+        # hamza spellings had the same hole.
+        ("مصريه", "Egyptian"),
+        ("مصرية", "Egyptian"),
+        ("سوريه", "Syrian"),
+        ("اماراتيه", "Emirati"),
+        ("إماراتي", "Emirati"),
+    ],
+)
+def test_arabic_spelling_variants_of_a_nationality_resolve(text: str, expected: str) -> None:
+    assert resolve_nationality(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "asdkfj",
+        "أنا مش متأكد من جنسيتي",
+        "أنا من كوكب بعيد",
+        "",
+    ],
+)
+def test_arabic_folding_does_not_invent_a_nationality(text: str) -> None:
+    """Folding widens what counts as the same word; it must never widen what
+    counts as a nationality at all -- an unknown answer still fails closed."""
+
+    assert resolve_nationality(text) == ""
+
+
+def test_arabic_spelling_variant_is_accepted_end_to_end(runtime: ToolCallingSessionRuntime) -> None:
+    session = runtime.create_session()
+    for text in ("01270482380", "Mohamed Ashraf Safwat"):
+        session = _send(runtime, text, session)
+    assert session.stage == "nationality_required"
+
+    session = _send(runtime, "مصريه", session)
+    assert session.nationality == "Egyptian"
+    assert session.stage == "birthday_required"
+
+
 def test_currency_codes_are_detected_as_such() -> None:
     assert looks_like_currency_code("EGP") is True
     assert looks_like_currency_code("usd") is True
