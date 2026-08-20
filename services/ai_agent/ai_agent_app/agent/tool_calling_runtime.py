@@ -6506,6 +6506,50 @@ class ToolCallingSessionRuntime:
         }
 
     @staticmethod
+    def _is_comparison_or_definition_question(text: str) -> bool:
+        """A customer asking what an option MEANS, or asking the DIFFERENCE
+        between two options, is not a decision -- "الغرفة المزدوجة يعني
+        إيه؟" ("what does 'double room' mean?") and "إيه الفرق بين المحلي
+        والدولي؟" ("what's the difference between local and
+        international?") both name a real field value in the same
+        sentence, with neither option negated, so neither
+        normalize_trip_type's negation-aware matching nor a plain
+        substring/alias lookup can tell them apart from a genuine answer.
+
+        Deliberately separate from _is_exploratory_question, which
+        _is_not_a_field_value's docstring requires stay hypothetical-only
+        (for _handle_revision_intent) -- this is a different failure shape
+        (an explanation request, not a conditional/hypothetical), and from
+        _is_explanation_request, whose EXPLANATION_REQUEST_EXACT_TERMS
+        match requires "يعني ايه" to be the ENTIRE message rather than
+        embedded after the field's own option name. Semantic coverage
+        audit, deferred item: trip_type/room_type same-sentence-comparison
+        with no negation marker -- scoped narrowly to just those two
+        call sites (_merge_hints' trip_type/room_type gates and
+        _apply_required_step_capture's collect_trip_type branch), not a
+        general-purpose question detector.
+        """
+        stripped = str(text or "").strip()
+        if not stripped:
+            return False
+        lowered = stripped.lower()
+        markers = (
+            "يعني ايه",
+            "يعني إيه",
+            "تقصد ايه",
+            "تقصد إيه",
+            "الفرق بين",
+            "ما الفرق بين",
+            "ايه الفرق بين",
+            "إيه الفرق بين",
+            "what does",
+            "what's the difference",
+            "what is the difference",
+            "difference between",
+        )
+        return any(marker in lowered for marker in markers)
+
+    @staticmethod
     def _is_exploratory_question(text: str) -> bool:
         """A field-relevant word inside a hypothetical/question is not a
         decision, for ANY free-text field the hint pipeline extracts (trip
@@ -6818,14 +6862,18 @@ class ToolCallingSessionRuntime:
         """
         trip_type = str(hints.get("candidate_trip_type") or "").strip()
         is_exploratory = bool(hints.get("message_is_exploratory"))
+        is_comparison_question = self._is_comparison_or_definition_question(clean_text)
         is_restart_signal = bool(hints.get("trip_type_hint_is_restart_signal"))
-        if trip_type and is_exploratory and not is_restart_signal:
+        if trip_type and (is_exploratory or is_comparison_question) and not is_restart_signal:
             # A hypothetical/exploratory mention ("what if international?")
-            # is not a decision -- see _is_exploratory_question. Never touch
-            # session.trip_type for a question; the informational answer
+            # or a same-sentence comparison/definition question ("what's the
+            # difference between local and international?") is not a
+            # decision -- see _is_exploratory_question/
+            # _is_comparison_or_definition_question. Never touch
+            # session.trip_type for either; the informational answer
             # (if any) is handled elsewhere without mutating state.
             agent_logger.info(
-                "Ignored exploratory trip-type mention session=%s candidate_type=%s",
+                "Ignored exploratory/comparison trip-type mention session=%s candidate_type=%s",
                 session.id,
                 trip_type,
             )
@@ -6924,23 +6972,23 @@ class ToolCallingSessionRuntime:
 
         room_type = str(hints.get("candidate_room_type") or "").strip()
         room_group = str(hints.get("candidate_room_group") or "").strip()
-        room_requirements = hints.get("candidate_room_requirements") if not is_exploratory else None
+        room_requirements = hints.get("candidate_room_requirements") if not (is_exploratory or is_comparison_question) else None
         has_room_requirements = isinstance(room_requirements, dict) and bool(room_requirements.get("requirements"))
         has_revision_signal = self._has_field_revision_signal(clean_text)
         if session.stage in {"group_nationality_type_required", "group_nationality_counts_required"}:
             room_type = ""
             room_group = ""
-        if is_exploratory:
+        if is_exploratory or is_comparison_question:
             if room_type:
                 agent_logger.info(
-                    "Ignored exploratory room-type mention session=%s candidate_type=%s",
+                    "Ignored exploratory/comparison room-type mention session=%s candidate_type=%s",
                     session.id,
                     room_type,
                 )
                 room_type = ""
             if room_group:
                 agent_logger.info(
-                    "Ignored exploratory room-group mention session=%s candidate_group=%s",
+                    "Ignored exploratory/comparison room-group mention session=%s candidate_group=%s",
                     session.id,
                     room_group,
                 )
@@ -7422,16 +7470,22 @@ class ToolCallingSessionRuntime:
 
         if session.stage == "trip_type_required":
             trip_type = {1: "local", 2: "international"}.get(menu_option_number)
-            if not trip_type and not self._is_not_a_field_value(text):
+            not_a_value = self._is_not_a_field_value(text) or self._is_comparison_or_definition_question(text)
+            if not trip_type and not not_a_value:
                 # normalize_trip_type does substring/word-boundary matching,
                 # not whole-answer matching -- "لو دولية؟" ("what if
                 # international?") would otherwise be captured here as a
                 # real decision on the very first trip-type question, before
                 # _merge_hints's own exploratory gate ever gets a chance to
-                # run (this branch mutates session.trip_type directly).
+                # run (this branch mutates session.trip_type directly). Same
+                # reasoning for "إيه الفرق بين المحلي والدولي؟" -- a same-
+                # sentence comparison question naming both options with
+                # neither negated, which normalize_trip_type's negation-aware
+                # matching cannot distinguish from a real decision on its own
+                # (semantic coverage audit, deferred item).
                 trip_type = normalize_trip_type(normalized_text)
             destination_name = ""
-            if not trip_type and not self._is_not_a_field_value(text):
+            if not trip_type and not not_a_value:
                 # The customer named a specific place ("شرم" / "شرم الشيخ")
                 # instead of answering the abstract local/international
                 # question -- that IS an answer, just not one

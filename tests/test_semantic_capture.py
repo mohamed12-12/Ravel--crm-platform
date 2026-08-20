@@ -716,8 +716,10 @@ _PC6_FIELDS = {
         "session_fn": _bali_room_type_required_session,
         "ask_about_text": "الغرفة المزدوجة يعني إيه؟",
         "field_attr": "room_type",
-        # NOT via full turn -- see the comment above test_ask_about_...
-        "ask_about_via_full_turn": False,
+        # Was False (classifier-only) until _is_comparison_or_definition_
+        # question closed the deterministic-capture gap this test's
+        # docstring documents -- now exercised via a real full turn too.
+        "ask_about_via_full_turn": True,
     },
     "flight": {
         "session_fn": _bali_flight_option_required_session,
@@ -735,8 +737,10 @@ _PC6_FIELDS = {
         "session_fn": _bali_trip_type_required_session,
         "ask_about_text": "إيه الفرق بين المحلي والدولي؟",
         "field_attr": "trip_type",
-        # NOT via full turn -- see the comment above test_ask_about_...
-        "ask_about_via_full_turn": False,
+        # Was False (classifier-only) until _is_comparison_or_definition_
+        # question closed the deterministic-capture gap this test's
+        # docstring documents -- now exercised via a real full turn too.
+        "ask_about_via_full_turn": True,
     },
 }
 
@@ -769,34 +773,31 @@ def test_recommendation_request_does_not_mutate_the_field(
 def test_ask_about_current_step_does_not_select_an_option_merely_mentioned(
     runtime: ToolCallingSessionRuntime, field: str,
 ) -> None:
-    """room_type and trip_type are exercised via a direct call to
-    _handle_off_script_classifier instead of a full _send turn.
+    """room_type and trip_type used to be exercised via a direct call to
+    _handle_off_script_classifier instead of a full _send turn, because the
+    task's own literal example phrasings ("الغرفة المزدوجة يعني إيه؟" and
+    "إيه الفرق بين المحلي والدولي؟") never reached the classifier at all --
+    both were mis-captured upstream, as a deterministic field value, before
+    the off-script classifier ever ran:
 
-    Investigating why the task's own literal example phrasings
-    ("الغرفة المزدوجة يعني إيه؟" and "إيه الفرق بين المحلي والدولي؟")
-    failed here surfaced two MORE independent, pre-existing
-    deterministic-capture bugs (the same "question misread as an answer"
-    class as the currency one fixed above, and the gender/"mixed" one
-    documented in the final report), both upstream of the classifier
-    entirely:
-
-    - _merge_hints applies _extract_hints' candidate_room_type (a bare
-      substring check -- "مزدوج" matches inside "المزدوجة") unconditionally
-      whenever session.room_type is not already set, with no
-      question/explanation guard at all (unlike its own trip-type handling,
-      which at least checks is_exploratory).
+    - _merge_hints applied _extract_hints' candidate_room_type (a bare
+      substring check -- "مزدوج" matches inside "المزدوجة") whenever
+      session.room_type was not already set; its is_exploratory guard
+      existed but never fired for this phrasing (no hypothetical "لو"
+      marker -- see _is_exploratory_question).
     - normalize_trip_type's PC-1 negation fix correctly stops picking the
-      dict-iteration-order match, but does not detect "compare both, with
+      dict-iteration-order match, but did not detect "compare both, with
       NEITHER negated" as ambiguous -- "المحلي" and "الدولي" both appearing
-      with no "مش" resolves to whichever the earlier one in the text is,
+      with no "مش" resolved to whichever the earlier one in the text is,
       not "unresolved".
 
-    Both are real findings, reported in the audit's follow-up rather than
-    fixed here (per this phase's stop condition: document deeper problems
-    found along the way rather than expanding scope) -- see the final
-    report's "additional findings" section. This test instead proves the
-    classifier's OWN ask_about_current_step dispatch is correct in
-    isolation for these two fields, the same way PC-1's classifier-dispatch
+    Both are now closed by _is_comparison_or_definition_question (a
+    narrowly-scoped sibling of _is_exploratory_question, deliberately NOT
+    merged into it -- see that method's docstring), wired into _merge_hints'
+    trip_type/room_type gates and _apply_required_step_capture's
+    collect_trip_type branch. Both fields now run ask_about_via_full_turn
+    like every other field, proving the fix end-to-end rather than only at
+    the classifier-dispatch level, the same way PC-1's classifier-dispatch
     test does for the private-flow trip-type correction.
     """
     spec = _PC6_FIELDS[field]
@@ -830,6 +831,37 @@ def test_ask_about_current_step_does_not_select_an_option_merely_mentioned(
 
     assert getattr(session, spec["field_attr"]) == before_value
     assert session.stage == before_stage
+
+
+# ---------------------------------------------------------------------------
+# Semantic coverage audit, deferred item (now closed): trip_type/room_type
+# same-sentence-comparison questions with no negation marker were silently
+# mis-captured as a real decision, entirely upstream of the classifier --
+# these pin the deterministic-capture fix directly (no classifier/agent
+# involved at all), independent of the PC-6 parametrized test above which
+# proves the classifier's own dispatch is ALSO correct once the field is
+# genuinely unresolved.
+# ---------------------------------------------------------------------------
+def test_trip_type_comparison_question_does_not_select_local(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    session = _bali_trip_type_required_session(runtime)
+
+    session = _send(runtime, "إيه الفرق بين المحلي والدولي؟", session)
+
+    assert session.trip_type == ""
+    assert session.stage == "trip_type_required"
+
+
+def test_room_type_definition_question_does_not_select_double(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    session = _bali_room_type_required_session(runtime)
+
+    session = _send(runtime, "الغرفة المزدوجة يعني إيه؟", session)
+
+    assert session.room_type == ""
+    assert session.stage == "room_type_required"
 
 
 # ---------------------------------------------------------------------------
