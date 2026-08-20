@@ -182,6 +182,16 @@ def _ensure_private_trip_schema(app: Flask) -> None:
                     stage VARCHAR(40) NOT NULL DEFAULT 'registered',
                     stage_changed_at DATETIME NOT NULL,
                     assigned_to_user_id INTEGER,
+                    assigned_to VARCHAR(100),
+                    assigned_at DATETIME,
+                    assigned_by_user_id INTEGER,
+                    priority VARCHAR(50) DEFAULT 'Medium',
+                    current_step VARCHAR(200),
+                    channel VARCHAR(50),
+                    follow_up_status VARCHAR(100),
+                    follow_up_due_date DATE,
+                    last_contact_at DATETIME,
+                    customer_response_status VARCHAR(100),
                     consultation_due_at DATETIME,
                     consultation_done_at DATETIME,
                     design_due_at DATETIME,
@@ -203,6 +213,32 @@ def _ensure_private_trip_schema(app: Flask) -> None:
             connection.execute(text("CREATE INDEX IF NOT EXISTS ix_private_trip_requests_traveler_id ON private_trip_requests(traveler_id)"))
             connection.execute(text("CREATE INDEX IF NOT EXISTS ix_private_trip_requests_lead_id ON private_trip_requests(lead_id)"))
             connection.execute(text("CREATE INDEX IF NOT EXISTS ix_private_trip_requests_created_at ON private_trip_requests(created_at)"))
+
+            # CREATE TABLE IF NOT EXISTS above only covers a brand-new DB --
+            # a private_trip_requests table created before the employee
+            # follow-up/assignment-audit columns existed needs its own
+            # backfill, same as trips.is_private above. Read via PRAGMA on
+            # this same `connection` (not the `inspector` from before this
+            # transaction started) -- the table may have just been created
+            # above, inside this still-open transaction, and a separate
+            # inspector-driven connection is not guaranteed to see it yet.
+            request_columns = {
+                row[1] for row in connection.execute(text("PRAGMA table_info(private_trip_requests)")).fetchall()
+            }
+            for column_name, column_type in (
+                ("assigned_to", "VARCHAR(100)"),
+                ("assigned_at", "DATETIME"),
+                ("assigned_by_user_id", "INTEGER"),
+                ("priority", "VARCHAR(50) DEFAULT 'Medium'"),
+                ("current_step", "VARCHAR(200)"),
+                ("channel", "VARCHAR(50)"),
+                ("follow_up_status", "VARCHAR(100)"),
+                ("follow_up_due_date", "DATE"),
+                ("last_contact_at", "DATETIME"),
+                ("customer_response_status", "VARCHAR(100)"),
+            ):
+                if column_name not in request_columns:
+                    connection.execute(text(f"ALTER TABLE private_trip_requests ADD COLUMN {column_name} {column_type}"))
 
 
 def _ensure_lead_and_booking_group_columns(app: Flask) -> None:
