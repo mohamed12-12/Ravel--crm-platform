@@ -68,6 +68,18 @@ SCENARIOS = [
         lambda: {"traveler_id": "TRPAR001", "is_minor": True, "guardian_name": "Parity Guardian", "guardian_phone": "01000000001"},
     ),
     (
+        # Live-bug regression: apps/api/app/routes/crm.py's AGENT_WRITE_ACTIONS
+        # (the /api/crm/agent/write allowlist) never included this action even
+        # though every other layer (validator, workflow policy, write
+        # executor, PostgresAgentBridgeService) already implemented it --
+        # every real private-trip save in CRM_ACCESS_MODE=api production
+        # failed with a 422 before ever reaching the write code. This
+        # scenario would have failed on `assert response.status_code == 200`
+        # before that fix.
+        "create_private_trip_request",
+        lambda: {"traveler_id": "TRPAR001", "service_type": "consultation", "trip_scope": "Local", "destination": "Parity Destination", "party_size": 2},
+    ),
+    (
         "flag_lead_guardian_approval",
         lambda: {"lead_id": "LDPAR001", "requires_guardian_approval": True},
     ),

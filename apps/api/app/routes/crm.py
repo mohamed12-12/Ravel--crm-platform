@@ -31,6 +31,7 @@ AGENT_WRITE_ACTIONS = {
     "update_lead_stage",
     "create_booking_draft",
     "create_handoff",
+    "create_private_trip_request",
     "set_guardian_consent",
     "flag_lead_guardian_approval",
 }
