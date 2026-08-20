@@ -22,6 +22,7 @@ from services.ai_agent.ai_agent_app.agent.date_parsing import (
     compute_age,
     normalize_birthdate_input,
     normalize_expiry_date_input,
+    normalize_future_date_input,
     normalize_relative_date_input,
 )
 from services.ai_agent.ai_agent_app.agent.identity_policy import AgentIdentityPolicy
@@ -125,8 +126,26 @@ SAFE_STATUS_MAP = {
     "waiting": "Waiting for customer response",
     "done": "Done",
     "post_booking_support": "Done",
+    # A finished private/custom trip intake is not "Done" -- it is escalated:
+    # the request and its consultation handoff are with the Ravel team, and
+    # nothing else happens on this conversation until a human picks it up.
+    # server.py's SESSION_STATUS_MAP is {legacy, **SAFE_STATUS_MAP}, so this
+    # single entry is enough for both the employee and customer views.
+    "private_request_escalated": "Sent to the Ravel team",
     "error": "Unable to complete request",
 }
+
+# Message keys whose text is the authoritative outcome of a record THIS turn
+# wrote, and which therefore outrank _safe_response_fallback's
+# "a handoff already exists" safety net. _execute_private_trip_request saves
+# the request and then raises its own consultation handoff, so without this
+# the request's confirmation was replaced by "your request is already with the
+# team for review" -- reported from a live transcript where the request had
+# been created seconds earlier (2026-08-20).
+_HANDOFF_OVERRIDE_EXEMPT_KEYS = (
+    "workflow.private_trip_request.",
+    "workflow.private_request_failed",
+)
 
 _DIGIT_TRANSLATION = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
 _PHONE_CANDIDATE_RE = re.compile(r"(?:\+|00)?[\d٠-٩۰-۹][\d٠-٩۰-۹\s().-]{7,}[\d٠-٩۰-۹]")
@@ -780,6 +799,12 @@ class ToolCallingSessionRuntime:
                 "lead_id": linked["lead_id"],
                 "booking_id": linked["booking_id"],
                 "handoff_id": cls._handoff_id(session),
+                # A private trip request saved earlier in this session is a
+                # real record the agent must stay able to name ("طلبك رقم
+                # PRT-000002 مع الفريق") -- this key was simply missing, so
+                # response_guard treated every later truthful reference to it
+                # as a false write-success claim and swapped in an apology.
+                "private_trip_request_id": str(getattr(session, "private_trip_request_id", "") or "").strip(),
             }
         )
 
@@ -790,7 +815,20 @@ class ToolCallingSessionRuntime:
         booking_result = session.booking_result if isinstance(session.booking_result, dict) else {}
         record_type = ""
         record_id = ""
-        if "booking" in key:
+        # Private trip requests are checked first: their message keys contain
+        # none of the booking/handoff/lead tokens below, so they used to fall
+        # through to record_type="" and the created-confirmation was validated
+        # with no write result at all -- "request PRT-000002 has been saved"
+        # then read as an unsupported success claim.
+        if "private_trip_request" in key or "private_request" in key:
+            record_type = "private_trip_request"
+            record_id = str(
+                getattr(session, "private_trip_request_id", "")
+                or final_result.get("request_id")
+                or final_result.get("private_trip_request_id")
+                or ""
+            ).strip()
+        elif "booking" in key:
             record_type = "booking"
             record_id = str(booking_result.get("booking_id") or final_result.get("booking_id") or "").strip()
         elif "handoff" in key or "human" in key:
@@ -1094,7 +1132,11 @@ class ToolCallingSessionRuntime:
             if session.language.startswith("ar"):
                 return "لم أتمكن من إرسال طلب المراجعة تلقائيا. من فضلك تواصل مع فريق Ravel مباشرة أو حاول مرة أخرى بعد قليل."
             return "I couldn't submit the review request automatically. Please contact the Ravel team directly, or try again in a moment."
-        if message_key.endswith("already_under_review") or (self._has_active_handoff(session) and "workflow.handoff." not in message_key):
+        if message_key.endswith("already_under_review") or (
+            self._has_active_handoff(session)
+            and "workflow.handoff." not in message_key
+            and not message_key.startswith(_HANDOFF_OVERRIDE_EXEMPT_KEYS)
+        ):
             return self._handoff_already_under_review_message(session)
         fallback = self._normalize_reply(base_text, session.language)
         write_result, record_type = self._response_write_result_for_message(session, message_key)
@@ -3397,7 +3439,7 @@ class ToolCallingSessionRuntime:
                 isinstance(session.final_result, dict)
                 and (session.final_result.get("booking_id") or session.final_result.get("handoff_id"))
             )
-            or session.stage in {"completed", "booking_created", "handoff_created", "post_booking_support"}
+            or session.stage in {"completed", "booking_created", "handoff_created", "post_booking_support", "private_request_escalated"}
         )
 
     @staticmethod
@@ -3609,12 +3651,17 @@ class ToolCallingSessionRuntime:
             or self._post_booking_status_intent(clean_text)
             or self._post_booking_ack(clean_text)
             or self._post_booking_negative_or_unclear(clean_text)
-            or session.stage in {"completed", "booking_created", "handoff_created", "post_booking_support", "new_booking_intent"}
+            or session.stage in {"completed", "booking_created", "handoff_created", "post_booking_support", "new_booking_intent", "private_request_escalated"}
         ):
             return False
         session.messages.append({"role": "user", "text": clean_text})
         reply = self._post_booking_reply(session, clean_text)
-        if session.stage not in {"new_booking_intent"}:
+        # "private_request_escalated" is preserved for the same reason
+        # "new_booking_intent" is: this handler re-stamps post_booking_support
+        # on every later turn, which would quietly downgrade an escalated
+        # private-trip conversation's status to "Done" the moment the customer
+        # asked one follow-up question.
+        if session.stage not in {"new_booking_intent", "private_request_escalated"}:
             session.stage = "post_booking_support"
             # _start_new_booking_after_completion (inside _post_booking_reply,
             # for the explicit-new-booking path) already cleared
@@ -5070,7 +5117,13 @@ class ToolCallingSessionRuntime:
                     message_key="workflow.private_trip_request.created",
                     base_text=self._private_trip_request_created_message(session, request_id),
                 )
-                session.stage = "post_booking_support"
+                # Escalated, not "Done": the request plus its consultation
+                # handoff are now with a human, and the workflow asks the
+                # customer nothing further. Deliberately still a stage
+                # _handle_post_booking_message accepts, so the one thing that
+                # remains useful -- answering "طلبي فين" -- keeps working
+                # instead of the conversation becoming a dead end.
+                session.stage = "private_request_escalated"
                 session.tools_used = ["create_private_trip_request", "create_handoff"]
                 session.fallback_used = False
                 return session
@@ -5952,14 +6005,25 @@ class ToolCallingSessionRuntime:
         # with no LLM rewrite (unlike the sibling failure-path message, which
         # goes through _append_agent_reply and gets translated there) -- so an
         # all-Arabic private-trip intake ended with a pure-English closing line.
+        # Wording audit: "تم حفظ طلب..." described the DATABASE outcome, which
+        # is not what the customer is waiting to hear at the end of an intake --
+        # they want to know the request left the bot and reached people. It also
+        # never actually reached a customer: _safe_response_fallback replaced it
+        # with the "already under review" line (see
+        # _HANDOFF_OVERRIDE_EXEMPT_KEYS). This is the last thing the agent says
+        # on a private-trip conversation, so it states the escalation plainly
+        # and points at the one thing still available afterwards (asking for
+        # the status).
         if session.language.startswith("ar"):
             return (
-                f"تم حفظ طلب الرحلة الخاصة برقم {request_id}. "
-                "فريق Ravel هيتواصل معاك خلال 24-48 ساعة لتحديد التفاصيل والخطوات القادمة."
+                f"تم إرسال طلب الرحلة الخاصة بتاعك (رقم {request_id}) لفريق Ravel، "
+                "وهيتواصلوا معاك خلال 24-48 ساعة لمراجعة التفاصيل والخطوات القادمة. "
+                "ولو حبيت تتطمن على الطلب في أي وقت اسألني وأنا أقولك حالته."
             )
         return (
-            f"Private trip request {request_id} has been saved. "
-            "The team will contact you within 24-48 hours to scope it and confirm next steps."
+            f"Your private trip request ({request_id}) has been sent to the Ravel team. "
+            "They'll contact you within 24-48 hours to review the details and agree the next steps. "
+            "You can ask me about it any time and I'll tell you where it stands."
         )
 
     @staticmethod
@@ -7494,6 +7558,15 @@ class ToolCallingSessionRuntime:
         matches = re.findall(r"\b(\d{4}-\d{1,2}-\d{1,2})\b", normalized)
         if matches:
             return matches[0], matches[1] if len(matches) > 1 else "", flexible
+        # Loose absolute formats ("28/9/2026", "28 Sep 2026", "28 سبتمبر 2026").
+        # This step used to accept strict ISO only, so a customer who had just
+        # answered the birthday question with "28/4/2003" -- which the birthday
+        # parser accepts -- got their travel date rejected and was then told to
+        # use YYYY-MM-DD (live 2026-08-20 transcript). Single date only; an ISO
+        # range still works via the branch above.
+        absolute = normalize_future_date_input(normalized)
+        if absolute:
+            return absolute, "", flexible
         if not flexible:
             # Semantic-capture coverage: "\u0628\u0643\u0631\u0647"/"\u0628\u0639\u062f \u064a\u0648\u0645\u064a\u0646"/"\u0622\u062e\u0631 \u0627\u0644\u0634\u0647\u0631"/"end
             # of August" are common natural answers here -- resolved by a

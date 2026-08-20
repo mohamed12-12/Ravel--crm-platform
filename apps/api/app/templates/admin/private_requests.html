@@ -1,127 +1,42 @@
 {% extends "base.html" %}
 
 {% block title %}Private Requests - Rahma CRM{% endblock %}
+{% block topbar_title %}Private Requests{% endblock %}
+
+{% block topbar_actions %}
+<button onclick="openModal('newRequest')" class="btn btn-primary btn-sm">+ New Request</button>
+{% endblock %}
 
 {% block content %}
+{#
+  The create form used to sit permanently expanded above the board as a wall of
+  12 equally-weighted fields, three of which are actually required. It is now a
+  modal opened from the topbar, split into "the three things you must know" and
+  an optional details section, so the board is the first thing on the page and
+  a manual add is a 3-field job.
+#}
 <style>
-    .private-header { display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; margin-bottom:1.25rem; }
-    .private-header h1 { font-size:1.6rem; margin:0 0 .35rem; }
-    .private-header p { color:var(--text-muted); margin:0; max-width:760px; }
-    .private-panel { background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:1rem; margin-bottom:1rem; }
-    .private-form { display:grid; grid-template-columns:repeat(4, minmax(160px, 1fr)); gap:.75rem; }
-    .private-form label { display:grid; gap:.3rem; color:var(--text-dim); font-size:.78rem; }
-    .private-form input, .private-form select, .private-form textarea {
-        width:100%; background:#101010; color:var(--text-main); border:1px solid var(--border); border-radius:6px; padding:.55rem .65rem;
-    }
-    .private-form textarea { min-height:68px; resize:vertical; }
-    .private-form .wide { grid-column:span 2; }
-    .private-form .full { grid-column:1 / -1; }
-    .private-form button { align-self:end; border:0; border-radius:6px; padding:.65rem .9rem; background:var(--accent); color:#06120f; font-weight:700; cursor:pointer; }
-    .picker { position:relative; }
-    .picker-input { padding-right:2.1rem !important; }
-    .picker-clear {
-        display:none; position:absolute; right:.4rem; top:50%; transform:translateY(-50%);
-        border:0; background:transparent; color:var(--text-dim); font-size:1rem; line-height:1; cursor:pointer; padding:.2rem;
-    }
-    .picker.has-selection .picker-clear { display:block; }
-    .picker.has-selection .picker-input { color:#86efac; }
-    .picker-results {
-        display:none; position:absolute; z-index:5; top:calc(100% + .25rem); left:0; right:0;
-        background:#101010; border:1px solid var(--border); border-radius:6px; max-height:220px; overflow-y:auto;
-    }
-    .picker-results.open { display:block; }
-    .picker-result { padding:.5rem .65rem; font-size:.82rem; cursor:pointer; }
-    .picker-result:hover, .picker-result.active { background:rgba(255,255,255,.06); }
-    .picker-empty { padding:.5rem .65rem; font-size:.78rem; color:var(--text-muted); }
-    .private-board { display:grid; grid-template-columns:repeat(4, minmax(220px, 1fr)); gap:.85rem; overflow-x:auto; padding-bottom:.4rem; }
-    .private-column { min-width:220px; background:#101010; border:1px solid var(--border); border-radius:8px; padding:.75rem; }
-    .private-column h2 { font-size:.82rem; color:var(--text-dim); margin:0 0 .7rem; text-transform:uppercase; letter-spacing:.06em; }
-    .request-card { display:block; text-decoration:none; color:inherit; background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:.75rem; margin-bottom:.65rem; }
-    .request-card:hover { border-color:var(--border-act); }
-    .request-card strong { display:block; font-size:.9rem; margin-bottom:.25rem; }
-    .request-meta { color:var(--text-muted); font-size:.74rem; line-height:1.45; }
-    .sla { display:inline-flex; margin-top:.45rem; padding:.18rem .45rem; border-radius:999px; font-size:.68rem; font-weight:700; }
-    .sla-ok { color:#86efac; background:rgba(34,197,94,.12); }
-    .sla-late { color:#fca5a5; background:rgba(239,68,68,.12); }
-    @media (max-width: 900px) { .private-form { grid-template-columns:1fr 1fr; } .private-board { grid-template-columns:1fr; } }
-    @media (max-width: 620px) { .private-form { grid-template-columns:1fr; } .private-form .wide { grid-column:auto; } }
+    .private-board { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:.85rem; overflow-x:auto; padding-bottom:.4rem; }
+    .private-column { background:var(--bg-base); border:1px solid var(--border); border-radius:8px; padding:.75rem; min-width:0; }
+    .private-column h2 { font-size:.72rem; color:var(--text-dim); margin:0 0 .7rem; text-transform:uppercase; letter-spacing:.06em; }
+    .request-card { display:block; text-decoration:none; color:inherit; background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:.7rem; margin-bottom:.6rem; }
+    .request-card:hover { border-color:var(--accent); }
+    .request-card strong { display:block; font-size:.86rem; margin-bottom:.25rem; }
+    .request-meta { color:var(--text-muted); font-size:.73rem; line-height:1.5; }
+    .card-tags { display:flex; flex-wrap:wrap; gap:.3rem; margin-top:.45rem; }
 </style>
 
-<div class="private-header">
-    <div>
-        <h1>Private Requests</h1>
-        <p>Custom/private trip pipeline before a priced trip and booking exist. Converted requests create a private trip, booking, and non-refundable deposit ledger entry.</p>
+<div class="card" style="margin-bottom:1rem">
+    <div class="card-header">
+        <span class="card-title">Custom / private trip pipeline</span>
+        <span class="badge badge-blue">{{ requests|length }} open in view</span>
     </div>
+    <p style="color:var(--text-muted);font-size:0.83rem;margin:0">
+        Requests captured before a priced trip and booking exist. New requests are auto-assigned to sales
+        by round-robin, exactly like leads. Converting a request creates a private trip, a booking, and a
+        non-refundable deposit ledger entry.
+    </p>
 </div>
-
-<section class="private-panel">
-    <form class="private-form" method="post" action="{{ url_for('private_requests.create') }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <label>Traveler
-            <div class="picker" data-picker data-search-url="{{ url_for('private_requests.search_travelers') }}">
-                <input type="text" class="picker-input" placeholder="Unlinked — search name, ID, or phone" autocomplete="off">
-                <button type="button" class="picker-clear" title="Clear">&times;</button>
-                <input type="hidden" name="traveler_id">
-                <div class="picker-results"></div>
-            </div>
-        </label>
-        <label>Service
-            <select name="service_type" required>
-                {% for key, label in service_types.items() %}
-                <option value="{{ key }}">{{ label }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label>Scope
-            <select name="trip_scope" required>
-                {% for scope in scopes %}
-                <option value="{{ scope }}">{{ scope }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label>Destination
-            <input name="destination" required>
-        </label>
-        <label>Start Date
-            <input type="date" name="start_date_pref">
-        </label>
-        <label>End Date
-            <input type="date" name="end_date_pref">
-        </label>
-        <label>Party Size
-            <input type="number" min="1" name="party_size" value="1">
-        </label>
-        <label>Flexible Dates
-            <select name="dates_flexible">
-                <option value="">No</option>
-                <option value="1">Yes</option>
-            </select>
-        </label>
-        <label>Budget
-            <input type="number" min="0" step="0.01" name="budget_amount">
-        </label>
-        <label>Currency
-            <select name="budget_currency">
-                <option value="">Unknown</option>
-                {% for currency in currencies %}
-                <option value="{{ currency }}">{{ currency }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label class="wide">Lead
-            <div class="picker" data-picker data-search-url="{{ url_for('private_requests.search_leads') }}">
-                <input type="text" class="picker-input" placeholder="No lead — search name, ID, or phone" autocomplete="off">
-                <button type="button" class="picker-clear" title="Clear">&times;</button>
-                <input type="hidden" name="lead_id">
-                <div class="picker-results"></div>
-            </div>
-        </label>
-        <label class="full">Notes
-            <textarea name="notes"></textarea>
-        </label>
-        <button type="submit">Create Request</button>
-    </form>
-</section>
 
 <section class="private-board">
     {% for stage in stages %}
@@ -129,17 +44,21 @@
         <h2>{{ stage.replace('_', ' ') }} ({{ columns.get(stage, [])|length }})</h2>
         {% for item in columns.get(stage, []) %}
         <a class="request-card" href="{{ url_for('private_requests.detail', request_id=item.request_id) }}">
-            <strong>{{ item.request_id }} - {{ item.destination or 'No destination' }}</strong>
+            <strong>{{ item.request_id }} · {{ item.destination or 'No destination' }}</strong>
             <div class="request-meta">
                 {{ service_types.get(item.service_type, item.service_type) }} · {{ item.trip_scope }}<br>
-                Party {{ item.party_size }} · {{ item.budget_amount or 'Budget TBD' }} {{ item.budget_currency or '' }}
+                Party {{ item.party_size }} · {% if item.budget_amount %}{{ '{:,.0f}'.format(item.budget_amount) }} {{ item.budget_currency or '' }}{% else %}Budget TBD{% endif %}<br>
+                {{ item.assigned_user.display_name if item.assigned_user else (item.assigned_to or 'Unassigned') }}
             </div>
-            {% if item.is_consultation_overdue or item.is_design_overdue %}
-            <span class="sla sla-late">Overdue</span>
-            {% else %}
-            <span class="sla sla-ok">On track</span>
-            {% endif %}
-            {% if item.priority == 'High' %}<span class="sla sla-late">High priority</span>{% endif %}
+            <div class="card-tags">
+                {% if item.is_consultation_overdue or item.is_design_overdue %}
+                <span class="badge badge-red">Overdue</span>
+                {% else %}
+                <span class="badge badge-green">On track</span>
+                {% endif %}
+                {% if item.priority == 'High' %}<span class="badge badge-red">High</span>{% endif %}
+                {% if item.follow_up_due_date and item.follow_up_due_date < today %}<span class="badge badge-yellow">Follow-up due</span>{% endif %}
+            </div>
         </a>
         {% else %}
         <div class="request-meta">No requests in this stage.</div>
@@ -148,97 +67,164 @@
     {% endfor %}
 </section>
 
+<!-- NEW REQUEST MODAL -->
+<div id="newRequest" class="modal-overlay">
+    <div class="modal-box modal-flush modal-lg">
+        <div class="modal-header">
+            <span class="modal-title">New Private Request</span>
+            <button class="modal-close" onclick="closeModal('newRequest')">Close</button>
+        </div>
+        <form class="modal-form" method="post" action="{{ url_for('private_requests.create') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="modal-body">
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">1</span> Required</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Service</label>
+                            <select class="form-select" name="service_type" required>
+                                {% for key, label in service_types.items() %}
+                                <option value="{{ key }}">{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Scope</label>
+                            <select class="form-select" name="trip_scope" required>
+                                {% for scope in scopes %}
+                                <option value="{{ scope }}">{{ scope }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group col-span-2">
+                            <label class="form-label">Destination</label>
+                            <input class="form-input" name="destination" placeholder="e.g. Hurghada" required>
+                            <div class="form-hint">These three are all you need — everything below can be filled in later from the request page.</div>
+                        </div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">2</span> Who it is for</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Traveler</label>
+                            <div class="picker" data-picker data-search-url="{{ url_for('private_requests.search_travelers') }}">
+                                <input type="text" class="form-input picker-input" placeholder="Search name, ID, or phone" autocomplete="off">
+                                <button type="button" class="picker-clear" title="Clear">&times;</button>
+                                <input type="hidden" name="traveler_id">
+                                <div class="picker-results"></div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Lead</label>
+                            <div class="picker" data-picker data-search-url="{{ url_for('private_requests.search_leads') }}">
+                                <input type="text" class="form-input picker-input" placeholder="Search name, ID, or phone" autocomplete="off">
+                                <button type="button" class="picker-clear" title="Clear">&times;</button>
+                                <input type="hidden" name="lead_id">
+                                <div class="picker-results"></div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Party Size</label>
+                            <input class="form-input" type="number" min="1" name="party_size" value="1">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Channel</label>
+                            <input class="form-input" type="text" name="channel" placeholder="e.g. whatsapp, walk-in">
+                        </div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">3</span> Dates &amp; budget (optional)</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Start Date</label>
+                            <input class="form-input" type="date" name="start_date_pref">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">End Date</label>
+                            <input class="form-input" type="date" name="end_date_pref">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Flexible Dates</label>
+                            <select class="form-select" name="dates_flexible">
+                                <option value="">No</option>
+                                <option value="1">Yes</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Budget</label>
+                            <input class="form-input" type="number" min="0" step="0.01" name="budget_amount">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Currency</label>
+                            <select class="form-select" name="budget_currency">
+                                <option value="">Unknown</option>
+                                {% for currency in currencies %}
+                                <option value="{{ currency }}">{{ currency }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Priority</label>
+                            <select class="form-select" name="priority">
+                                <option value="Medium" selected>Medium</option>
+                                <option value="High">High</option>
+                                <option value="Low">Low</option>
+                            </select>
+                        </div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">4</span> Ownership &amp; notes</div>
+                    <div class="grid-2">
+                        {% if can_assign %}
+                        <div class="form-group">
+                            <label class="form-label">Assigned Employee</label>
+                            <select class="form-select" name="assigned_to_user_id">
+                                <option value="">Auto-assign (round-robin)</option>
+                                {% for employee in employees %}
+                                <option value="{{ employee.id }}">{{ employee.display_name }} · {{ employee.role }}</option>
+                                {% endfor %}
+                            </select>
+                            <div class="form-hint">Leave on auto-assign unless this one belongs to someone specific.</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Assignment Reason</label>
+                            <input class="form-input" type="text" name="assignment_reason" placeholder="Optional">
+                        </div>
+                        {% endif %}
+                        <div class="form-group">
+                            <label class="form-label">Next Follow-up Date</label>
+                            <input class="form-input" type="date" name="follow_up_due_date">
+                        </div>
+                        <div class="form-group col-span-2">
+                            <label class="form-label">Notes</label>
+                            <textarea class="form-textarea" name="notes" style="min-height:70px"></textarea>
+                        </div>
+                    </div>
+                </fieldset>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('newRequest')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create Request</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% include "admin/_entity_picker.html" %}
+{% endblock %}
+
+{% block scripts %}
 <script>
-(function () {
-    // Type-to-search picker: a plain <select> of every traveler used to cap
-    // out at 300 rows (alphabetical), which made every traveler past that
-    // cap impossible to link from this form. Backed by /search/travelers
-    // and /search/leads (see routes/private_requests.py) instead.
-    function debounce(fn, delay) {
-        var timer = null;
-        return function () {
-            var args = arguments;
-            clearTimeout(timer);
-            timer = setTimeout(function () { fn.apply(null, args); }, delay);
-        };
-    }
-
-    function initPicker(root) {
-        var searchUrl = root.getAttribute('data-search-url');
-        var textInput = root.querySelector('.picker-input');
-        var hiddenInput = root.querySelector('input[type="hidden"]');
-        var resultsBox = root.querySelector('.picker-results');
-        var clearBtn = root.querySelector('.picker-clear');
-
-        function closeResults() {
-            resultsBox.classList.remove('open');
-            resultsBox.innerHTML = '';
-        }
-
-        function selectResult(id, label) {
-            hiddenInput.value = id;
-            textInput.value = label;
-            root.classList.add('has-selection');
-            closeResults();
-        }
-
-        function clearSelection() {
-            hiddenInput.value = '';
-            textInput.value = '';
-            root.classList.remove('has-selection');
-            textInput.focus();
-        }
-
-        function renderResults(items) {
-            resultsBox.innerHTML = '';
-            if (!items.length) {
-                var empty = document.createElement('div');
-                empty.className = 'picker-empty';
-                empty.textContent = 'No matches.';
-                resultsBox.appendChild(empty);
-            } else {
-                items.forEach(function (item) {
-                    var row = document.createElement('div');
-                    row.className = 'picker-result';
-                    row.textContent = item.label;
-                    row.addEventListener('mousedown', function (event) {
-                        // mousedown (not click) fires before the input's blur
-                        // handler would otherwise close the results first.
-                        event.preventDefault();
-                        selectResult(item.id, item.label);
-                    });
-                    resultsBox.appendChild(row);
-                });
-            }
-            resultsBox.classList.add('open');
-        }
-
-        var runSearch = debounce(function (term) {
-            fetch(searchUrl + '?q=' + encodeURIComponent(term))
-                .then(function (response) { return response.ok ? response.json() : { results: [] }; })
-                .then(function (data) { renderResults(data.results || []); })
-                .catch(function () { closeResults(); });
-        }, 250);
-
-        textInput.addEventListener('input', function () {
-            // Any manual edit invalidates a previous selection -- otherwise a
-            // half-retyped name could still submit the old, now-wrong id.
-            hiddenInput.value = '';
-            root.classList.remove('has-selection');
-            var term = textInput.value.trim();
-            if (term.length < 2) {
-                closeResults();
-                return;
-            }
-            runSearch(term);
-        });
-        textInput.addEventListener('blur', function () {
-            setTimeout(closeResults, 100);
-        });
-        clearBtn.addEventListener('click', clearSelection);
-    }
-
-    document.querySelectorAll('[data-picker]').forEach(initPicker);
-})();
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(function (m) {
+    m.addEventListener('click', function (e) { if (e.target === m) m.classList.remove('open'); });
+});
 </script>
 {% endblock %}

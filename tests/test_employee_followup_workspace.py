@@ -566,6 +566,131 @@ class EmployeeFollowupWorkspaceTests(unittest.TestCase):
                 [("lead", first_sales_id), ("booking", second_sales_id), ("lead", first_sales_id)],
             )
 
+    def test_new_private_requests_share_the_same_sales_rotation_as_leads(self) -> None:
+        """Private trip requests used to arrive Unassigned.
+
+        They are assigned from the same sales pool as leads and bookings, so
+        they must also advance the same rotation cursor -- otherwise a run of
+        private requests would all land on whoever happens to be first.
+        """
+        from app.models.private_trip_request import PrivateTripRequest
+
+        token = self._login(role="manager", username="mona")
+        first_sales_id = self._ensure_user(username="aya", role="sales")
+        second_sales_id = self._ensure_user(username="zain", role="sales")
+
+        first = self.client.post(
+            "/admin/private-requests/",
+            data={
+                "csrf_token": token,
+                "service_type": "full_package",
+                "trip_scope": "Local",
+                "destination": "Hurghada",
+            },
+        )
+        self.assertEqual(first.status_code, 302)
+
+        lead_response = self.client.post(
+            "/leads/",
+            data={
+                "csrf_token": token,
+                "customer_name": "Rotation Lead",
+                "raw_phone": "201055555555",
+                "lead_stage": "Contacted",
+                "priority": "Medium",
+                "lead_source": "WhatsApp",
+            },
+        )
+        self.assertEqual(lead_response.status_code, 302)
+
+        second = self.client.post(
+            "/admin/private-requests/",
+            data={
+                "csrf_token": token,
+                "service_type": "consultation",
+                "trip_scope": "International",
+                "destination": "Maldives",
+            },
+        )
+        self.assertEqual(second.status_code, 302)
+
+        with self.app.app_context():
+            requests = PrivateTripRequest.query.order_by(PrivateTripRequest.request_id.asc()).all()
+            self.assertEqual(len(requests), 2)
+            self.assertEqual(requests[0].assigned_to_user_id, first_sales_id)
+            self.assertEqual(requests[0].assigned_to, "Aya")
+            lead = self.Lead.query.filter_by(customer_name="Rotation Lead").one()
+            self.assertEqual(lead.assigned_to_user_id, second_sales_id)
+            self.assertEqual(requests[1].assigned_to_user_id, first_sales_id)
+
+            history = (
+                self.AssignmentHistory.query
+                .filter(
+                    self.AssignmentHistory.resource_id.in_(
+                        [requests[0].request_id, lead.lead_id, requests[1].request_id]
+                    )
+                )
+                .order_by(self.AssignmentHistory.id.asc())
+                .all()
+            )
+            self.assertEqual(
+                [(entry.resource_type, entry.new_user_id) for entry in history],
+                [
+                    ("private_trip_request", first_sales_id),
+                    ("lead", second_sales_id),
+                    ("private_trip_request", first_sales_id),
+                ],
+            )
+
+    def test_private_request_creation_honours_an_explicit_owner(self) -> None:
+        from app.models.private_trip_request import PrivateTripRequest
+
+        token = self._login(role="manager", username="mona")
+        self._ensure_user(username="aya", role="sales")
+        chosen_id = self._ensure_user(username="zain", role="sales")
+
+        response = self.client.post(
+            "/admin/private-requests/",
+            data={
+                "csrf_token": token,
+                "service_type": "design_only",
+                "trip_scope": "Local",
+                "destination": "Siwa",
+                "assigned_to_user_id": str(chosen_id),
+                "assignment_reason": "Owns this client",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            item = PrivateTripRequest.query.one()
+            self.assertEqual(item.assigned_to_user_id, chosen_id)
+            entry = self.AssignmentHistory.query.filter_by(
+                resource_type="private_trip_request", resource_id=item.request_id
+            ).one()
+            self.assertEqual(entry.reason, "Owns this client")
+
+    def test_private_request_creation_rejects_an_owner_without_permission(self) -> None:
+        from app.models.private_trip_request import PrivateTripRequest
+
+        token = self._login(role="agent", username="omar")
+        sales_id = self._ensure_user(username="aya", role="sales")
+
+        response = self.client.post(
+            "/admin/private-requests/",
+            data={
+                "csrf_token": token,
+                "service_type": "chaperone",
+                "trip_scope": "Local",
+                "destination": "Dahab",
+                "assigned_to_user_id": str(sales_id),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            self.assertEqual(PrivateTripRequest.query.count(), 0)
+
     def test_explicit_manual_assignment_overrides_auto_assignment(self) -> None:
         token = self._login(role="manager", username="mona")
         self._ensure_user(username="aya", role="sales")

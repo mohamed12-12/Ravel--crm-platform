@@ -33,7 +33,10 @@ from datetime import date
 
 import pytest
 
-from services.ai_agent.ai_agent_app.agent.date_parsing import normalize_relative_date_input
+from services.ai_agent.ai_agent_app.agent.date_parsing import (
+    normalize_future_date_input,
+    normalize_relative_date_input,
+)
 from services.ai_agent.ai_agent_app.agent.tool_calling_runtime import ToolCallingSessionRuntime, normalize_trip_type
 from tests.test_field_capture_audit import (
     _private_service_type_required_session,
@@ -371,6 +374,51 @@ def test_private_dates_from_text_accepts_relative_phrases_end_to_end() -> None:
     start, end, flexible = ToolCallingSessionRuntime._private_dates_from_text("بكره")
     assert start and not flexible
     assert end == ""
+
+
+# ---------------------------------------------------------------------------
+# Live 2026-08-20 transcript: the private-trip dates step accepted strict ISO
+# only, so "28/9/2026" was rejected and the re-ask then demanded YYYY-MM-DD --
+# from a customer who had answered the birthday question three turns earlier
+# with "28/4/2003", which the birthday parser accepts. The two steps in the
+# same conversation now take the same loose formats.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("28/9/2026", "2026-09-28"),
+        ("28-9-2026", "2026-09-28"),
+        ("28.9.2026", "2026-09-28"),
+        ("٢٨/٩/٢٠٢٦", "2026-09-28"),
+        ("2026-09-28", "2026-09-28"),
+        ("28 Sep 2026", "2026-09-28"),
+        ("28 سبتمبر 2026", "2026-09-28"),
+        # Day-first for an ambiguous pair, the same Egyptian convention the
+        # birthday parser already applies.
+        ("5/9/2026", "2026-09-05"),
+    ],
+)
+def test_future_travel_dates_accept_the_same_loose_formats_as_birthdays(text: str, expected: str) -> None:
+    assert normalize_future_date_input(text, today=date(2026, 8, 20)) == expected
+
+
+@pytest.mark.parametrize("text", ["28/4/2003", "1/1/2020", "الغردقه", "5", "", "مش عارف"])
+def test_a_past_or_unparseable_travel_date_is_not_captured(text: str) -> None:
+    """Fail closed: "" must mean "no date given", never a computed date."""
+    assert normalize_future_date_input(text, today=date(2026, 8, 20)) == ""
+
+
+def test_private_dates_from_text_accepts_a_day_first_date_end_to_end() -> None:
+    start, end, flexible = ToolCallingSessionRuntime._private_dates_from_text("28/9/2026")
+    assert start == "2026-09-28"
+    assert end == ""
+    assert flexible is False
+
+
+def test_private_dates_from_text_still_reads_an_iso_range() -> None:
+    start, end, flexible = ToolCallingSessionRuntime._private_dates_from_text("2026-09-20 to 2026-09-27")
+    assert (start, end, flexible) == ("2026-09-20", "2026-09-27", False)
 
 
 # ---------------------------------------------------------------------------

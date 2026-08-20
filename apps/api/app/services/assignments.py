@@ -139,7 +139,12 @@ def next_round_robin_sales_assignee() -> User | None:
         db.session.query(AssignmentHistory.new_user_id)
         .join(User, User.id == AssignmentHistory.new_user_id)
         .filter(
-            AssignmentHistory.resource_type.in_(('lead', 'booking')),
+            # One shared rotation across every auto-assigned resource type.
+            # Private trip requests were assigned from the same sales pool but
+            # excluded from this lookup, so they never advanced the cursor --
+            # a run of private requests would all land on the same person while
+            # the lead rotation carried on independently.
+            AssignmentHistory.resource_type.in_(('lead', 'booking', 'private_trip_request')),
             AssignmentHistory.new_user_id.in_(sales_ids),
             User.is_active.is_(True),
             User.role == 'sales',
@@ -192,6 +197,25 @@ def auto_assign_booking(resource, *, actor: User | None, reason: str = '') -> bo
         resource,
         resource_type='booking',
         resource_id=resource.booking_id,
+        actor=actor,
+        reason=reason,
+    )
+
+
+def auto_assign_private_request(resource, *, actor: User | None, reason: str = '') -> bool:
+    """Same round-robin ownership leads get, for private/custom trip requests.
+
+    A private request created by the agent used to arrive Unassigned, so it sat
+    in /admin/private-requests with nobody accountable for the 48-hour
+    consultation SLA until a manager noticed and assigned it by hand.
+    `resource_type` matches the string routes/private_requests.py already uses
+    for this model's assignment history.
+    """
+
+    return auto_assign_resource(
+        resource,
+        resource_type='private_trip_request',
+        resource_id=resource.request_id,
         actor=actor,
         reason=reason,
     )

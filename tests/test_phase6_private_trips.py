@@ -193,10 +193,119 @@ def test_agent_private_trip_intake_saves_request_then_handoff(runtime: ToolCalli
     session = _send(runtime, "around 50000 EGP", session)
 
     assert session.private_trip_request_id == "PRT-000001"
-    assert session.stage == "post_booking_support"
+    # Escalated rather than the generic post_booking_support ("Done"): the
+    # request plus its consultation handoff are with a human from here on.
+    assert session.stage == "private_request_escalated"
     assert session.messages[-1]["role"] == "assistant"
     actions = [call.kwargs["action"] for call in runtime._write_executor.execute.call_args_list]
     assert actions == ["create_private_trip_request", "create_handoff"]
+
+    # The closing line must confirm THIS request, not report it as something
+    # that already existed -- see the escalation-message tests below.
+    closing = session.messages[-1]["text"]
+    assert "PRT-000001" in closing
+    assert "already with" not in closing.casefold()
+
+
+# ---------------------------------------------------------------------------
+# Live transcript bug (2026-08-20): an all-Arabic private-trip intake ended
+# with "طلبك موجود بالفعل مع Operations Team ... للمراجعة" -- the
+# ALREADY-under-review line -- for a request that had been created seconds
+# earlier. _execute_private_trip_request saves the request and then raises its
+# own consultation handoff, so by the time the created-confirmation was
+# composed _has_active_handoff() was already True, and
+# _safe_response_fallback's blanket "any non-handoff message becomes the
+# already-under-review line" clause replaced the confirmation wholesale.
+#
+# The customer asked to be told the request was SENT to the team and that they
+# will be contacted, then for the conversation to close as an escalation.
+# ---------------------------------------------------------------------------
+def _run_private_intake_to_completion(rt: ToolCallingSessionRuntime, *, arabic: bool) -> SessionState:
+    def execute_side_effect(*, action, payload, session_context):
+        if action == "create_private_trip_request":
+            return {
+                "result_id": "PRT-000002",
+                "executed": True,
+                "write_result": {"private_trip_request": {"request_id": "PRT-000002"}},
+                "write_result_contract": {
+                    "status": "created",
+                    "executed": True,
+                    "reused": False,
+                    "record_type": "private_trip_request",
+                    "record_id": "PRT-000002",
+                },
+                "session_update": {"private_trip_request_id": "PRT-000002"},
+            }
+        if action == "create_handoff":
+            return {
+                "result_id": "H-00000002",
+                "executed": True,
+                "write_result": {"handoff_case": {"handoff_id": "H-00000002"}},
+                "write_result_contract": {
+                    "status": "created",
+                    "executed": True,
+                    "reused": False,
+                    "record_type": "handoff",
+                    "record_id": "H-00000002",
+                },
+                "session_update": {"handoff_state": "handed_off"},
+            }
+        raise AssertionError(action)
+
+    rt._write_executor = Mock()
+    rt._write_executor.execute.side_effect = execute_side_effect
+    session = _private_verified_session(rt)
+    if arabic:
+        session.language = "ar"
+        answers = ["عايز رحلة خاصة لينا", "محلية", "3", "الغردقة", "2026-09-20", "5 أفراد", "5000 جنيه مصري"]
+    else:
+        answers = ["I want a private trip just for us", "Local", "3", "Hurghada", "2026-09-20", "5 travelers", "5000 EGP"]
+    for answer in answers:
+        session = _send(rt, answer, session)
+    return session
+
+
+def test_completed_private_request_is_confirmed_as_sent_not_as_already_existing(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    session = _run_private_intake_to_completion(runtime, arabic=False)
+
+    assert session.private_trip_request_id == "PRT-000002"
+    closing = session.messages[-1]["text"]
+    assert "PRT-000002" in closing
+    assert "has been sent to the Ravel team" in closing
+    # The exact wording the customer reported, from
+    # _handoff_already_under_review_message.
+    assert "already with" not in closing.casefold()
+    assert "for review" not in closing.casefold()
+
+
+def test_completed_arabic_private_request_says_the_request_was_sent_to_the_team(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    session = _run_private_intake_to_completion(runtime, arabic=True)
+
+    closing = session.messages[-1]["text"]
+    assert "PRT-000002" in closing
+    assert "تم إرسال" in closing
+    assert "هيتواصلوا معاك" in closing
+    assert "موجود بالفعل" not in closing
+
+
+def test_completed_private_request_closes_the_session_as_an_escalation(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    session = _run_private_intake_to_completion(runtime, arabic=True)
+
+    assert session.stage == "private_request_escalated"
+    assert runtime._safe_status(session.stage) == "Sent to the Ravel team"
+
+    # Escalated is terminal for the workflow, but the customer can still ask
+    # where the request stands -- and asking must not silently downgrade the
+    # session's status back to "Done".
+    session = _send(runtime, "طلبي فين", session)
+    assert session.stage == "private_request_escalated"
+    assert "PRT-000002" in session.messages[-1]["text"]
 
 
 # ---------------------------------------------------------------------------

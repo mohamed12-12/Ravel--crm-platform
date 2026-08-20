@@ -120,6 +120,11 @@ LATEST_TO_CANONICAL_STATE: dict[str, CanonicalAgentState] = {
     "currency_required": CanonicalAgentState.NEW_TRAVELER_PROFILE_REQUIRED,
     "post_booking_support": CanonicalAgentState.POST_BOOKING_SUPPORT,
     "new_booking_intent": CanonicalAgentState.POST_BOOKING_SUPPORT,
+    # A completed private/custom trip intake. canonical_state_from_context()
+    # also reads context["stage"], not just workflow_policy's state, so this
+    # session stage needs an entry here or it falls through to the generic
+    # inference chain below.
+    "private_request_escalated": CanonicalAgentState.POST_BOOKING_SUPPORT,
 }
 
 

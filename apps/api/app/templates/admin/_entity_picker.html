@@ -1,0 +1,127 @@
+{#
+  Type-to-search picker for traveler/lead links, shared by the private-request
+  create form and the private-request edit modal.
+
+  Markup contract (see either caller):
+      <div class="picker" data-picker data-search-url="...">
+          <input type="text" class="picker-input" autocomplete="off">
+          <button type="button" class="picker-clear">&times;</button>
+          <input type="hidden" name="traveler_id">
+          <div class="picker-results"></div>
+      </div>
+
+  Extracted from private_requests.html so the edit modal did not need a second
+  copy of the same 80 lines. Include it exactly once per page, inside the
+  content block.
+#}
+<style>
+    .picker { position:relative; }
+    .picker-input { padding-right:2.1rem !important; }
+    .picker-clear {
+        display:none; position:absolute; right:.4rem; top:50%; transform:translateY(-50%);
+        border:0; background:transparent; color:var(--text-dim); font-size:1rem; line-height:1; cursor:pointer; padding:.2rem;
+    }
+    .picker.has-selection .picker-clear { display:block; }
+    .picker.has-selection .picker-input { color:#86efac; }
+    .picker-results {
+        display:none; position:absolute; z-index:20; top:calc(100% + .25rem); left:0; right:0;
+        background:var(--bg-card); border:1px solid var(--border); border-radius:6px; max-height:220px; overflow-y:auto;
+    }
+    .picker-results.open { display:block; }
+    .picker-result { padding:.5rem .65rem; font-size:.82rem; cursor:pointer; }
+    .picker-result:hover, .picker-result.active { background:rgba(255,255,255,.06); }
+    .picker-empty { padding:.5rem .65rem; font-size:.78rem; color:var(--text-muted); }
+</style>
+<script>
+(function () {
+    // A plain <select> of every traveler used to cap out at 300 rows
+    // (alphabetical), which made every traveler past that cap impossible to
+    // link. Backed by /search/travelers and /search/leads instead (see
+    // routes/private_requests.py).
+    function debounce(fn, delay) {
+        var timer = null;
+        return function () {
+            var args = arguments;
+            clearTimeout(timer);
+            timer = setTimeout(function () { fn.apply(null, args); }, delay);
+        };
+    }
+
+    function initPicker(root) {
+        var searchUrl = root.getAttribute('data-search-url');
+        var textInput = root.querySelector('.picker-input');
+        var hiddenInput = root.querySelector('input[type="hidden"]');
+        var resultsBox = root.querySelector('.picker-results');
+        var clearBtn = root.querySelector('.picker-clear');
+
+        function closeResults() {
+            resultsBox.classList.remove('open');
+            resultsBox.innerHTML = '';
+        }
+
+        function selectResult(id, label) {
+            hiddenInput.value = id;
+            textInput.value = label;
+            root.classList.add('has-selection');
+            closeResults();
+        }
+
+        function clearSelection() {
+            hiddenInput.value = '';
+            textInput.value = '';
+            root.classList.remove('has-selection');
+            textInput.focus();
+        }
+
+        function renderResults(items) {
+            resultsBox.innerHTML = '';
+            if (!items.length) {
+                var empty = document.createElement('div');
+                empty.className = 'picker-empty';
+                empty.textContent = 'No matches.';
+                resultsBox.appendChild(empty);
+            } else {
+                items.forEach(function (item) {
+                    var row = document.createElement('div');
+                    row.className = 'picker-result';
+                    row.textContent = item.label;
+                    row.addEventListener('mousedown', function (event) {
+                        // mousedown (not click) fires before the input's blur
+                        // handler would otherwise close the results first.
+                        event.preventDefault();
+                        selectResult(item.id, item.label);
+                    });
+                    resultsBox.appendChild(row);
+                });
+            }
+            resultsBox.classList.add('open');
+        }
+
+        var runSearch = debounce(function (term) {
+            fetch(searchUrl + '?q=' + encodeURIComponent(term))
+                .then(function (response) { return response.ok ? response.json() : { results: [] }; })
+                .then(function (data) { renderResults(data.results || []); })
+                .catch(function () { closeResults(); });
+        }, 250);
+
+        textInput.addEventListener('input', function () {
+            // Any manual edit invalidates a previous selection -- otherwise a
+            // half-retyped name could still submit the old, now-wrong id.
+            hiddenInput.value = '';
+            root.classList.remove('has-selection');
+            var term = textInput.value.trim();
+            if (term.length < 2) {
+                closeResults();
+                return;
+            }
+            runSearch(term);
+        });
+        textInput.addEventListener('blur', function () {
+            setTimeout(closeResults, 100);
+        });
+        clearBtn.addEventListener('click', clearSelection);
+    }
+
+    document.querySelectorAll('[data-picker]').forEach(initPicker);
+})();
+</script>

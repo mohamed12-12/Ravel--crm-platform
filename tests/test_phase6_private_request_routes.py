@@ -471,6 +471,225 @@ def test_detail_page_renders_employee_followup_panel(private_request_app) -> Non
     assert "Waiting for Customer" in body
 
 
+# ---------------------------------------------------------------------------
+# Layout rewrite. PRIVATE_REQUEST_TRANSITIONS is strictly linear -- one forward
+# move per stage plus "lost" -- but the page used to render a Move button for
+# all 11 stages side by side, so 9 of the 10 buttons an employee could see only
+# ever produced a "Cannot move X to Y" flash. It also printed raw datetimes
+# ("2026-08-22 16:19:10.254575") and showed the linked lead/traveler/booking as
+# unclickable plain text.
+# ---------------------------------------------------------------------------
+def test_detail_page_links_every_related_record(private_request_app) -> None:
+    """The lead, traveler and converted booking were plain unclickable text, so
+    an employee had to go find each one by hand. Also exercises the url_for
+    branches a request with no links never reaches.
+    """
+    app, db = private_request_app
+    client = app.test_client()
+    _login_as_employee(app, client)
+    with app.app_context():
+        from app.models.lead import Lead
+        from services.crm.system_services.private_trips import utc_now
+
+        item = _seed_request(db, request_id="PRT-000030", stage="paid", with_deposit=True)
+        db.session.add(
+            Lead(
+                lead_id="LD00777",
+                customer_name="Private Traveler",
+                raw_phone="01012345678",
+                created_at=utc_now().replace(tzinfo=None),
+            )
+        )
+        item.lead_id = "LD00777"
+        db.session.commit()
+
+    body = client.get("/admin/private-requests/PRT-000030").get_data(as_text=True)
+    assert "/leads/LD00777" in body
+    assert "/travelers/TR-PRT-000030" in body
+    # Still the paid-stage conversion form, unchanged.
+    assert "Convert To Booking" in body
+
+
+def test_index_board_renders_with_the_new_request_form(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    _login_as_employee(app, client)
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000031", stage="registered")
+
+    body = client.get("/admin/private-requests/").get_data(as_text=True)
+    assert "New Private Request" in body
+    assert "PRT-000031" in body
+    # Ownership is visible from the board, not only from the detail page.
+    assert "Unassigned" in body
+
+
+def test_detail_page_only_offers_the_one_legal_forward_stage(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    _login_as_employee(app, client)
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000020", stage="consultation_scheduled")
+
+    body = client.get("/admin/private-requests/PRT-000020").get_data(as_text=True)
+
+    # The single legal next stage, offered twice (header + Actions panel).
+    assert body.count('name="stage" value="consultation_done"') == 2
+    assert 'name="stage" value="lost"' in body
+    for illegal in ("deposit_pending", "deposit_paid", "designing", "design_delivered", "payment_pending", "paid", "converted"):
+        assert f'name="stage" value="{illegal}"' not in body
+
+
+def test_detail_page_offers_no_forward_move_once_closed(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    _login_as_employee(app, client)
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000021", stage="converted")
+
+    body = client.get("/admin/private-requests/PRT-000021").get_data(as_text=True)
+    assert 'name="stage" value=' not in body
+    assert "cannot move any further" in body
+
+
+def test_detail_page_formats_timestamps_instead_of_printing_raw_datetimes(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    _login_as_employee(app, client)
+    with app.app_context():
+        item = _seed_request(db, request_id="PRT-000022", stage="registered")
+        raw_due = str(item.consultation_due_at)
+
+    body = client.get("/admin/private-requests/PRT-000022").get_data(as_text=True)
+    assert raw_due not in body
+    assert "Consultation due" in body
+
+
+def test_mark_lost_records_the_reason(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    csrf_token = _login_as_employee(app, client)
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000023", stage="registered")
+
+    response = client.post(
+        "/admin/private-requests/PRT-000023/stage",
+        data={"csrf_token": csrf_token, "stage": "lost", "lost_reason": "Budget too low"},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        from app.models.private_trip_request import PrivateTripRequest
+
+        item = db.session.get(PrivateTripRequest, "PRT-000023")
+        assert item.stage == "lost"
+        assert item.lost_reason == "Budget too low"
+
+
+# ---------------------------------------------------------------------------
+# Nothing on the brief (destination, dates, party size, budget) could be
+# corrected from the CRM at all, so a typo in an agent-captured intake had to
+# be worked around by hand.
+# ---------------------------------------------------------------------------
+def test_update_corrects_the_request_brief(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    csrf_token = _login_as_employee(app, client)
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000024", stage="consultation_scheduled")
+
+    response = client.post(
+        "/admin/private-requests/PRT-000024/update",
+        data={
+            "csrf_token": csrf_token,
+            "service_type": "consultation",
+            "trip_scope": "Local",
+            "destination": "Hurghada",
+            "start_date_pref": "2026-09-20",
+            "end_date_pref": "2026-09-27",
+            "dates_flexible": "1",
+            "party_size": "5",
+            "budget_amount": "8000",
+            "budget_currency": "EGP",
+            "notes": "Corrected after a call with the customer.",
+        },
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        from app.models.private_trip_request import PrivateTripRequest
+
+        item = db.session.get(PrivateTripRequest, "PRT-000024")
+        assert item.destination == "Hurghada"
+        assert item.service_type == "consultation"
+        assert item.trip_scope == "Local"
+        assert item.start_date_pref == date(2026, 9, 20)
+        assert item.end_date_pref == date(2026, 9, 27)
+        assert item.dates_flexible is True
+        assert item.party_size == 5
+        assert item.budget_amount == 8000.0
+        assert item.budget_currency == "EGP"
+        assert item.notes == "Corrected after a call with the customer."
+        # Untouched by design: the pipeline stage and the traveler link.
+        assert item.stage == "consultation_scheduled"
+        assert item.traveler_id == "TR-PRT-000024"
+
+
+def test_update_keeps_the_existing_traveler_when_the_picker_is_left_blank(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    csrf_token = _login_as_employee(app, client)
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000025", stage="registered")
+
+    client.post(
+        "/admin/private-requests/PRT-000025/update",
+        data={
+            "csrf_token": csrf_token,
+            "service_type": "full_package",
+            "trip_scope": "International",
+            "destination": "Maldives",
+            "traveler_id": "",
+            "lead_id": "",
+        },
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        from app.models.private_trip_request import PrivateTripRequest
+
+        item = db.session.get(PrivateTripRequest, "PRT-000025")
+        assert item.traveler_id == "TR-PRT-000025"
+
+
+def test_update_rejects_a_blank_destination(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    csrf_token = _login_as_employee(app, client)
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000026", stage="registered")
+
+    response = client.post(
+        "/admin/private-requests/PRT-000026/update",
+        data={
+            "csrf_token": csrf_token,
+            "service_type": "full_package",
+            "trip_scope": "International",
+            "destination": "   ",
+        },
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        from app.models.private_trip_request import PrivateTripRequest
+
+        item = db.session.get(PrivateTripRequest, "PRT-000026")
+        assert item.destination == "Maldives"
+
+
 if __name__ == "__main__":  # pragma: no cover
     import unittest
 

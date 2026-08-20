@@ -10,10 +10,17 @@ from app.extensions import db
 from app.models import BookingTransaction, Lead, PrivateTripRequest, Traveler, Trip, TripBooking
 from app.models.booking_transaction import ENTRY_PAYMENT, SOURCE_PRIVATE_TRIP_DEPOSIT
 from app.security import current_user, current_user_id, employee_session_required, has_permission
-from app.services.assignments import active_assignees, apply_assignment, assignment_history, resolve_user_id
+from app.services.assignments import (
+    active_assignees,
+    apply_assignment,
+    assignment_history,
+    auto_assign_private_request,
+    resolve_user_id,
+)
 from services.crm.system_services.private_trips import (
     PRIVATE_BUDGET_CURRENCIES,
     PRIVATE_REQUEST_STAGES,
+    PRIVATE_REQUEST_TRANSITIONS,
     PRIVATE_SERVICE_TYPES,
     PRIVATE_TRIP_SCOPES,
     can_transition_private_stage,
@@ -85,6 +92,9 @@ def index():
         service_types=PRIVATE_SERVICE_TYPES,
         scopes=PRIVATE_TRIP_SCOPES,
         currencies=PRIVATE_BUDGET_CURRENCIES,
+        employees=active_assignees(),
+        can_assign=has_permission("assign_work"),
+        today=date.today(),
     )
 
 
@@ -171,6 +181,11 @@ def create():
     if not service_type or not trip_scope or not destination:
         flash("Service type, trip scope, and destination are required.", "error")
         return redirect(url_for("private_requests.index"))
+    requested_owner = str(request.form.get("assigned_to_user_id") or "").strip()
+    if requested_owner and not has_permission("assign_work"):
+        flash("You do not have permission to assign private requests.", "error")
+        return redirect(url_for("private_requests.index"))
+    priority = str(request.form.get("priority") or "").strip()
     now = utc_now().replace(tzinfo=None)
     item = PrivateTripRequest(
         request_id=_next_prefixed_id(PrivateTripRequest, "request_id", "PRT-", 6),
@@ -188,14 +203,41 @@ def create():
         budget_amount=_parse_float(request.form.get("budget_amount")),
         budget_currency=str(request.form.get("budget_currency") or "").strip().upper() or None,
         notes=str(request.form.get("notes") or "").strip() or None,
+        priority=priority if priority in {"High", "Medium", "Low"} else "Medium",
+        channel=str(request.form.get("channel") or "").strip() or None,
+        follow_up_due_date=_parse_date(request.form.get("follow_up_due_date")),
         stage="registered",
         stage_changed_at=now,
         created_at=now,
         created_by=current_user_id(),
     )
     db.session.add(item)
+    # Ownership from the moment it exists, exactly like a lead: an explicit
+    # choice wins, otherwise the same round-robin sales rotation applies, so a
+    # request is never left with nobody accountable for its consultation SLA.
+    try:
+        if requested_owner:
+            apply_assignment(
+                item,
+                resource_type="private_trip_request",
+                resource_id=item.request_id,
+                new_user_id=resolve_user_id(requested_owner, allow_blank=False),
+                actor=current_user(),
+                reason=str(request.form.get("assignment_reason") or "").strip(),
+            )
+        else:
+            auto_assign_private_request(
+                item,
+                actor=current_user(),
+                reason="Automatic round-robin sales assignment on private request creation",
+            )
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), "error")
+        return redirect(url_for("private_requests.index"))
     db.session.commit()
-    flash(f"Private request {item.request_id} created.", "success")
+    owner = item.assigned_to or "nobody yet"
+    flash(f"Private request {item.request_id} created and assigned to {owner}.", "success")
     return redirect(url_for("private_requests.detail", request_id=item.request_id))
 
 
@@ -203,10 +245,18 @@ def create():
 @employee_session_required
 def detail(request_id: str):
     item = db.get_or_404(PrivateTripRequest, request_id)
+    # The pipeline is strictly linear -- every stage has exactly one forward
+    # transition plus "lost" (PRIVATE_REQUEST_TRANSITIONS). The page used to
+    # render a Move button for all 11 stages, so 9 of the 10 visible buttons
+    # were invalid transitions that only produced a "Cannot move X to Y" flash.
+    # Resolve the single legal next step here instead.
+    forward_stages = sorted(PRIVATE_REQUEST_TRANSITIONS.get(item.stage, set()) - {"lost"})
     return render_template(
         "admin/private_request_detail.html",
         item=item,
         stages=PRIVATE_REQUEST_STAGES,
+        next_stage=forward_stages[0] if forward_stages else "",
+        can_mark_lost=can_transition_private_stage(item.stage, "lost"),
         service_types=PRIVATE_SERVICE_TYPES,
         scopes=PRIVATE_TRIP_SCOPES,
         currencies=PRIVATE_BUDGET_CURRENCIES,
@@ -214,6 +264,7 @@ def detail(request_id: str):
         can_assign=has_permission("assign_work"),
         assigned_user=item.assigned_user,
         assigned_history=assignment_history("private_trip_request", item.request_id),
+        today=date.today(),
     )
 
 
@@ -253,6 +304,53 @@ def update_followup(request_id: str):
     item.channel = str(request.form.get("channel") or item.channel or "").strip() or item.channel
     db.session.commit()
     flash(f"{item.request_id} follow-up details updated.", "success")
+    return redirect(url_for("private_requests.detail", request_id=item.request_id))
+
+
+@private_requests_bp.route("/<string:request_id>/update", methods=["POST"])
+@employee_session_required
+def update(request_id: str):
+    """Correct the request brief.
+
+    Everything on this page was previously read-only apart from stage,
+    follow-up and assignment: an agent-captured destination, date, party size
+    or budget could not be fixed from the CRM at all, which meant a typo in an
+    intake had to be worked around by hand. Deliberately does NOT touch
+    `stage` (that is update_stage's state machine), the deposit fields (written
+    only by a real deposit_paid transition), or `converted_booking_id`.
+    """
+
+    item = db.get_or_404(PrivateTripRequest, request_id)
+    service_type = normalize_private_service_type(request.form.get("service_type"))
+    trip_scope = normalize_private_scope(request.form.get("trip_scope"))
+    destination = str(request.form.get("destination") or "").strip()
+    if not service_type or not trip_scope or not destination:
+        flash("Service type, trip scope, and destination are required.", "error")
+        return redirect(url_for("private_requests.detail", request_id=item.request_id))
+
+    item.service_type = service_type
+    item.trip_scope = trip_scope
+    item.destination = destination
+    item.start_date_pref = _parse_date(request.form.get("start_date_pref"))
+    item.end_date_pref = _parse_date(request.form.get("end_date_pref"))
+    item.dates_flexible = bool(request.form.get("dates_flexible"))
+    item.party_size = max(int(_parse_float(request.form.get("party_size")) or item.party_size or 1), 1)
+    item.boys_count = int(_parse_float(request.form.get("boys_count")) or 0)
+    item.girls_count = int(_parse_float(request.form.get("girls_count")) or 0)
+    item.budget_amount = _parse_float(request.form.get("budget_amount"))
+    currency = str(request.form.get("budget_currency") or "").strip().upper()
+    item.budget_currency = currency if currency in PRIVATE_BUDGET_CURRENCIES else None
+    item.notes = str(request.form.get("notes") or "").strip() or None
+    # Linking is additive only: a blank picker means "left it alone", never
+    # "unlink the traveler the agent already verified".
+    traveler_id = str(request.form.get("traveler_id") or "").strip()
+    if traveler_id:
+        item.traveler_id = traveler_id
+    lead_id = str(request.form.get("lead_id") or "").strip()
+    if lead_id:
+        item.lead_id = lead_id
+    db.session.commit()
+    flash(f"Private request {item.request_id} updated.", "success")
     return redirect(url_for("private_requests.detail", request_id=item.request_id))
 
 

@@ -1,199 +1,527 @@
 {% extends "base.html" %}
 
 {% block title %}{{ item.request_id }} - Private Request{% endblock %}
+{% block topbar_title %}Private Request{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ url_for('private_requests.index') }}" class="btn btn-ghost btn-sm">← All Requests</a>
+<button onclick="openModal('editRequest')" class="btn btn-primary btn-sm">Edit Request</button>
+{% endblock %}
 
 {% block content %}
-<style>
-    .detail-head { display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; margin-bottom:1rem; }
-    .detail-head h1 { margin:0 0 .35rem; font-size:1.55rem; }
-    .muted { color:var(--text-muted); }
-    .grid { display:grid; grid-template-columns:2fr 1fr; gap:1rem; align-items:start; }
-    .panel { background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:1rem; }
-    .facts { display:grid; grid-template-columns:repeat(2, minmax(160px, 1fr)); gap:.75rem; }
-    .fact span { display:block; color:var(--text-muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; margin-bottom:.2rem; }
-    .fact strong { font-size:.95rem; }
-    .stage-list { display:grid; gap:.45rem; margin-top:.75rem; }
-    .stage-row { display:flex; justify-content:space-between; gap:.5rem; align-items:center; padding:.55rem .65rem; border:1px solid var(--border); border-radius:6px; background:#101010; }
-    .stage-row.current { border-color:var(--border-act); }
-    .stage-row form { margin:0; }
-    button, .button { border:0; border-radius:6px; padding:.55rem .75rem; background:var(--accent); color:#06120f; font-weight:700; cursor:pointer; text-decoration:none; }
-    input, select, textarea { width:100%; background:#101010; color:var(--text-main); border:1px solid var(--border); border-radius:6px; padding:.55rem .65rem; }
-    label { display:grid; gap:.3rem; color:var(--text-dim); font-size:.78rem; }
-    .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
-    .form-grid .full { grid-column:1 / -1; }
-    @media (max-width: 900px) { .grid { grid-template-columns:1fr; } }
-</style>
+{#
+  Layout rewrite. The previous version rendered a "Move" button for all 11
+  pipeline stages side by side, but PRIVATE_REQUEST_TRANSITIONS is strictly
+  linear -- every stage has exactly one forward move plus "lost" -- so 9 of
+  the 10 buttons could only ever produce a "Cannot move X to Y" flash. It also
+  printed raw datetimes ("2026-08-22 16:19:10.254575"), showed the linked lead
+  and traveler as plain unclickable text, and used its own ad-hoc panel CSS
+  instead of the card/badge/work-item system every other CRM detail page uses.
+#}
+{% set pipeline = stages | reject('equalto', 'lost') | list %}
+{% set current_idx = pipeline.index(item.stage) if item.stage in pipeline else -1 %}
+{% set stage_label = item.stage.replace('_', ' ')|title %}
+{% set is_closed = item.stage in ('converted', 'lost') %}
+{% set is_overdue = item.is_consultation_overdue or item.is_design_overdue %}
 
-<div class="detail-head">
-    <div>
-        <h1>{{ item.request_id }} - {{ item.destination or 'Private request' }}</h1>
-        <div class="muted">{{ service_types.get(item.service_type, item.service_type) }} · {{ item.trip_scope }} · {{ item.stage.replace('_', ' ') }}</div>
-    </div>
-    <a class="button" href="{{ url_for('private_requests.index') }}">Back</a>
-</div>
+<div class="grid-2" style="grid-template-columns:2fr 1fr;gap:1.25rem;align-items:start">
 
-<div class="grid">
-    <section class="panel">
-        <h2>Request Brief</h2>
-        <div class="facts">
-            <div class="fact"><span>Traveler</span><strong>{{ item.traveler.full_name if item.traveler else item.traveler_id or 'Unlinked' }}</strong></div>
-            <div class="fact"><span>Lead</span><strong>{{ item.lead_id or 'None' }}</strong></div>
-            <div class="fact"><span>Dates</span><strong>{{ item.start_date_pref or 'TBD' }}{% if item.end_date_pref %} to {{ item.end_date_pref }}{% endif %}{% if item.dates_flexible %} · flexible{% endif %}</strong></div>
-            <div class="fact"><span>Party</span><strong>{{ item.party_size }}{% if item.boys_count or item.girls_count %} ({{ item.boys_count }} boys, {{ item.girls_count }} girls){% endif %}</strong></div>
-            <div class="fact"><span>Budget</span><strong>{{ item.budget_amount or 'TBD' }} {{ item.budget_currency or '' }}</strong></div>
-            <div class="fact"><span>Deposit</span><strong>{{ item.deposit_amount or 'None' }} {{ item.deposit_currency or '' }}{% if item.deposit_amount %} · non-refundable{% endif %}</strong></div>
-            <div class="fact"><span>Consultation Due</span><strong>{{ item.consultation_due_at or 'Not set' }}</strong></div>
-            <div class="fact"><span>Design Due</span><strong>{{ item.design_due_at or 'Not set' }}</strong></div>
-            <div class="fact"><span>Converted Booking</span><strong>{% if item.converted_booking_id %}<a href="{{ url_for('bookings.detail', booking_id=item.converted_booking_id) }}">{{ item.converted_booking_id }}</a>{% else %}Not converted{% endif %}</strong></div>
-            <div class="fact"><span>Lost Reason</span><strong>{{ item.lost_reason or 'None' }}</strong></div>
-        </div>
-        {% if item.notes %}
-        <p class="muted" style="margin-top:1rem">{{ item.notes }}</p>
-        {% endif %}
-    </section>
+    <!-- Left -->
+    <div style="display:flex;flex-direction:column;gap:1.25rem">
 
-    <aside class="panel">
-        <h2>Stage</h2>
-        <div class="stage-list">
-            {% for stage in stages %}
-            <div class="stage-row {% if stage == item.stage %}current{% endif %}">
-                <span>{{ stage.replace('_', ' ') }}</span>
-                {% if stage != item.stage and item.stage not in ('converted', 'lost') %}
-                <form method="post" action="{{ url_for('private_requests.update_stage', request_id=item.request_id) }}">
+        <div class="card">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+                <div>
+                    <div style="display:flex;align-items:center;gap:0.65rem;flex-wrap:wrap;margin-bottom:0.5rem">
+                        <span class="mono" style="color:var(--accent-2)">{{ item.request_id }}</span>
+                        {% if item.stage == 'converted' %}
+                        <span class="badge badge-green">{{ stage_label }}</span>
+                        {% elif item.stage == 'lost' %}
+                        <span class="badge badge-red">{{ stage_label }}</span>
+                        {% elif item.stage == 'registered' %}
+                        <span class="badge badge-gray">{{ stage_label }}</span>
+                        {% else %}
+                        <span class="badge badge-yellow">{{ stage_label }}</span>
+                        {% endif %}
+                        <span class="badge badge-blue">{{ service_types.get(item.service_type, item.service_type) }}</span>
+                        <span class="badge badge-blue">{{ item.trip_scope }}</span>
+                        {% if item.priority == 'High' %}<span class="badge badge-red">High priority</span>{% endif %}
+                        {% if is_overdue %}<span class="badge badge-red">Overdue</span>{% endif %}
+                    </div>
+                    <h1 style="font-size:1.5rem;font-weight:800;color:var(--text-main)">{{ item.destination or 'Destination not set' }}</h1>
+                    <div style="color:var(--text-muted);font-size:0.83rem;margin-top:4px">
+                        {% if item.traveler %}
+                        <a href="{{ url_for('travelers.detail', traveler_id=item.traveler.traveler_id) }}">{{ item.traveler.full_name or item.traveler.traveler_id }}</a>
+                        {% if item.traveler.whatsapp_raw %} · {{ item.traveler.whatsapp_raw }}{% endif %}
+                        {% elif item.traveler_id %}
+                        {{ item.traveler_id }}
+                        {% else %}
+                        No traveler linked yet
+                        {% endif %}
+                        · created {{ item.created_at.strftime('%d %b %Y %H:%M') if item.created_at else '—' }}
+                    </div>
+                </div>
+                {% if next_stage %}
+                <form method="post" action="{{ url_for('private_requests.update_stage', request_id=item.request_id) }}" style="margin:0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input type="hidden" name="stage" value="{{ stage }}">
-                    {% if stage == 'deposit_paid' %}
+                    <input type="hidden" name="stage" value="{{ next_stage }}">
+                    {% if next_stage == 'deposit_paid' %}
                     <input type="hidden" name="deposit_amount" value="{{ item.deposit_amount or item.budget_amount or '' }}">
                     <input type="hidden" name="deposit_currency" value="{{ item.deposit_currency or item.budget_currency or 'EGP' }}">
                     {% endif %}
-                    <button type="submit">Move</button>
+                    <button type="submit" class="btn btn-success btn-sm">{{ next_stage.replace('_', ' ')|title }} →</button>
                 </form>
                 {% endif %}
             </div>
-            {% endfor %}
-        </div>
-    </aside>
-</div>
 
-<div class="grid" style="margin-top:1rem">
-    <section class="panel">
-        <h2>Employee Follow-up</h2>
-        <div class="facts">
-            <div class="fact"><span>Next Action</span><strong>{{ item.current_step or 'Review request' }}</strong></div>
-            <div class="fact"><span>Assigned Employee</span><strong>{{ assigned_user.display_name if assigned_user else (item.assigned_to or 'Unassigned') }}</strong></div>
-            <div class="fact"><span>Priority</span><strong>{{ item.priority or 'Medium' }}</strong></div>
-            <div class="fact"><span>Next Follow-up</span><strong>{{ item.follow_up_due_date or 'Not scheduled' }}</strong></div>
-            <div class="fact"><span>Last Customer Contact</span><strong>{{ item.last_contact_at or 'No employee contact recorded' }}</strong></div>
-            <div class="fact"><span>Customer Response</span><strong>{{ item.customer_response_status or item.follow_up_status or 'Open' }}</strong></div>
-            <div class="fact"><span>Channel</span><strong>{{ item.channel or 'Unknown' }}</strong></div>
-        </div>
-
-        <form class="form-grid" method="post" action="{{ url_for('private_requests.update_followup', request_id=item.request_id) }}" style="margin-top:1rem">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <label>Priority
-                <select name="priority">
-                    {% for p in ['High', 'Medium', 'Low'] %}
-                    <option value="{{ p }}" {% if item.priority == p %}selected{% endif %}>{{ p }}</option>
-                    {% endfor %}
-                </select>
-            </label>
-            <label>Next Follow-up Date
-                <input type="date" name="follow_up_due_date" value="{{ item.follow_up_due_date or '' }}">
-            </label>
-            <label>Channel
-                <input type="text" name="channel" value="{{ item.channel or '' }}" placeholder="e.g. whatsapp, web">
-            </label>
-            <div class="full">
-                <button type="submit">Save Follow-up</button>
+            <!-- Pipeline progress: one cell per stage, "lost" excluded (it is a
+                 side exit from every stage, not a step in the sequence). -->
+            <div style="display:flex;gap:0;margin-top:1.25rem;overflow:hidden;border-radius:0.5rem">
+                {% for s in pipeline %}
+                <div title="{{ s.replace('_', ' ')|title }}" style="flex:1;min-width:0;padding:0.4rem 0.3rem;text-align:center;font-size:0.58rem;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;line-height:1.25;overflow-wrap:anywhere;
+                    background:{% if loop.index0 < current_idx %}rgba(0,208,146,0.18){% elif loop.index0 == current_idx %}var(--accent){% else %}rgba(255,255,255,0.04){% endif %};
+                    color:{% if loop.index0 <= current_idx %}#fff{% else %}var(--text-muted){% endif %};
+                    border-right:1px solid var(--border)">{{ s.replace('_', ' ') }}</div>
+                {% endfor %}
             </div>
-        </form>
-    </section>
-
-    <aside class="panel">
-        <h2>Actions</h2>
-        <div style="display:grid;gap:.5rem">
-            <button type="button" onclick="runPrivateRequestQuickAction('mark_contacted')">Mark Customer Contacted</button>
-            <button type="button" onclick="runPrivateRequestQuickAction('waiting_customer')">Waiting for Customer</button>
+            <div style="margin-top:0.5rem;font-size:0.78rem;color:var(--text-muted)">
+                {% if item.stage == 'lost' %}
+                Marked lost{% if item.lost_reason %} — {{ item.lost_reason }}{% endif %}.
+                {% elif current_idx >= 0 %}
+                Step {{ current_idx + 1 }} of {{ pipeline|length }} · {{ stage_label }}{% if next_stage %} · next: {{ next_stage.replace('_', ' ')|title }}{% endif %}
+                {% endif %}
+            </div>
         </div>
 
-        {% if can_assign %}
-        <form method="post" action="{{ url_for('private_requests.assign', request_id=item.request_id) }}" style="margin-top:1rem">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <label>Assigned Employee
-                <select name="assigned_to_user_id">
-                    <option value="">Unassigned</option>
-                    {% for employee in employees %}
-                    <option value="{{ employee.id }}" {% if item.assigned_to_user_id == employee.id %}selected{% endif %}>{{ employee.display_name }} · {{ employee.role }}</option>
-                    {% endfor %}
-                </select>
-            </label>
-            {% if item.assigned_to and not assigned_user %}<p class="muted" style="font-size:.75rem">Legacy owner text: {{ item.assigned_to }}. Choose an employee to link it.</p>{% endif %}
-            <label style="margin-top:.5rem">Reassignment Reason
-                <input type="text" name="assignment_reason" placeholder="Optional">
-            </label>
-            <div style="margin-top:.5rem">
-                <button type="submit">Save Assignment</button>
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Employee Follow-up</span>
+                {% if item.follow_up_due_date and item.follow_up_due_date < today %}
+                <span class="badge badge-red">Follow-up overdue</span>
+                {% endif %}
             </div>
-        </form>
+            <div class="work-summary">
+                <div class="work-item"><div class="work-label">Next Action</div><div class="work-value">{{ item.current_step or 'Review request' }}</div></div>
+                <div class="work-item"><div class="work-label">Assigned Employee</div><div class="work-value">{{ assigned_user.display_name if assigned_user else (item.assigned_to or 'Unassigned') }}</div></div>
+                <div class="work-item"><div class="work-label">Priority</div><div class="work-value">{{ item.priority or 'Medium' }}</div></div>
+                <div class="work-item"><div class="work-label">Next Follow-up</div><div class="work-value">{{ item.follow_up_due_date.strftime('%d %b %Y') if item.follow_up_due_date else 'Not scheduled' }}</div></div>
+                <div class="work-item"><div class="work-label">Last Customer Contact</div><div class="work-value">{{ item.last_contact_at.strftime('%d %b %Y %H:%M') if item.last_contact_at else 'No employee contact recorded' }}</div></div>
+                <div class="work-item"><div class="work-label">Customer Response</div><div class="work-value">{{ item.customer_response_status or item.follow_up_status or 'Open' }}</div></div>
+                <div class="work-item"><div class="work-label">Channel</div><div class="work-value">{{ item.channel or 'Unknown' }}</div></div>
+            </div>
+
+            <form class="grid-2" method="post" action="{{ url_for('private_requests.update_followup', request_id=item.request_id) }}" style="gap:1rem;margin-top:1rem">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="form-group">
+                    <label class="form-label">Priority</label>
+                    <select class="form-select" name="priority">
+                        {% for p in ['High', 'Medium', 'Low'] %}
+                        <option value="{{ p }}" {% if item.priority == p %}selected{% endif %}>{{ p }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Next Follow-up Date</label>
+                    <input class="form-input" type="date" name="follow_up_due_date" value="{{ item.follow_up_due_date.strftime('%Y-%m-%d') if item.follow_up_due_date else '' }}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Channel</label>
+                    <input class="form-input" type="text" name="channel" value="{{ item.channel or '' }}" placeholder="e.g. whatsapp, web">
+                </div>
+                <div class="form-group" style="align-self:end">
+                    <button type="submit" class="btn btn-primary">Save Follow-up</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Request Brief</span>
+                <button onclick="openModal('editRequest')" class="btn btn-ghost btn-sm">Edit</button>
+            </div>
+            <div class="grid-2" style="gap:1rem">
+                <div>
+                    <div class="form-label">Service</div>
+                    <div style="color:var(--text-main)">{{ service_types.get(item.service_type, item.service_type) }}</div>
+                </div>
+                <div>
+                    <div class="form-label">Scope</div>
+                    <div style="color:var(--text-main)">{{ item.trip_scope }}</div>
+                </div>
+                <div>
+                    <div class="form-label">Dates</div>
+                    <div style="color:var(--text-main)">
+                        {{ item.start_date_pref.strftime('%d %b %Y') if item.start_date_pref else 'TBD' }}{% if item.end_date_pref %} → {{ item.end_date_pref.strftime('%d %b %Y') }}{% endif %}{% if item.dates_flexible %} · flexible{% endif %}
+                    </div>
+                </div>
+                <div>
+                    <div class="form-label">Party</div>
+                    <div style="color:var(--text-main)">{{ item.party_size }} traveller{{ 's' if item.party_size != 1 else '' }}{% if item.boys_count or item.girls_count %} ({{ item.boys_count }} boys, {{ item.girls_count }} girls){% endif %}</div>
+                </div>
+                <div>
+                    <div class="form-label">Budget</div>
+                    <div style="color:var(--text-main)">{% if item.budget_amount %}{{ '{:,.0f}'.format(item.budget_amount) }} {{ item.budget_currency or '' }}{% else %}Not stated{% endif %}</div>
+                </div>
+                <div>
+                    <div class="form-label">Deposit</div>
+                    <div style="color:var(--text-main)">
+                        {% if item.deposit_amount %}{{ '{:,.0f}'.format(item.deposit_amount) }} {{ item.deposit_currency or '' }} · non-refundable{% else %}Not paid{% endif %}
+                    </div>
+                </div>
+                <div>
+                    <div class="form-label">Linked Lead</div>
+                    <div style="color:var(--text-main)">
+                        {% if item.lead_id %}<a class="mono" href="{{ url_for('leads.detail', lead_id=item.lead_id) }}">{{ item.lead_id }}</a>{% else %}None{% endif %}
+                    </div>
+                </div>
+                <div>
+                    <div class="form-label">Converted Booking</div>
+                    <div style="color:var(--text-main)">
+                        {% if item.converted_booking_id %}<a class="mono" href="{{ url_for('bookings.detail', booking_id=item.converted_booking_id) }}">{{ item.converted_booking_id }}</a>{% else %}Not converted{% endif %}
+                    </div>
+                </div>
+                {% if item.notes %}
+                <div class="col-span-2">
+                    <div class="form-label">Notes</div>
+                    <div style="color:var(--text-dim);font-size:0.83rem;line-height:1.6;white-space:pre-wrap">{{ item.notes }}</div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if not item.converted_booking_id and item.stage == 'paid' %}
+        <div class="card">
+            <div class="card-header"><span class="card-title">Convert To Booking</span></div>
+            <form class="grid-2" method="post" action="{{ url_for('private_requests.convert', request_id=item.request_id) }}" style="gap:1rem">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="form-group">
+                    <label class="form-label">Trip Name</label>
+                    <input class="form-input" name="trip_name" value="Private {{ item.destination }}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Arabic Trip Name</label>
+                    <input class="form-input" name="trip_name_ar" value="Private {{ item.destination }}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Room Type</label>
+                    <select class="form-select" name="room_type">
+                        <option>Single</option>
+                        <option selected>Double</option>
+                        <option>Triple</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Currency</label>
+                    <select class="form-select" name="currency">
+                        {% for currency in currencies %}
+                        <option value="{{ currency }}" {% if currency == (item.deposit_currency or item.budget_currency) %}selected{% endif %}>{{ currency }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Total Price</label>
+                    <input class="form-input" type="number" min="0" step="0.01" name="total_price" value="{{ item.budget_amount or '' }}">
+                </div>
+                <div class="form-group" style="align-self:end">
+                    <button type="submit" class="btn btn-primary">Convert</button>
+                </div>
+            </form>
+        </div>
+        {% elif not item.converted_booking_id and item.stage != 'lost' %}
+        <div class="card">
+            <p style="color:var(--text-muted);font-size:0.83rem;margin:0">Conversion is available once this request reaches the <strong>paid</strong> stage (currently <strong>{{ item.stage }}</strong>).</p>
+        </div>
         {% endif %}
 
         {% if assigned_history %}
-        <div style="margin-top:1rem;display:grid;gap:.4rem">
-            {% for entry in assigned_history %}
-            <div class="muted" style="font-size:.75rem;border:1px solid var(--border);border-radius:6px;padding:.5rem .6rem">
-                <strong style="color:var(--text-main)">{{ entry.new_user.display_name if entry.new_user else 'Unassigned' }}</strong>
-                from {{ entry.previous_user.display_name if entry.previous_user else 'Unassigned' }}
-                · {{ entry.created_at.strftime('%d %b %Y %H:%M') if entry.created_at else 'Unknown time' }}
-                {% if entry.reason %} · {{ entry.reason }}{% endif %}
+        <div class="card">
+            <div class="card-header"><span class="card-title">Assignment History</span></div>
+            <div style="display:flex;flex-direction:column;gap:0.5rem">
+                {% for entry in assigned_history %}
+                <div style="background:var(--bg-base);border:1px solid var(--border);border-radius:0.5rem;padding:0.65rem 0.75rem;font-size:0.78rem">
+                    <div style="color:var(--text-main);font-weight:700">
+                        {{ entry.new_user.display_name if entry.new_user else 'Unassigned' }}
+                        <span style="color:var(--text-muted);font-weight:400">from {{ entry.previous_user.display_name if entry.previous_user else 'Unassigned' }}</span>
+                    </div>
+                    <div style="color:var(--text-muted);margin-top:0.2rem">
+                        {{ entry.assigned_by_user.display_name if entry.assigned_by_user else 'System' }}
+                        · {{ entry.created_at.strftime('%d %b %Y %H:%M') if entry.created_at else 'Unknown time' }}
+                        {% if entry.reason %} · {{ entry.reason }}{% endif %}
+                    </div>
+                </div>
+                {% endfor %}
             </div>
-            {% endfor %}
         </div>
         {% endif %}
-    </aside>
+    </div>
+
+    <!-- Right -->
+    <div style="display:flex;flex-direction:column;gap:1rem">
+        <div class="card">
+            <div class="card-title" style="margin-bottom:1rem">Actions</div>
+            <div style="display:flex;flex-direction:column;gap:0.5rem">
+                {% if next_stage %}
+                <form method="post" action="{{ url_for('private_requests.update_stage', request_id=item.request_id) }}" style="margin:0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="stage" value="{{ next_stage }}">
+                    {% if next_stage == 'deposit_paid' %}
+                    <input type="hidden" name="deposit_amount" value="{{ item.deposit_amount or item.budget_amount or '' }}">
+                    <input type="hidden" name="deposit_currency" value="{{ item.deposit_currency or item.budget_currency or 'EGP' }}">
+                    {% endif %}
+                    <button type="submit" class="btn btn-primary" style="width:100%">→ Move to {{ next_stage.replace('_', ' ')|title }}</button>
+                </form>
+                {% endif %}
+                <button type="button" class="btn btn-ghost" onclick="runPrivateRequestQuickAction('mark_contacted')">Mark Customer Contacted</button>
+                <button type="button" class="btn btn-ghost" onclick="runPrivateRequestQuickAction('waiting_customer')">Waiting for Customer</button>
+                <button type="button" class="btn btn-ghost" onclick="openModal('editRequest')">Edit Request</button>
+                {% if can_mark_lost %}
+                <button type="button" class="btn btn-danger" onclick="openModal('markLost')">Mark as Lost</button>
+                {% endif %}
+            </div>
+            {% if is_closed %}
+            <p style="color:var(--text-muted);font-size:0.75rem;margin:0.75rem 0 0">This request is closed ({{ stage_label }}), so the pipeline cannot move any further.</p>
+            {% endif %}
+        </div>
+
+        {% if can_assign %}
+        <div class="card">
+            <div class="card-title" style="margin-bottom:0.75rem">Ownership</div>
+            <form method="post" action="{{ url_for('private_requests.assign', request_id=item.request_id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="form-group">
+                    <label class="form-label">Assigned Employee</label>
+                    <select class="form-select" name="assigned_to_user_id">
+                        <option value="">Unassigned</option>
+                        {% for employee in employees %}
+                        <option value="{{ employee.id }}" {% if item.assigned_to_user_id == employee.id %}selected{% endif %}>{{ employee.display_name }} · {{ employee.role }}</option>
+                        {% endfor %}
+                    </select>
+                    {% if item.assigned_to and not assigned_user %}<div class="form-hint">Legacy owner text: {{ item.assigned_to }}. Choose an employee to link it.</div>{% endif %}
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Reassignment Reason</label>
+                    <input class="form-input" type="text" name="assignment_reason" placeholder="Optional">
+                </div>
+                <button type="submit" class="btn btn-primary" style="width:100%">Save Assignment</button>
+            </form>
+        </div>
+        {% endif %}
+
+        <div class="card">
+            <div class="card-title" style="margin-bottom:0.75rem">Timeline</div>
+            <div style="display:flex;flex-direction:column;gap:0.5rem;font-size:0.78rem">
+                <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                    <span style="color:var(--text-muted)">Consultation due</span>
+                    <span style="text-align:right;{% if item.is_consultation_overdue %}color:#fca5a5{% endif %}">{{ item.consultation_due_at.strftime('%d %b %Y %H:%M') if item.consultation_due_at else 'Not set' }}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                    <span style="color:var(--text-muted)">Consultation done</span>
+                    <span style="text-align:right">{{ item.consultation_done_at.strftime('%d %b %Y %H:%M') if item.consultation_done_at else 'Not yet' }}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                    <span style="color:var(--text-muted)">Deposit paid</span>
+                    <span style="text-align:right">{{ item.deposit_paid_at.strftime('%d %b %Y %H:%M') if item.deposit_paid_at else 'Not yet' }}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                    <span style="color:var(--text-muted)">Design due</span>
+                    <span style="text-align:right;{% if item.is_design_overdue %}color:#fca5a5{% endif %}">{{ item.design_due_at.strftime('%d %b %Y %H:%M') if item.design_due_at else 'Not set' }}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                    <span style="color:var(--text-muted)">Design delivered</span>
+                    <span style="text-align:right">{{ item.design_delivered_at.strftime('%d %b %Y %H:%M') if item.design_delivered_at else 'Not yet' }}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                    <span style="color:var(--text-muted)">Stage changed</span>
+                    <span style="text-align:right">{{ item.stage_changed_at.strftime('%d %b %Y %H:%M') if item.stage_changed_at else '—' }}</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title" style="margin-bottom:0.75rem">Meta</div>
+            <div style="display:flex;flex-direction:column;gap:0.5rem;font-size:0.78rem">
+                <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                    <span style="color:var(--text-muted)">Traveler ID</span>
+                    <span class="mono" style="color:var(--accent-2)">{{ item.traveler_id or '—' }}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                    <span style="color:var(--text-muted)">Lead ID</span>
+                    <span class="mono" style="color:var(--accent-2)">{{ item.lead_id or '—' }}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                    <span style="color:var(--text-muted)">Created</span>
+                    <span>{{ item.created_at.strftime('%d %b %Y %H:%M') if item.created_at else '—' }}</span>
+                </div>
+                {% if item.lost_reason %}
+                <div style="display:flex;justify-content:space-between;gap:0.75rem">
+                    <span style="color:var(--text-muted)">Lost reason</span>
+                    <span style="text-align:right">{{ item.lost_reason }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
 </div>
 
-{% if not item.converted_booking_id and item.stage == 'paid' %}
-<section class="panel" style="margin-top:1rem">
-    <h2>Convert To Booking</h2>
-    <form class="form-grid" method="post" action="{{ url_for('private_requests.convert', request_id=item.request_id) }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <label>Trip Name
-            <input name="trip_name" value="Private {{ item.destination }}">
-        </label>
-        <label>Arabic Trip Name
-            <input name="trip_name_ar" value="Private {{ item.destination }}">
-        </label>
-        <label>Room Type
-            <select name="room_type">
-                <option>Single</option>
-                <option selected>Double</option>
-                <option>Triple</option>
-            </select>
-        </label>
-        <label>Currency
-            <select name="currency">
-                {% for currency in currencies %}
-                <option value="{{ currency }}" {% if currency == (item.deposit_currency or item.budget_currency) %}selected{% endif %}>{{ currency }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label>Total Price
-            <input type="number" min="0" step="0.01" name="total_price" value="{{ item.budget_amount or '' }}">
-        </label>
-        <div class="full">
-            <button type="submit">Convert</button>
+<!-- EDIT REQUEST MODAL -->
+<div id="editRequest" class="modal-overlay">
+    <div class="modal-box modal-flush modal-lg">
+        <div class="modal-header">
+            <span class="modal-title">Edit Request</span>
+            <button class="modal-close" onclick="closeModal('editRequest')">Close</button>
         </div>
-    </form>
-</section>
-{% elif not item.converted_booking_id and item.stage != 'lost' %}
-<section class="panel" style="margin-top:1rem">
-    <p style="color:var(--text-muted)">Conversion is available once this request reaches the <strong>paid</strong> stage (currently <strong>{{ item.stage }}</strong>).</p>
-</section>
+        <form class="modal-form" method="post" action="{{ url_for('private_requests.update', request_id=item.request_id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="modal-body">
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">1</span> What they asked for</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Service</label>
+                            <select class="form-select" name="service_type" required>
+                                {% for key, label in service_types.items() %}
+                                <option value="{{ key }}" {% if item.service_type == key %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Scope</label>
+                            <select class="form-select" name="trip_scope" required>
+                                {% for scope in scopes %}
+                                <option value="{{ scope }}" {% if item.trip_scope == scope %}selected{% endif %}>{{ scope }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group col-span-2">
+                            <label class="form-label">Destination</label>
+                            <input class="form-input" name="destination" value="{{ item.destination or '' }}" required>
+                        </div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">2</span> Dates &amp; party</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Start Date</label>
+                            <input class="form-input" type="date" name="start_date_pref" value="{{ item.start_date_pref.strftime('%Y-%m-%d') if item.start_date_pref else '' }}">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">End Date</label>
+                            <input class="form-input" type="date" name="end_date_pref" value="{{ item.end_date_pref.strftime('%Y-%m-%d') if item.end_date_pref else '' }}">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Flexible Dates</label>
+                            <select class="form-select" name="dates_flexible">
+                                <option value="">No</option>
+                                <option value="1" {% if item.dates_flexible %}selected{% endif %}>Yes</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Party Size</label>
+                            <input class="form-input" type="number" min="1" name="party_size" value="{{ item.party_size or 1 }}">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Boys</label>
+                            <input class="form-input" type="number" min="0" name="boys_count" value="{{ item.boys_count or 0 }}">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Girls</label>
+                            <input class="form-input" type="number" min="0" name="girls_count" value="{{ item.girls_count or 0 }}">
+                        </div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">3</span> Budget &amp; links</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Budget</label>
+                            <input class="form-input" type="number" min="0" step="0.01" name="budget_amount" value="{{ item.budget_amount or '' }}">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Currency</label>
+                            <select class="form-select" name="budget_currency">
+                                <option value="">Unknown</option>
+                                {% for currency in currencies %}
+                                <option value="{{ currency }}" {% if item.budget_currency == currency %}selected{% endif %}>{{ currency }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Link Traveler</label>
+                            <div class="picker" data-picker data-search-url="{{ url_for('private_requests.search_travelers') }}">
+                                <input type="text" class="form-input picker-input" placeholder="{{ item.traveler_id or 'Search name, ID, or phone' }}" autocomplete="off">
+                                <button type="button" class="picker-clear" title="Clear">&times;</button>
+                                <input type="hidden" name="traveler_id">
+                                <div class="picker-results"></div>
+                            </div>
+                            <div class="form-hint">Leave blank to keep {{ item.traveler_id or 'it unlinked' }}.</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Link Lead</label>
+                            <div class="picker" data-picker data-search-url="{{ url_for('private_requests.search_leads') }}">
+                                <input type="text" class="form-input picker-input" placeholder="{{ item.lead_id or 'Search name, ID, or phone' }}" autocomplete="off">
+                                <button type="button" class="picker-clear" title="Clear">&times;</button>
+                                <input type="hidden" name="lead_id">
+                                <div class="picker-results"></div>
+                            </div>
+                            <div class="form-hint">Leave blank to keep {{ item.lead_id or 'it unlinked' }}.</div>
+                        </div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="form-section">
+                    <div class="form-section-title"><span class="step-num">4</span> Notes</div>
+                    <div class="form-group">
+                        <textarea class="form-textarea" name="notes" style="min-height:80px">{{ item.notes or '' }}</textarea>
+                    </div>
+                </fieldset>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('editRequest')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if can_mark_lost %}
+<!-- MARK LOST MODAL -->
+<div id="markLost" class="modal-overlay">
+    <div class="modal-box" style="max-width:420px">
+        <div class="modal-header">
+            <span class="modal-title">Mark as Lost</span>
+            <button class="modal-close" onclick="closeModal('markLost')">Close</button>
+        </div>
+        <form method="post" action="{{ url_for('private_requests.update_stage', request_id=item.request_id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="stage" value="lost">
+            <div class="form-group">
+                <label class="form-label">Why was it lost?</label>
+                <textarea class="form-textarea" name="lost_reason" placeholder="Budget, timing, went elsewhere…"></textarea>
+                <div class="form-hint">This closes the request. Nothing else can move afterwards.</div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1rem">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('markLost')">Cancel</button>
+                <button type="submit" class="btn btn-danger">Mark as Lost</button>
+            </div>
+        </form>
+    </div>
+</div>
 {% endif %}
+
+{% include "admin/_entity_picker.html" %}
 {% endblock %}
 
 {% block scripts %}
 <script>
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(function (m) {
+    m.addEventListener('click', function (e) { if (e.target === m) m.classList.remove('open'); });
+});
+
 function runPrivateRequestQuickAction(action) {
     fetch('{{ url_for("private_requests.quick_action", request_id=item.request_id) }}', {
         method: 'POST',

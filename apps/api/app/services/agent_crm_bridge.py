@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -10,7 +11,7 @@ from sqlalchemy import func, or_, text
 
 from app.extensions import db
 from app.models import BookingStatusHistory, HandoffQueue, Interaction, Lead, PrivateTripRequest, Traveler, TravelerDocument, Trip, TripBooking, TripMedia
-from app.services.assignments import auto_assign_booking, auto_assign_lead
+from app.services.assignments import auto_assign_booking, auto_assign_lead, auto_assign_private_request
 from app.services.booking_automation import auto_create_booking_from_lead
 from services.crm.system_services.private_trips import (
     consultation_due_from,
@@ -19,6 +20,9 @@ from services.crm.system_services.private_trips import (
     utc_now,
 )
 from services.crm.system_services.unified_service import UnifiedCRMService
+
+
+logger = logging.getLogger(__name__)
 
 
 def _utc_now() -> datetime:
@@ -722,6 +726,26 @@ class PostgresAgentBridgeService:
             idempotency_key=resolved_idempotency_key,
         )
         db.session.add(request)
+        # Same round-robin ownership create_lead() above already applies, in the
+        # same transaction as the insert: an agent-created private request that
+        # arrived Unassigned had nobody accountable for its 48-hour
+        # consultation SLA. Skipped on the dedupe path above, which returns
+        # before reaching here and must not reassign an existing request.
+        #
+        # Best-effort: an unowned request is a follow-up problem, a request that
+        # failed to save is a lost customer, and this write already has a
+        # history of failing silently in production (see the AGENT_WRITE_ACTIONS
+        # allowlist incident) -- so assignment must never be what sinks it.
+        try:
+            auto_assign_private_request(
+                request,
+                actor=None,
+                reason="Automatic round-robin sales assignment on private request creation",
+            )
+        except Exception:
+            logger.exception(
+                "Auto-assignment failed for private request %s; saving it unassigned", request_id
+            )
         db.session.commit()
         payload = request.to_dict()
         payload["write_result_contract"] = self.write_result_contract(

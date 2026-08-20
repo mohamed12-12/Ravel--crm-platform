@@ -861,3 +861,81 @@ def test_handoff_without_a_stage_override_leaves_the_lead_stage_untouched(bridge
         assert intake.lead_stage == "New Lead"
         # The handoff itself is still recorded against the lead as before.
         assert intake.handoff_required is True
+
+
+def test_agent_created_private_request_is_auto_assigned_to_sales(bridge_app):
+    """A private request created by the agent used to arrive Unassigned, so
+    nobody owned its 48-hour consultation SLA until a manager noticed it in
+    /admin/private-requests and assigned it by hand. Leads have been
+    round-robin auto-assigned on creation for a while; this is the same
+    treatment, in the same transaction as the insert.
+    """
+    app, db = bridge_app
+    client = app.test_client()
+    app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://staging/redacted"
+    from app.models import PrivateTripRequest
+    from app.models.assignment_history import AssignmentHistory
+    from app.models.user import User
+
+    with app.app_context():
+        db.session.add(User(username="sales-one", full_name="Sales One", password_hash="x", role="sales", is_active=True))
+        db.session.commit()
+        sales_id = User.query.filter_by(username="sales-one").one().id
+
+    response = client.post(
+        "/api/crm/agent/write",
+        json={
+            "action": "create_private_trip_request",
+            "payload": {
+                "traveler_id": "TRPG001",
+                "service_type": "full_package",
+                "trip_scope": "Local",
+                "destination": "Hurghada",
+                "party_size": 5,
+                "budget_amount": 5000,
+                "budget_currency": "EGP",
+            },
+            "session_context": {"session_id": "private-autoassign-pg-1", "language": "ar"},
+        },
+    )
+
+    assert response.status_code == 200, response.get_json()
+    with app.app_context():
+        item = PrivateTripRequest.query.one()
+        assert item.assigned_to_user_id == sales_id
+        assert item.assigned_to == "Sales One"
+        entry = AssignmentHistory.query.filter_by(
+            resource_type="private_trip_request", resource_id=item.request_id
+        ).one()
+        assert entry.new_user_id == sales_id
+
+
+def test_agent_private_request_still_saves_when_no_sales_employee_exists(bridge_app):
+    """Auto-assignment is best-effort: with an empty sales pool
+    next_round_robin_sales_assignee() returns None and the request must still
+    be created rather than failing the write.
+    """
+    app, db = bridge_app
+    client = app.test_client()
+    app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://staging/redacted"
+    from app.models import PrivateTripRequest
+
+    response = client.post(
+        "/api/crm/agent/write",
+        json={
+            "action": "create_private_trip_request",
+            "payload": {
+                "traveler_id": "TRPG001",
+                "service_type": "consultation",
+                "trip_scope": "International",
+                "destination": "Maldives",
+                "party_size": 2,
+            },
+            "session_context": {"session_id": "private-autoassign-pg-2", "language": "en"},
+        },
+    )
+
+    assert response.status_code == 200, response.get_json()
+    with app.app_context():
+        item = PrivateTripRequest.query.one()
+        assert item.assigned_to_user_id is None

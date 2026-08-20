@@ -94,8 +94,16 @@ def _numeric_candidates(text: str, *, today: date) -> list[tuple[int, int, int]]
     return candidates
 
 
-def _month_name_candidates(text: str, *, today: date) -> list[tuple[int, int, int]]:
-    month_names = "|".join(sorted(_MONTHS, key=len, reverse=True))
+def _month_name_candidates(
+    text: str,
+    *,
+    today: date,
+    months: dict[str, int] | None = None,
+) -> list[tuple[int, int, int]]:
+    # `months` defaults to the English map every pre-existing caller uses;
+    # normalize_flexible_future_date passes the Arabic names as well.
+    months = months or _MONTHS
+    month_names = "|".join(sorted(months, key=len, reverse=True))
     day_first = re.compile(
         rf"(?<!\w)(\d{{1,2}})\s+({month_names})\.?\s+(\d{{2,4}})(?!\w)",
         re.IGNORECASE,
@@ -111,13 +119,13 @@ def _month_name_candidates(text: str, *, today: date) -> list[tuple[int, int, in
     candidates: list[tuple[int, int, int]] = []
     for match in day_first.finditer(text):
         day, month, year = match.groups()
-        candidates.append((_normalize_year(year, today=today), _MONTHS[month.lower()], int(day)))
+        candidates.append((_normalize_year(year, today=today), months[month.lower()], int(day)))
     for match in month_first.finditer(text):
         month, day, year = match.groups()
-        candidates.append((_normalize_year(year, today=today), _MONTHS[month.lower()], int(day)))
+        candidates.append((_normalize_year(year, today=today), months[month.lower()], int(day)))
     for match in year_first.finditer(text):
         year, month, day = match.groups()
-        candidates.append((_normalize_year(year, today=today), _MONTHS[month.lower()], int(day)))
+        candidates.append((_normalize_year(year, today=today), months[month.lower()], int(day)))
     return candidates
 
 
@@ -277,4 +285,38 @@ def normalize_relative_date_input(text: str, *, today: date | None = None) -> st
     if any(term in lowered for term in _NEXT_WEEK_TERMS):
         return (today + timedelta(days=7)).isoformat()
 
+    return ""
+
+
+def normalize_future_date_input(text: str, *, today: date | None = None) -> str:
+    """Resolve an ABSOLUTE date the customer means in the future (a travel date
+    preference) from the same loose formats a birthday accepts.
+
+    Live 2026-08-20 transcript: the private-trip dates step accepted only
+    strict ISO, so "28/9/2026" was rejected and the re-ask then demanded
+    YYYY-MM-DD -- from a customer who had answered the birthday question three
+    turns earlier with "28/4/2003" and had every reason to expect the same
+    format to work. Accepts "28/9/2026", "2026-09-28", "28 Sep 2026",
+    "28 سبتمبر 2026" and Arabic-Indic digits, resolving an ambiguous
+    day/month pair day-first (the Egyptian convention `_numeric_candidates`
+    already applies).
+
+    A past date returns "" rather than being stored as a travel preference --
+    callers must treat "" exactly as "no date given", never as a computed
+    empty date.
+    """
+
+    raw = str(text or "").strip().translate(_DIGIT_TRANSLATION)
+    if not raw:
+        return ""
+    today = today or date.today()
+    cleaned = re.sub(r"\s+", " ", re.sub(r"[,،]", " ", raw)).strip()
+    candidates = [
+        *_numeric_candidates(cleaned, today=today),
+        *_month_name_candidates(cleaned, today=today, months={**_MONTHS, **_ARABIC_MONTHS}),
+    ]
+    for year, month, day in candidates:
+        normalized = _valid_calendar_date(year, month, day)
+        if normalized and normalized >= today.isoformat():
+            return normalized
     return ""
