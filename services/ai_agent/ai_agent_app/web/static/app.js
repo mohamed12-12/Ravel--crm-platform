@@ -572,7 +572,15 @@ els.tripTypePicker?.addEventListener("click", async (event) => {
     els.tripTypePicker.hidden = false;
     alert(err.message);
   } finally {
+    // renderSession() above ran while messagePending was still true, so it
+    // left the message input/send button disabled (same fields
+    // messageForm's own submit handler controls) -- messageForm's handler
+    // avoids this exact trap by re-rendering a SECOND time here, after
+    // messagePending flips back to false. Without this second render the
+    // composer stays permanently disabled after any quick-button click,
+    // reading to the customer as the chat session having silently closed.
     state.messagePending = false;
+    renderSession(state.session);
   }
 });
 
