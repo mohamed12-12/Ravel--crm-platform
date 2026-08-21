@@ -515,6 +515,45 @@ SERVICE_CAPABILITY_QUESTION_TERMS: set[str] = {
     "عندكم برامج",
     "ممكن تنظموا",
     "ممكن تعملوا",
+    # Franco-Arabic (Latin letters, digits for Arabic sounds). Egypt writes
+    # this constantly and the module had no Franco coverage at all, so
+    # "bt3mlo private trips?" was not recognised as a QUESTION -- it fell
+    # through to _private_trip_intent, which matched "private trip" and
+    # switched the customer into the private flow for asking whether it
+    # exists. Multi-character stems only: a bare "fe"/"3ando" is too short to
+    # match safely.
+    "bt3mlo",
+    "bt3mlw",
+    "bte3mlo",
+    "bt3melo",
+    "btn2mo",
+    "btnzmo",
+    "btnzmw",
+    "bton2mo",
+    "bt2dro",
+    "bteb3to",
+    "3andko",
+    "3andkom",
+    "3andoko",
+    "andko",
+    "momken t3mlo",
+    "momken tnzmo",
+    "momkn t3mlo",
+    # Asked about ONE named service rather than with a "do you do" stem, so
+    # neither this set nor any sibling predicate matched and the customer got
+    # the pending workflow question repeated verbatim (audit 2026-08-21). Both
+    # services are real PRIVATE_SERVICE_TYPES entries, so the existing
+    # capability answer already covers them truthfully.
+    "في مرافق",
+    "فيه مرافق",
+    "مرافق للرحله",
+    "مرافق رحله",
+    "book flights only",
+    "flights only",
+    "just flights",
+    "only flights",
+    "only booking",
+    "bookings only",
 }
 
 # "Where did my request go?" -- a status question about an ALREADY-submitted
@@ -549,6 +588,25 @@ REQUEST_STATUS_QUESTION_TERMS: set[str] = {
     "request status",
     "was my request created",
     "did my request go through",
+    # Audit 2026-08-21: only the "فين" phrasings were listed, so "رقم طلبي
+    # ايه؟" and "هل الطلب اتبعت؟" -- asked about a request that really did
+    # exist -- fell through to the generic "أنا معاك. تحب أقولك حالة طلب..."
+    # non-answer instead of naming the request the session already knew.
+    "رقم طلبي",
+    "رقم الطلب",
+    "طلبي رقم",
+    "الطلب اتبعت",
+    "طلبي اتبعت",
+    "اتبعت طلبي",
+    "الطلب اتسجل",
+    "الطلب وصل",
+    "وصل الطلب",
+    "طلبي ايه",
+    "my request number",
+    "request number",
+    "was my request sent",
+    "did my request get sent",
+    "has my request been sent",
 }
 
 # Words that are never one part of a real person's name. Canonical source for
@@ -712,6 +770,95 @@ OWN_PHONE_CORRECTION_TERMS: set[str] = {
     "another number",
     "different number",
     "use this number",
+}
+
+# Questions the agent CAN answer truthfully from configuration alone, without
+# any CRM lookup. Canonical source for
+# ToolCallingSessionRuntime._is_general_policy_question / _general_policy_answer.
+#
+# Audit 2026-08-21: at several steps (birthday, private destination, party size,
+# budget) these got nothing back but a byte-identical repeat of the workflow
+# question, because the interruption allowlist only recognised capability
+# questions. Answering them needs no invention: who follows up is configured,
+# and "pricing depends on the trip and the team confirms it" is a fact about
+# the process, not a quoted price.
+#
+# Matched as substrings of _normalize_trip_reference output, so entries are
+# pre-folded (bare alef, ة→ه, ى→ي) and carry no question mark.
+FOLLOW_UP_OWNER_QUESTION_TERMS: set[str] = {
+    "مين هيتواصل",
+    "مين هيكلمني",
+    "مين اللي هيتواصل",
+    "مين بيتواصل",
+    "هيتواصل معايا مين",
+    "طلبي هيروح لمين",
+    "الطلب هيروح لمين",
+    "طلبي مع مين",
+    "مين شايف طلبي",
+    "who will contact me",
+    "who contacts me",
+    "who will call me",
+    "who handles my request",
+    "who will follow up",
+    "meen hyklmny",
+    "meen hytwasl",
+    "meen hayklmny",
+    "talaby hyrooh lmeen",
+}
+
+PRICING_QUESTION_TERMS: set[str] = {
+    "الاسعار كام",
+    "السعر كام",
+    "بكام الرحله",
+    "بكام الرحلة",
+    "الرحله بكام",
+    "كام السعر",
+    "التكلفه كام",
+    "التكلفة كام",
+    "في تقسيط",
+    "فيه تقسيط",
+    "بتقسطوا",
+    "ينفع تقسيط",
+    "how much does it cost",
+    "how much is it",
+    "what is the price",
+    "whats the price",
+    "do you offer installments",
+    "is there installment",
+    "el price kam",
+    "el se3r kam",
+    "bekam",
+    "fe taksit",
+    # Stated as a request rather than a question, so there is no interrogative
+    # and often no question mark either -- "عايز اعرف الاسعار الاول" was
+    # captured as a private-trip DESTINATION (audit 2026-08-21). Unambiguous
+    # about pricing in any context, which is why the bare nouns are not listed.
+    "اعرف الاسعار",
+    "اعرف السعر",
+    "اعرف التكلفه",
+    "اعرف التكلفة",
+    "know the price",
+    "know the prices",
+    "know the cost",
+}
+
+LOCATION_QUESTION_TERMS: set[str] = {
+    "مقركم فين",
+    "مقرکم فين",
+    "المقر فين",
+    "فين مقركم",
+    "عنوانكم ايه",
+    "عنوانكم فين",
+    "فين مكانكم",
+    "مكانكم فين",
+    "الشركه فين",
+    "الشركة فين",
+    "where are you located",
+    "where is your office",
+    "what is your address",
+    "your address",
+    "makanko fen",
+    "ma2arko fen",
 }
 
 OPTION_ORDINAL_TERMS: dict[str, int] = {

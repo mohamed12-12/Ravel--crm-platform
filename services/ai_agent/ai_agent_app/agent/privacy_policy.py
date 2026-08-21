@@ -226,10 +226,30 @@ class AgentPrivacyPolicy:
                 return True
         return False
 
+    # A real phone number carries at least 9 digits (E.164 national numbers;
+    # an Egyptian mobile is 11, 12 with the country code). The separator class
+    # in the pattern below deliberately accepts "-" and "." because numbers are
+    # written "010-1234-5678" -- which also made "2026-09-28" a perfect match.
+    # ToolCallingSessionRuntime._extract_phone_candidate already applies both of
+    # these guards; this module never learned them, so a DATE in any
+    # dash/dot-separated form counted as "another traveler's phone number" and
+    # earned the cross-traveler refusal -- including the exact ISO format the
+    # agent itself asks for ("ممكن تبعت التاريخ بصيغة YYYY-MM-DD").
+    _MIN_PHONE_DIGITS = 9
+    _DATE_SHAPED_RE = re.compile(r"^\d{1,4}[-./]\d{1,2}[-./]\d{1,4}$")
+
     @classmethod
     def _phone_candidates(cls, text: str) -> list[str]:
         normalized = cls._arabic_digits_to_ascii(text)
-        return [match.group(0).strip() for match in re.finditer(r"(?:\+|00)?\d[\d\s().-]{7,}\d", normalized)]
+        candidates: list[str] = []
+        for match in re.finditer(r"(?:\+|00)?\d[\d\s().-]{7,}\d", normalized):
+            candidate = match.group(0).strip()
+            if cls._DATE_SHAPED_RE.match(candidate):
+                continue
+            if len(re.sub(r"\D+", "", candidate)) < cls._MIN_PHONE_DIGITS:
+                continue
+            candidates.append(candidate)
+        return candidates
 
     @classmethod
     def _session_phone_keys(cls, context: dict[str, Any]) -> set[str]:

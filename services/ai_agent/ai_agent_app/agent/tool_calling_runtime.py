@@ -57,10 +57,13 @@ from services.ai_agent.validation.lexicon import (
     EXPLANATION_REQUEST_EXACT_TERMS,
     EXPLANATION_REQUEST_SUBSTRING_TERMS,
     GENERIC_TRIP_CHANGE_TERMS,
+    FOLLOW_UP_OWNER_QUESTION_TERMS,
     HUMAN_HANDOFF_TERMS,
+    LOCATION_QUESTION_TERMS,
     NAME_DECLARATION_PREFIXES,
     NON_NAME_TOKENS,
     ONLY_OPTION_QUESTION_TERMS,
+    PRICING_QUESTION_TERMS,
     OPTION_NUMBER_PREFIX_TERMS,
     OPTION_ORDINAL_TERMS,
     REQUEST_STATUS_QUESTION_TERMS,
@@ -149,6 +152,42 @@ _HANDOFF_OVERRIDE_EXEMPT_KEYS = (
     "workflow.private_request_failed",
 )
 
+# Whole tokens (after _normalize_trip_reference folding) that make a message a
+# question rather than a field value -- see _looks_like_a_question. Kept to
+# unambiguous interrogatives: a place, a name or a number never contains one.
+_INTERROGATIVE_TOKENS = frozenset(
+    {
+        "كام",
+        "بكام",
+        "ايه",
+        "إيه",
+        "فين",
+        "منين",
+        "مين",
+        "ليه",
+        "ازاي",
+        "امتي",
+        "هل",
+        "how",
+        "much",
+        "what",
+        "who",
+        "where",
+        "when",
+        "why",
+        "which",
+        "does",
+        "do",
+        "can",
+        "kam",
+        "eh",
+        "fen",
+        "meen",
+        "leh",
+        "ezay",
+    }
+)
+
 _DIGIT_TRANSLATION = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
 _PHONE_CANDIDATE_RE = re.compile(r"(?:\+|00)?[\d٠-٩۰-۹][\d٠-٩۰-۹\s().-]{7,}[\d٠-٩۰-۹]")
 
@@ -189,6 +228,14 @@ _TRIP_REFERENCE_STOP_WORDS = {
 _TRIP_REFERENCE_FILLER_WORDS = _TRIP_REFERENCE_STOP_WORDS | {
     "book", "booking", "reserve", "reservation", "option", "options", "named", "called",
     "رحله", "رحلة", "رحلات", "احجز", "حجز", "اسمها",
+    # Want-verbs. "عايز رحلة" ("I want a trip") left "عايز" as the only
+    # surviving token, so the whole message was searched as a trip NAME and the
+    # customer's most natural opening message was answered "لم أجد رحلة مؤكدة
+    # بهذا الاسم في CRM. من فضلك أرسل اسم الرحلة أو رقمها كما هو مكتوب."
+    # (audit 2026-08-21). The English side was already covered by the stop
+    # words; only the Arabic verbs were missing.
+    "عايز", "عايزه", "عايزة", "عاوز", "عاوزه", "محتاج", "محتاجه", "محتاجة",
+    "اريد", "أريد", "نفسي", "ابحث", "بدور",
 }
 _TRIP_TYPE_ONLY_REFERENCES = {
     "1", "2", "local", "loc", "loca", "domestic", "international", "int", "intl", "inter",
@@ -1983,6 +2030,12 @@ class ToolCallingSessionRuntime:
         ]
         if tokens and all(token in _TRIP_TYPE_ONLY_REFERENCES for token in tokens):
             return []
+        if not tokens:
+            # Nothing distinguishing survived the filler words, so the message
+            # names no trip -- searching the raw sentence anyway is what turned
+            # "عايز رحلة" / "I want a trip" into a failed name lookup instead of
+            # the ordinary next workflow step.
+            return []
         queries: list[str] = []
         if len(normalized) >= 3:
             queries.append(normalized)
@@ -2280,6 +2333,7 @@ class ToolCallingSessionRuntime:
             or cls._is_asking_for_known_name(text)
             or cls._is_trip_quality_question(text)
             or cls._is_service_capability_question(text)
+            or cls._is_general_policy_question(text)
         ):
             return True
         if cls._is_hostile_message(text):
@@ -2318,6 +2372,13 @@ class ToolCallingSessionRuntime:
             answer = self._service_capability_answer(session)
             follow_up = self._backend_required_step_reply(session, decision)
             return f"{answer}\n\n{follow_up}" if follow_up else answer
+        # Same contract for the questions answerable from configuration alone
+        # (who follows up, how pricing works, where we are). Without this they
+        # got a byte-identical repeat of the pending question at several steps.
+        policy_answer = self._general_policy_answer(session, clean_text)
+        if policy_answer:
+            follow_up = self._backend_required_step_reply(session, decision)
+            return f"{policy_answer}\n\n{follow_up}" if follow_up else policy_answer
         if step == "collect_group_size":
             if self._is_explanation_request(clean_text):
                 if language.startswith("ar"):
@@ -2560,6 +2621,58 @@ class ToolCallingSessionRuntime:
             "private trips built around what you want: consultation, bookings only, a full "
             "package, program design only, or a chaperone."
         )
+
+    @classmethod
+    def _is_general_policy_question(cls, text: str) -> bool:
+        """"Who will contact me?" / "how much?" / "where are you?" -- answerable
+        from configuration alone, with no CRM lookup and nothing invented."""
+
+        normalized = cls._normalize_trip_reference(text)
+        if not normalized:
+            return False
+        return any(
+            term in normalized
+            for term in (
+                *FOLLOW_UP_OWNER_QUESTION_TERMS,
+                *PRICING_QUESTION_TERMS,
+                *LOCATION_QUESTION_TERMS,
+            )
+        )
+
+    def _general_policy_answer(self, session: SessionState, text: str) -> str:
+        """Deterministic answer for a general-policy question, or "".
+
+        Same contract as _service_capability_answer: no CRM facts, no invented
+        numbers, and no wording from write_response_gating._SUCCESS_WORDS, so it
+        can never read as "your request was saved". A price is deliberately
+        never quoted -- the honest answer is how pricing is decided and who
+        confirms it.
+        """
+
+        normalized = self._normalize_trip_reference(text)
+        if not normalized:
+            return ""
+        arabic = session.language.startswith("ar")
+        responsible = self.settings.post_trip_handoff_responsible_employee
+        if any(term in normalized for term in FOLLOW_UP_OWNER_QUESTION_TERMS):
+            if arabic:
+                return f"طلبك بيروح لـ{responsible} في فريق Ravel، وهما اللي بيتواصلوا معاك ويكملوا معاك التفاصيل."
+            return f"Your request goes to {responsible} on the Ravel team, and they are the ones who follow up with you on the details."
+        if any(term in normalized for term in PRICING_QUESTION_TERMS):
+            if arabic:
+                return (
+                    "الأسعار بتختلف حسب الرحلة نفسها والمواعيد وعدد الأفراد، فمش بقدر أقولك رقم من عندي. "
+                    f"{responsible} في فريق Ravel هما اللي بيأكدوا السعر وخيارات الدفع معاك."
+                )
+            return (
+                "Pricing depends on the trip itself, the dates and the group size, so I can't quote you a "
+                f"number myself. {responsible} on the Ravel team confirm the price and the payment options with you."
+            )
+        if any(term in normalized for term in LOCATION_QUESTION_TERMS):
+            if arabic:
+                return f"تفاصيل المقر والزيارات بيأكدها {responsible} في فريق Ravel، وأنا أقدر أوصلك بهم في أي وقت."
+            return f"{responsible} on the Ravel team confirm office and visit details, and I can put you in touch with them any time."
+        return ""
 
     def _run_conversational_llm_turn(self, session: SessionState, decision, clean_text: str) -> bool:
         """Give the model one grounded, tool-permitted turn to answer the
@@ -5052,16 +5165,30 @@ class ToolCallingSessionRuntime:
         self._apply_trip_switch_from_text(session, clean_text)
         self._apply_trip_configuration_defaults(session)
         self._ensure_room_requirements_for_group(session)
+        # "هو انتوا بتنظموا رحلات خاصة؟" mentions "رحلات خاصة", so the trip
+        # handlers below took it for a trip REFERENCE and answered "لم أجد رحلة
+        # مؤكدة بهذا الاسم في سجلاتنا" -- on the first message of a brand-new
+        # conversation, to a question about what the company offers (audit
+        # 2026-08-21). A question about whether a service exists is never a
+        # reference to a specific trip, so it must reach the interruption
+        # handling that actually answers it.
+        is_capability_question = self._is_service_capability_question(clean_text)
         media_intent = self._is_trip_media_request(clean_text, has_selected_trip=bool(session.selected_trip_id))
         preloaded_tool_event = self._run_identity_lookup_if_ready(session) if media_intent else None
         if media_intent and self._handle_trip_media_request_if_ready(session, clean_text):
             agent_logger.info("Tool-calling session %s returned verified trip media from CRM", session.id)
             return session
-        if not media_intent and not pending_identity_capture and self._handle_trip_details_request_if_ready(session, clean_text):
+        if (
+            not media_intent
+            and not is_capability_question
+            and not pending_identity_capture
+            and self._handle_trip_details_request_if_ready(session, clean_text)
+        ):
             agent_logger.info("Tool-calling session %s answered trip follow-up details from session CRM context", session.id)
             return session
         if (
             not media_intent
+            and not is_capability_question
             and not session.private_trip_active
             and not pending_identity_capture
             and self._handle_trip_discovery_request_if_ready(session, clean_text)
@@ -5069,6 +5196,7 @@ class ToolCallingSessionRuntime:
             return session
         if (
             not media_intent
+            and not is_capability_question
             and not session.private_trip_active
             and not pending_identity_capture
             and self._handle_public_trip_reference_if_present(session, clean_text)
@@ -5077,6 +5205,7 @@ class ToolCallingSessionRuntime:
             return session
         if (
             not media_intent
+            and not is_capability_question
             and not session.private_trip_active
             and not pending_identity_capture
             and self._handle_post_selection_trip_browse_or_change(session, clean_text)
@@ -5427,25 +5556,60 @@ class ToolCallingSessionRuntime:
         # reflects Gemini's own judgment -- only what the customer's own message
         # actually said.
         model_session_context["user_requested_human"] = self._is_human_agent_request(clean_text)
-        turn = self._coordinator.think(agent_state, crm_facts=model_session_context, conversation=session.messages[-12:], tool_results=preloaded_tool_results)
-        agent_state.subgoal = str(turn.decision.get("reason") or "")
-        model_session_context["persona"] = turn.context.get("persona")
-        model_session_context["memory"] = turn.context.get("memory")
-        model_session_context["agent_state"] = agent_state.to_dict()
-        model_session_context["system_constraints"] = turn.context.get("system_constraints")
-        model_session_context["available_tools"] = [tool.name for tool in self._coordinator.tool_manager.describe()]
-        agent_logger.info("Coordinator entered session=%s", session.id)
-        agent_logger.info("Persona loaded session=%s", session.id)
-        agent_logger.info("Memory loaded session=%s", session.id)
-        agent_logger.info("State updated session=%s", session.id)
-        agent_logger.info("Context built session=%s", session.id)
-        agent_logger.info("Planner decision session=%s action=%s tool=%s", session.id, turn.decision.get("action"), turn.decision.get("tool_name"))
+        # The model turn is the ONE place in handle_message that reaches a
+        # remote service, and it was unprotected: the error path just below
+        # only handles a provider that RETURNS {"error": ...}, while a quota
+        # rejection, a transport timeout or any provider exception propagated
+        # straight out of handle_message and took the whole turn down -- so a
+        # Gemini outage produced no reply at all, and a webhook retry crashed
+        # again on the same message. Falls back to the deterministic reply for
+        # the step the workflow is already on, which is authoritative anyway
+        # and answers a capability/policy question on its own (see
+        # _natural_interruption_fallback). Never claims a write succeeded.
+        try:
+            turn = self._coordinator.think(agent_state, crm_facts=model_session_context, conversation=session.messages[-12:], tool_results=preloaded_tool_results)
+            agent_state.subgoal = str(turn.decision.get("reason") or "")
+            model_session_context["persona"] = turn.context.get("persona")
+            model_session_context["memory"] = turn.context.get("memory")
+            model_session_context["agent_state"] = agent_state.to_dict()
+            model_session_context["system_constraints"] = turn.context.get("system_constraints")
+            model_session_context["available_tools"] = [tool.name for tool in self._coordinator.tool_manager.describe()]
+            agent_logger.info("Coordinator entered session=%s", session.id)
+            agent_logger.info("Persona loaded session=%s", session.id)
+            agent_logger.info("Memory loaded session=%s", session.id)
+            agent_logger.info("State updated session=%s", session.id)
+            agent_logger.info("Context built session=%s", session.id)
+            agent_logger.info("Planner decision session=%s action=%s tool=%s", session.id, turn.decision.get("action"), turn.decision.get("tool_name"))
 
-        result = self._conversation_ai.respond(
-            user_message=clean_text,
-            session_context=model_session_context,
-            conversation_history=session.messages[-12:],
-        )
+            result = self._conversation_ai.respond(
+                user_message=clean_text,
+                session_context=model_session_context,
+                conversation_history=session.messages[-12:],
+            )
+        except Exception:
+            agent_logger.exception(
+                "Conversational model turn failed session=%s state=%s step=%s",
+                session.id,
+                workflow_decision.state,
+                workflow_decision.required_step,
+            )
+            session.stage = workflow_decision.state
+            fallback_reply = self._normalize_reply(
+                self._natural_interruption_fallback(session, workflow_decision, clean_text),
+                session.language,
+            )
+            if not fallback_reply.strip():
+                fallback_reply = (
+                    "أواجه مشكلة مؤقتة في إكمال الطلب الآن. من فضلك حاول مرة أخرى بعد قليل."
+                    if session.language.startswith("ar")
+                    else "I'm having trouble completing that request right now. Please try again in a moment."
+                )
+            session.messages.append(
+                self._finalize_assistant_reply(session, text=fallback_reply, language=session.language, user_text=clean_text)
+            )
+            session.tools_used = [str(preloaded_tool_event["name"])] if preloaded_tool_event else []
+            session.fallback_used = True
+            return session
 
         reply = self._normalize_reply(str(result.get("reply") or ""), session.language)
         error = str(result.get("error") or "").strip()
@@ -7139,6 +7303,44 @@ class ToolCallingSessionRuntime:
         is_exploratory = bool(hints.get("message_is_exploratory"))
         is_comparison_question = self._is_comparison_or_definition_question(clean_text)
         is_restart_signal = bool(hints.get("trip_type_hint_is_restart_signal"))
+        if trip_type and not is_restart_signal and self._is_service_capability_question(clean_text):
+            # "بتعملوا رحلات بره مصر؟" / "Do you offer international trips?"
+            # asks WHETHER Ravel runs them. It is not a choice, but
+            # TRIP_TYPE_TERMS matches "بره مصر"/"international" inside it, so
+            # the question silently committed the customer to that trip type --
+            # and mid private intake it went through
+            # _apply_trip_type_change -> _clear_private_trip_downstream_state
+            # and wiped the destination, dates, party size and budget already
+            # collected, dropping the customer back at the service-type
+            # question. Same reasoning as the exploratory guard below, and as
+            # _detect_private_trip_intent's own capability-question guard.
+            agent_logger.info(
+                "Ignored trip-type mention inside a capability question session=%s candidate_type=%s",
+                session.id,
+                trip_type,
+            )
+            trip_type = ""
+        elif (
+            trip_type
+            and session.private_trip_active
+            and session.trip_type
+            and session.trip_type != trip_type
+            and not is_restart_signal
+            and not self._has_field_revision_signal(clean_text)
+        ):
+            # A private intake is mid-flight, its scope is already chosen, and
+            # this is not an explicit correction ("لا خليها دولية" carries a
+            # revision signal and still goes through). An incidental
+            # local/international keyword must not restart it, for the same
+            # reason an incidental room-group mention is ignored further down.
+            # Gated on session.trip_type already being set so the answer to
+            # the private scope question itself is never blocked.
+            agent_logger.info(
+                "Ignored incidental trip-type mention during a private intake session=%s candidate_type=%s",
+                session.id,
+                trip_type,
+            )
+            trip_type = ""
         if trip_type and (is_exploratory or is_comparison_question) and not is_restart_signal:
             # A hypothetical/exploratory mention ("what if international?")
             # or a same-sentence comparison/definition question ("what's the
@@ -7449,6 +7651,53 @@ class ToolCallingSessionRuntime:
             return "", "repeated_tokens"
         return " ".join(parts), ""
 
+    @staticmethod
+    def _answer_is_only_a_date(text: str) -> bool:
+        """True if every digit in the answer belongs to a date.
+
+        Used to stop a date answered at a NUMBER step from being read as that
+        number. Deliberately conservative: it only fires when a date is present
+        AND no other number is, so "2 people on 28/9" still reaches the normal
+        extractor.
+        """
+
+        raw = str(text or "").translate(_DIGIT_TRANSLATION)
+        if not raw.strip():
+            return False
+        date_match = re.search(r"(?<!\d)\d{1,4}[-./]\d{1,2}[-./]\d{1,4}(?!\d)", raw)
+        if not date_match:
+            return False
+        remainder = raw[: date_match.start()] + raw[date_match.end() :]
+        return not re.search(r"\d", remainder)
+
+    @classmethod
+    def _looks_like_a_question(cls, text: str) -> bool:
+        """True if the message is a question rather than a field value.
+
+        `private_destination` is the only free-text field in the private intake,
+        and it was captured from ANY message the narrow
+        `_is_not_a_field_value` allowlist did not recognise -- so every side
+        question the customer asked at that step became the destination of the
+        private request and the intake advanced. Operations received requests
+        for "طب الأسعار كام؟" and "How much does it cost?".
+
+        Same discipline `_validate_name_tokens` already applies for names
+        (question mark => not a name), plus whole-token interrogatives so a
+        question typed without punctuation is caught too.
+        """
+
+        raw = str(text or "").strip()
+        if not raw:
+            return False
+        if "?" in raw or "؟" in raw:
+            return True
+        tokens = set(cls._normalize_trip_reference(raw).split(" "))
+        if tokens & _INTERROGATIVE_TOKENS:
+            return True
+        # A destination is a place, not a sentence. Kept generous so
+        # "شرم الشيخ ومرسى علم" still passes.
+        return len([token for token in tokens if token]) > 6
+
     @classmethod
     def _has_non_name_token(cls, parts: list[str]) -> bool:
         """True if any token is a word that is never part of a person's name.
@@ -7477,8 +7726,19 @@ class ToolCallingSessionRuntime:
         raw = re.sub(r"\s+", " ", str(text or "").strip())
         if not raw:
             return ""
-        normalized = cls._normalize_trip_reference(raw)
-        words = raw.split(" ")
+        # Matched per word rather than on the whole normalized string, because
+        # _normalize_trip_reference keeps punctuation in the Arabic block as
+        # literal characters -- so "لا، اسمي محمد أحمد سيد" (the most natural
+        # way to write a correction) normalized to "لا، اسمي ..." and never
+        # matched the "لا اسمي" prefix. The two lists stay index-aligned so the
+        # remainder keeps the customer's own spelling.
+        pairs = [
+            (word, cls._normalize_trip_reference(word.strip(_NAME_EDGE_PUNCTUATION)))
+            for word in raw.split(" ")
+        ]
+        pairs = [(word, folded) for word, folded in pairs if folded]
+        words = [word for word, _ in pairs]
+        normalized = " ".join(folded for _, folded in pairs)
         # Longest prefix first: "لا اسمي" must win over "اسمي", otherwise the
         # leading "لا" is left behind and rejected as a non-name token.
         for prefix in sorted(NAME_DECLARATION_PREFIXES, key=len, reverse=True):
@@ -7982,7 +8242,7 @@ class ToolCallingSessionRuntime:
 
         if session.stage == "private_destination_required":
             destination = str(normalized_text or "").strip()
-            if destination and not self._is_not_a_field_value(text):
+            if destination and not self._is_not_a_field_value(text) and not self._looks_like_a_question(text):
                 session.private_destination = destination[:200]
                 self._update_collection_state(session, private_destination=True)
                 return True
@@ -7999,6 +8259,15 @@ class ToolCallingSessionRuntime:
             return False
 
         if session.stage == "private_party_size_required":
+            if self._answer_is_only_a_date(normalized_text):
+                # A date is not a head count. The previous step asked for the
+                # dates, so a customer re-sending or CORRECTING them here is
+                # completely ordinary -- and every digit group in a date is a
+                # plausible party size, so "لا قصدي 2026-10-05" was captured as
+                # 10 travellers and "28/9/2026" as 28 (audit 2026-08-21). A
+                # duplicate webhook delivery of the dates answer did the same.
+                # Fail closed to the re-ask instead of inventing a group.
+                return False
             people_counts = self._extract_mixed_people_counts(normalized_text)
             if people_counts["boys"] and people_counts["girls"]:
                 session.boys_count = people_counts["boys"]
