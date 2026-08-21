@@ -6,6 +6,16 @@
 {% block topbar_actions %}
 <a href="{{ url_for('private_requests.index') }}" class="btn btn-ghost btn-sm">← All Requests</a>
 <button onclick="openModal('editRequest')" class="btn btn-primary btn-sm">Edit Request</button>
+{% if can_delete %}
+{# Admin only, and the route refuses outright once any payment is recorded --
+   money history is never deleted. A request that has taken money is closed by
+   marking it lost. #}
+<form method="post" action="{{ url_for('private_requests.delete', request_id=item.request_id) }}"
+      style="margin:0" onsubmit="return confirm('Delete {{ item.request_id }} permanently? This cannot be undone.')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn btn-danger btn-sm">Delete Request</button>
+</form>
+{% endif %}
 {% endblock %}
 
 {% block content %}

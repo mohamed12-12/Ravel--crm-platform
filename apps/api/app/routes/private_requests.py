@@ -9,8 +9,16 @@ from sqlalchemy import or_
 
 from app.extensions import db
 from app.models import AdditionalFee, Lead, PrivateTripRequest, PrivateTripTransaction, Traveler
+from app.models.assignment_history import AssignmentHistory
 from app.models.private_trip_transaction import SOURCE_PRIVATE_DEPOSIT_STAGE
-from app.security import current_actor, current_user, current_user_id, employee_session_required, has_permission
+from app.security import (
+    current_actor,
+    current_role,
+    current_user,
+    current_user_id,
+    employee_session_required,
+    has_permission,
+)
 from app.services.additional_fees import add_fee, fees_for_private_request, void_fee
 from app.services.assignments import (
     active_assignees,
@@ -33,8 +41,10 @@ from app.services.private_trip_money import (
 )
 from app.services.traveler_stats import recalculate_traveler_stats
 from services.crm.system_services.fee_rules import ADDITIONAL_FEE_CATEGORIES
+from services.crm.system_services.payment_rules import DERIVED_PAYMENT_STATUSES
 from services.crm.system_services.private_trips import (
     PRIVATE_BUDGET_CURRENCIES,
+    PRIVATE_REQUEST_CLOSED_STAGES,
     PRIVATE_REQUEST_STAGES,
     PRIVATE_REQUEST_TRANSITIONS,
     PRIVATE_SERVICE_TYPES,
@@ -63,6 +73,69 @@ def _can_move_money() -> bool:
     if not current_app.config.get("CRM_AUTH_ENABLED", False):
         return True
     return has_permission("change_payment_status")
+
+
+def _can_delete_requests() -> bool:
+    """Whether this employee may delete a private request outright.
+
+    Admin only, matching the Delete Booking control on the booking page --
+    deletion removes work an employee may still be accountable for. Everyone
+    else closes a dead request by marking it lost, which keeps the record and
+    the reason. Enforced here rather than only in the template: hiding a
+    button is not a permission check.
+    """
+    if not current_app.config.get("CRM_AUTH_ENABLED", False):
+        return True
+    return current_role() == "admin"
+
+
+class _Page:
+    """The slice of a list one page shows, with what the pager needs.
+
+    Private requests are a low-volume pipeline and several of this page's
+    filters (payment status, outstanding balance, unpriced) are answers the
+    ledger gives rather than columns SQL can sort on -- so the rows are
+    filtered in Python and paged here. Deliberately exposes the same handful
+    of attributes as flask-sqlalchemy's Pagination so the template is written
+    the same way as the bookings and leads tables.
+    """
+
+    def __init__(self, items: list, page: int, per_page: int):
+        self.total = len(items)
+        self.per_page = max(int(per_page or 1), 1)
+        self.pages = max((self.total + self.per_page - 1) // self.per_page, 1)
+        self.page = min(max(int(page or 1), 1), self.pages)
+        start = (self.page - 1) * self.per_page
+        self.items = items[start:start + self.per_page]
+
+    @property
+    def has_prev(self) -> bool:
+        return self.page > 1
+
+    @property
+    def has_next(self) -> bool:
+        return self.page < self.pages
+
+    @property
+    def prev_num(self) -> int:
+        return self.page - 1
+
+    @property
+    def next_num(self) -> int:
+        return self.page + 1
+
+    def iter_pages(self, left_edge: int = 1, right_edge: int = 1, left_current: int = 2, right_current: int = 2):
+        last = 0
+        for number in range(1, self.pages + 1):
+            if (
+                number <= left_edge
+                or (self.page - left_current - 1 < number < self.page + right_current + 1)
+                or number > self.pages - right_edge
+            ):
+                if last + 1 != number:
+                    yield None
+                yield number
+                last = number
 
 
 def _refresh_traveler_stats(traveler_id: str | None) -> None:
@@ -117,16 +190,158 @@ def _request_query():
     return PrivateTripRequest.query.order_by(PrivateTripRequest.created_at.desc(), PrivateTripRequest.request_id.desc())
 
 
+_PER_PAGE = 25
+
+# Work queues, in the order the filter offers them. Each is one question an
+# employee actually arrives with ("what is mine", "what is late", "who still
+# owes us money"), rather than a raw stage.
+_QUEUES = (
+    ("open", "Open (not closed)"),
+    ("assigned_to_me", "Assigned to me"),
+    ("unassigned", "Unassigned"),
+    ("inactive_owner", "Inactive owner"),
+    ("overdue", "SLA overdue"),
+    ("followup_overdue", "Follow-up overdue"),
+    ("followup_today", "Follow-up today"),
+    ("waiting_customer", "Waiting customer"),
+    ("has_balance", "Money outstanding"),
+    ("unpriced", "No agreed price"),
+    ("paid_in_full", "Paid in full"),
+    ("closed", "Closed"),
+)
+
+
+def _matches_queue(item, money, queue: str, *, today: date, user_id: int | None) -> bool:
+    """Whether one request belongs in the selected work queue.
+
+    Evaluated in Python rather than SQL because half of these questions are
+    answered by the ledger (outstanding balance, priced or not, paid in full)
+    or by the model's own SLA properties, not by a column.
+    """
+    if queue == "open":
+        return item.stage not in PRIVATE_REQUEST_CLOSED_STAGES
+    if queue == "closed":
+        return item.stage in PRIVATE_REQUEST_CLOSED_STAGES
+    if queue == "assigned_to_me":
+        return user_id is not None and item.assigned_to_user_id == user_id
+    if queue == "unassigned":
+        return item.assigned_to_user_id is None
+    if queue == "inactive_owner":
+        return bool(item.assigned_user and not item.assigned_user.is_active)
+    if queue == "overdue":
+        return bool(item.is_consultation_overdue or item.is_design_overdue)
+    if queue == "followup_overdue":
+        return bool(item.follow_up_due_date and item.follow_up_due_date < today)
+    if queue == "followup_today":
+        return item.follow_up_due_date == today
+    if queue == "waiting_customer":
+        return str(item.customer_response_status or "").strip().casefold() == "waiting customer"
+    if queue == "has_balance":
+        return bool(money and money.outstanding and item.stage != "lost")
+    if queue == "unpriced":
+        return bool(money and money.price is None and item.stage not in PRIVATE_REQUEST_CLOSED_STAGES)
+    if queue == "paid_in_full":
+        return bool(money and money.is_fully_collected)
+    return True
+
+
 @private_requests_bp.route("/")
 @employee_session_required
 def index():
+    """The private trip pipeline as a filterable list, with the board as an
+    alternative view -- the same shape as the bookings and leads pages, since
+    those are where employees already know how to find a record.
+    """
+    search = str(request.args.get("q") or "").strip()
     selected_stage = normalize_private_stage(request.args.get("stage")) or ""
-    query = _request_query()
-    if selected_stage:
-        query = query.filter(PrivateTripRequest.stage == selected_stage)
-    requests = query.all()
+    selected_service = normalize_private_service_type(request.args.get("service_type")) or ""
+    selected_scope = normalize_private_scope(request.args.get("scope")) or ""
+    selected_payment = str(request.args.get("payment") or "").strip()
+    selected_queue = str(request.args.get("queue") or "").strip()
+    selected_employee_id = request.args.get("employee_id", type=int)
+    view = "board" if str(request.args.get("view") or "").strip() == "board" else "table"
+    page = request.args.get("page", 1, type=int)
+    today = date.today()
+
+    # Everything is read once and filtered in memory: this pipeline is small,
+    # and the money filters below need the ledger anyway (money_for_many is two
+    # queries for the whole set, not one per row).
+    all_requests = _request_query().all()
+    money = money_for_many(all_requests)
+
+    stage_counts: dict[str, int] = {}
+    for item in all_requests:
+        stage_counts[item.stage] = stage_counts.get(item.stage, 0) + 1
+
+    def _in_group(stages) -> int:
+        return sum(stage_counts.get(stage, 0) for stage in stages)
+
+    summary = {
+        "total": len(all_requests),
+        "open": sum(1 for item in all_requests if item.stage not in PRIVATE_REQUEST_CLOSED_STAGES),
+        "consultation": _in_group(("registered", "consultation_scheduled")),
+        "design": _in_group(("deposit_paid", "designing", "design_delivered")),
+        "awaiting_payment": _in_group(("consultation_done", "deposit_pending", "payment_pending")),
+        "paid": stage_counts.get("paid", 0),
+        "lost": stage_counts.get("lost", 0),
+        "unassigned": sum(
+            1
+            for item in all_requests
+            if item.assigned_to_user_id is None and item.stage not in PRIVATE_REQUEST_CLOSED_STAGES
+        ),
+        "overdue": sum(1 for item in all_requests if item.is_consultation_overdue or item.is_design_overdue),
+    }
+    # Money across the whole pipeline, per currency -- collected is revenue,
+    # outstanding is not, and the two are never added together.
+    collected = {currency: 0.0 for currency in PRIVATE_BUDGET_CURRENCIES}
+    outstanding = {currency: 0.0 for currency in PRIVATE_BUDGET_CURRENCIES}
+    for item in all_requests:
+        item_money = money.get(item.request_id)
+        if item_money is None or item_money.currency not in collected:
+            continue
+        collected[item_money.currency] += item_money.net_revenue
+        if item.stage != "lost":
+            outstanding[item_money.currency] += item_money.outstanding or 0.0
+
+    needle = search.casefold()
+    rows = []
+    for item in all_requests:
+        item_money = money.get(item.request_id)
+        if selected_stage and item.stage != selected_stage:
+            continue
+        if selected_service and item.service_type != selected_service:
+            continue
+        if selected_scope and item.trip_scope != selected_scope:
+            continue
+        if selected_employee_id and item.assigned_to_user_id != selected_employee_id:
+            continue
+        if selected_payment and (item_money is None or item_money.payment_status != selected_payment):
+            continue
+        if selected_queue and not _matches_queue(
+            item, item_money, selected_queue, today=today, user_id=current_user_id()
+        ):
+            continue
+        if needle:
+            haystack = " ".join(
+                str(value or "")
+                for value in (
+                    item.request_id,
+                    item.destination,
+                    item.notes,
+                    item.traveler_id,
+                    item.lead_id,
+                    item.assigned_to,
+                    item.traveler.full_name if item.traveler else "",
+                    item.traveler.whatsapp_raw if item.traveler else "",
+                    item.lead.customer_name if item.lead else "",
+                )
+            ).casefold()
+            if needle not in haystack:
+                continue
+        rows.append(item)
+
     columns = {stage: [] for stage in PRIVATE_REQUEST_STAGES}
-    for item in requests:
+    for item in rows:
         columns.setdefault(item.stage or "registered", []).append(item)
     # Retired stages ("converted") are not offered as columns, but rows that
     # are still sitting in one must not vanish from the board -- they are only
@@ -134,19 +349,46 @@ def index():
     stages = list(PRIVATE_REQUEST_STAGES) + [
         stage for stage in columns if stage not in PRIVATE_REQUEST_STAGES and columns[stage]
     ]
+
+    pagination = _Page(rows, page, _PER_PAGE)
     return render_template(
         "admin/private_requests.html",
-        requests=requests,
+        requests=pagination.items if view == "table" else rows,
+        pagination=pagination,
+        matched_count=len(rows),
         columns=columns,
         stages=stages,
-        money=money_for_many(requests),
+        stage_options=PRIVATE_REQUEST_STAGES,
+        money=money,
+        summary=summary,
+        collected=collected,
+        outstanding=outstanding,
+        queues=_QUEUES,
+        payment_statuses=DERIVED_PAYMENT_STATUSES,
+        view=view,
+        search=search,
         selected_stage=selected_stage,
+        selected_service=selected_service,
+        selected_scope=selected_scope,
+        selected_payment=selected_payment,
+        selected_queue=selected_queue,
+        selected_employee_id=selected_employee_id,
+        has_filters=bool(
+            search
+            or selected_stage
+            or selected_service
+            or selected_scope
+            or selected_payment
+            or selected_queue
+            or selected_employee_id
+        ),
         service_types=PRIVATE_SERVICE_TYPES,
         scopes=PRIVATE_TRIP_SCOPES,
         currencies=PRIVATE_BUDGET_CURRENCIES,
         employees=active_assignees(),
         can_assign=has_permission("assign_work"),
-        today=date.today(),
+        can_delete=_can_delete_requests(),
+        today=today,
     )
 
 
@@ -319,6 +561,7 @@ def detail(request_id: str):
         assigned_user=item.assigned_user,
         assigned_history=assignment_history("private_trip_request", item.request_id),
         today=date.today(),
+        can_delete=_can_delete_requests(),
         # Money. Every figure here is read from the ledger and the fee rows --
         # nothing on this page reports an amount that was not recorded.
         money=money_for(item, totals=totals, fees=fees),
@@ -331,6 +574,58 @@ def detail(request_id: str):
         max_refund=refund_ceiling(item, totals=totals),
         can_move_money=_can_move_money(),
     )
+
+
+@private_requests_bp.route("/<string:request_id>/delete", methods=["POST"])
+@employee_session_required
+def delete(request_id: str):
+    """Delete a private request outright. Admin only.
+
+    Refused once any money has been recorded against it. That is not a
+    convenience check: the payment ledger is append-only by design (its session
+    guard rejects deletes outright), so removing a request that holds payments
+    would either fail mid-transaction or erase financial history that revenue
+    figures for closed months were built on. A request that has taken money is
+    closed by marking it lost, which keeps the record and the reason.
+
+    Fees go with it -- they are quotes attached to this request and mean
+    nothing without it -- and so does its assignment history, which would
+    otherwise point at a resource that no longer exists.
+    """
+    if not _can_delete_requests():
+        abort(403)
+    item = db.get_or_404(PrivateTripRequest, request_id)
+
+    totals = ledger_totals(item.request_id)
+    if totals.has_entries:
+        flash(
+            f"{item.request_id} cannot be deleted: {totals.entry_count} payment record(s) "
+            f"totalling {totals.total_paid:,.2f} {totals.currency} are recorded against it. "
+            "Mark it lost instead -- money history is never deleted.",
+            "error",
+        )
+        return redirect(url_for("private_requests.detail", request_id=item.request_id))
+
+    traveler_id = item.traveler_id
+    fees_removed = AdditionalFee.query.filter(
+        AdditionalFee.private_request_id == item.request_id
+    ).delete(synchronize_session=False)
+    history_removed = AssignmentHistory.query.filter(
+        AssignmentHistory.resource_type == "private_trip_request",
+        AssignmentHistory.resource_id == item.request_id,
+    ).delete(synchronize_session=False)
+    db.session.delete(item)
+    db.session.commit()
+    logger.info(
+        "Private request %s deleted by %s: removed %d fee(s), %d assignment history row(s)",
+        request_id,
+        current_actor(),
+        fees_removed,
+        history_removed,
+    )
+    _refresh_traveler_stats(traveler_id)
+    flash(f"Private request {request_id} deleted permanently.", "success")
+    return redirect(url_for("private_requests.index"))
 
 
 @private_requests_bp.route("/<string:request_id>/assign", methods=["POST"])

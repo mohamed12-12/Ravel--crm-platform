@@ -81,6 +81,19 @@ def validate_payment_transition(
     raise ValueError(f"Invalid payment status transition: {current} -> {target}")
 
 
+# Every value derive_payment_status() can return, in lifecycle order. A closed
+# set, so a filter offering these can never ask for a status the derivation
+# will not produce -- unlike PAYMENT_STATUSES above, which is the hand-picked
+# booking menu and still carries the legacy "Refunded" spelling.
+DERIVED_PAYMENT_STATUSES = (
+    "Pending",
+    "Deposit Paid",
+    "Fully Paid",
+    "Partial Refund",
+    "Full Refund",
+)
+
+
 def derive_payment_status(
     contract_value: float | None,
     total_paid: float,

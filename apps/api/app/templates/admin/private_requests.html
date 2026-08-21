@@ -9,13 +9,26 @@
 
 {% block content %}
 {#
-  The create form used to sit permanently expanded above the board as a wall of
-  12 equally-weighted fields, three of which are actually required. It is now a
-  modal opened from the topbar, split into "the three things you must know" and
-  an optional details section, so the board is the first thing on the page and
-  a manual add is a 3-field job.
+  Laid out like the Bookings and Leads pages -- clickable status counters, one
+  filter bar, then a table -- because that is where employees already know how
+  to find a record. The kanban board is still one click away for anyone who
+  reads the pipeline by stage.
+
+  Money on this page follows the same rule as everywhere else: "Collected" is
+  revenue (money actually received), "Outstanding" is not. They are never
+  added together, and EGP and USD are never mixed.
 #}
 <style>
+    .pr-money-strip { display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:.75rem; margin-bottom:1.25rem; }
+    .pr-money-card { background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:.75rem .9rem; }
+    .pr-money-label { font-size:.68rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; }
+    .pr-money-value { font-family:'JetBrains Mono', monospace; font-size:1.1rem; font-weight:800; color:var(--text-main); margin-top:.2rem; }
+    .pr-view-toggle { display:flex; gap:.35rem; }
+    .pr-view-pill { padding:.3rem .8rem; border-radius:999px; border:1px solid var(--border); color:var(--text-muted); text-decoration:none; font-size:.78rem; font-weight:700; }
+    .pr-view-pill.active { background:var(--accent); color:#06120f; border-color:var(--accent); }
+    .pr-sub { font-size:.7rem; color:var(--text-muted); }
+    .pr-actions { display:flex; gap:.35rem; justify-content:flex-end; }
+
     .private-board { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:.85rem; overflow-x:auto; padding-bottom:.4rem; }
     .private-column { background:var(--bg-base); border:1px solid var(--border); border-radius:8px; padding:.75rem; min-width:0; }
     .private-column h2 { font-size:.72rem; color:var(--text-dim); margin:0 0 .7rem; text-transform:uppercase; letter-spacing:.06em; }
@@ -26,18 +39,170 @@
     .card-tags { display:flex; flex-wrap:wrap; gap:.3rem; margin-top:.45rem; }
 </style>
 
-<div class="card" style="margin-bottom:1rem">
-    <div class="card-header">
-        <span class="card-title">Custom / private trip pipeline</span>
-        <span class="badge badge-blue">{{ requests|length }} open in view</span>
-    </div>
-    <p style="color:var(--text-muted);font-size:0.83rem;margin:0">
-        Requests captured before a priced trip and booking exist. New requests are auto-assigned to sales
-        by round-robin, exactly like leads. Converting a request creates a private trip, a booking, and a
-        non-refundable deposit ledger entry.
-    </p>
+{% macro pr_money(amount, currency) -%}
+{%- if currency == 'USD' -%}${{ '{:,.0f}'.format(amount) }}{%- else -%}{{ '{:,.0f}'.format(amount) }} EGP{%- endif -%}
+{%- endmacro %}
+
+{% macro payment_badge(status) -%}
+{%- if status == 'Fully Paid' -%}<span class="badge badge-green">Fully Paid</span>
+{%- elif status == 'Deposit Paid' -%}<span class="badge badge-yellow">Deposit Paid</span>
+{%- elif status and 'Refund' in status -%}<span class="badge badge-red">{{ status }}</span>
+{%- else -%}<span class="badge badge-gray">Pending</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro stage_badge(stage) -%}
+{%- set label = stage.replace('_', ' ')|title -%}
+{%- if stage == 'paid' -%}<span class="badge badge-green">{{ label }}</span>
+{%- elif stage == 'lost' -%}<span class="badge badge-red">{{ label }}</span>
+{%- elif stage == 'converted' -%}<span class="badge badge-gray">{{ label }}</span>
+{%- elif stage == 'registered' -%}<span class="badge badge-blue">{{ label }}</span>
+{%- else -%}<span class="badge badge-yellow">{{ label }}</span>{%- endif -%}
+{%- endmacro %}
+
+<!-- Pipeline counters -->
+<div class="kpi-grid kpi-grid-balanced" style="margin-bottom:1rem">
+    <a href="{{ url_for('private_requests.index', queue='open') }}" style="text-decoration:none">
+        <div class="kpi-card" style="border-left:3px solid var(--accent)">
+            <div class="kpi-label">Open</div>
+            <div class="kpi-value">{{ summary.open }}</div>
+            <div class="kpi-sub">{{ summary.total }} in total</div>
+        </div>
+    </a>
+    <a href="{{ url_for('private_requests.index', stage='registered') }}" style="text-decoration:none">
+        <div class="kpi-card" style="border-left:3px solid var(--accent-2)">
+            <div class="kpi-label">Consultation</div>
+            <div class="kpi-value">{{ summary.consultation }}</div>
+            <div class="kpi-sub">Registered or scheduled</div>
+        </div>
+    </a>
+    <a href="{{ url_for('private_requests.index', stage='designing') }}" style="text-decoration:none">
+        <div class="kpi-card" style="border-left:3px solid var(--accent-2)">
+            <div class="kpi-label">In Design</div>
+            <div class="kpi-value">{{ summary.design }}</div>
+            <div class="kpi-sub">Deposit taken, being built</div>
+        </div>
+    </a>
+    <a href="{{ url_for('private_requests.index', queue='has_balance') }}" style="text-decoration:none">
+        <div class="kpi-card" style="border-left:3px solid var(--warning)">
+            <div class="kpi-label">Awaiting Money</div>
+            <div class="kpi-value">{{ summary.awaiting_payment }}</div>
+            <div class="kpi-sub">Deposit or balance due</div>
+        </div>
+    </a>
+    <a href="{{ url_for('private_requests.index', queue='paid_in_full') }}" style="text-decoration:none">
+        <div class="kpi-card" style="border-left:3px solid var(--green)">
+            <div class="kpi-label">Paid</div>
+            <div class="kpi-value">{{ summary.paid }}</div>
+            <div class="kpi-sub">Settled in full</div>
+        </div>
+    </a>
+    <a href="{{ url_for('private_requests.index', queue='overdue') }}" style="text-decoration:none">
+        <div class="kpi-card" style="border-left:3px solid var(--red)">
+            <div class="kpi-label">SLA Overdue</div>
+            <div class="kpi-value" {% if summary.overdue %}style="color:var(--red)"{% endif %}>{{ summary.overdue }}</div>
+            <div class="kpi-sub">Consultation or design late</div>
+        </div>
+    </a>
+    <a href="{{ url_for('private_requests.index', queue='unassigned') }}" style="text-decoration:none">
+        <div class="kpi-card" style="border-left:3px solid var(--warning)">
+            <div class="kpi-label">Unassigned</div>
+            <div class="kpi-value" {% if summary.unassigned %}style="color:var(--yellow)"{% endif %}>{{ summary.unassigned }}</div>
+            <div class="kpi-sub">Nobody accountable yet</div>
+        </div>
+    </a>
+    <a href="{{ url_for('private_requests.index', stage='lost') }}" style="text-decoration:none">
+        <div class="kpi-card" style="border-left:3px solid var(--red)">
+            <div class="kpi-label">Lost</div>
+            <div class="kpi-value">{{ summary.lost }}</div>
+            <div class="kpi-sub">Closed without a trip</div>
+        </div>
+    </a>
 </div>
 
+<!-- Money across the pipeline -->
+<div class="pr-money-strip">
+    {% for currency in currencies %}
+    <div class="pr-money-card">
+        <div class="pr-money-label">Collected ({{ currency }})</div>
+        <div class="pr-money-value" style="color:var(--accent)">{{ pr_money(collected[currency], currency) }}</div>
+        <div class="pr-sub">Money received, less refunds</div>
+    </div>
+    <div class="pr-money-card">
+        <div class="pr-money-label">Outstanding ({{ currency }})</div>
+        <div class="pr-money-value" {% if outstanding[currency] %}style="color:var(--yellow)"{% endif %}>{{ pr_money(outstanding[currency], currency) }}</div>
+        <div class="pr-sub">Agreed but not yet paid — not revenue</div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Filters -->
+<form method="GET" action="{{ url_for('private_requests.index') }}" class="search-bar">
+    <input type="hidden" name="view" value="{{ view }}">
+    <div class="search-input-wrap">
+        <span class="search-icon"></span>
+        <input class="form-input" type="text" name="q" value="{{ search }}" placeholder="Search request ID, customer, destination, notes…">
+    </div>
+    <select class="form-select" name="stage" style="width:170px">
+        <option value="">All Stages</option>
+        {% for stage in stage_options %}
+        <option value="{{ stage }}" {% if selected_stage == stage %}selected{% endif %}>{{ stage.replace('_', ' ')|title }}</option>
+        {% endfor %}
+        {% if selected_stage and selected_stage not in stage_options %}
+        <option value="{{ selected_stage }}" selected>{{ selected_stage.replace('_', ' ')|title }}</option>
+        {% endif %}
+    </select>
+    <select class="form-select" name="payment" style="width:160px">
+        <option value="">All Payments</option>
+        {% for status in payment_statuses %}
+        <option value="{{ status }}" {% if selected_payment == status %}selected{% endif %}>{{ status }}</option>
+        {% endfor %}
+    </select>
+    <select class="form-select" name="service_type" style="width:160px">
+        <option value="">All Services</option>
+        {% for key, label in service_types.items() %}
+        <option value="{{ key }}" {% if selected_service == key %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+    </select>
+    <select class="form-select" name="scope" style="width:140px">
+        <option value="">All Scopes</option>
+        {% for scope in scopes %}
+        <option value="{{ scope }}" {% if selected_scope == scope %}selected{% endif %}>{{ scope }}</option>
+        {% endfor %}
+    </select>
+    <select class="form-select" name="queue" style="width:190px">
+        <option value="">All Work</option>
+        {% for key, label in queues %}
+        <option value="{{ key }}" {% if selected_queue == key %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+    </select>
+    {% if employees %}
+    <select class="form-select" name="employee_id" style="width:180px">
+        <option value="">Any employee</option>
+        {% for employee in employees %}
+        <option value="{{ employee.id }}" {% if selected_employee_id == employee.id %}selected{% endif %}>{{ employee.display_name }}</option>
+        {% endfor %}
+    </select>
+    {% endif %}
+    <button type="submit" class="btn btn-ghost">Filter</button>
+    {% if has_filters %}
+    <a href="{{ url_for('private_requests.index', view=view) }}" class="btn btn-ghost">Clear</a>
+    {% endif %}
+</form>
+
+<div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:0.85rem">
+    <span class="pr-sub">
+        {{ matched_count }} request{{ 's' if matched_count != 1 else '' }} match{{ '' if matched_count != 1 else 'es' }}
+        {%- if has_filters %} this filter{% endif %}.
+    </span>
+    <div class="pr-view-toggle">
+        <a class="pr-view-pill {% if view == 'table' %}active{% endif %}"
+           href="{{ url_for('private_requests.index', view='table', q=search, stage=selected_stage, payment=selected_payment, service_type=selected_service, scope=selected_scope, queue=selected_queue, employee_id=selected_employee_id) }}">Table</a>
+        <a class="pr-view-pill {% if view == 'board' %}active{% endif %}"
+           href="{{ url_for('private_requests.index', view='board', q=search, stage=selected_stage, payment=selected_payment, service_type=selected_service, scope=selected_scope, queue=selected_queue, employee_id=selected_employee_id) }}">Board</a>
+    </div>
+</div>
+
+{% if view == 'board' %}
 <section class="private-board">
     {% for stage in stages %}
     <div class="private-column">
@@ -65,12 +230,7 @@
                 {% else %}
                 <span class="badge badge-green">On track</span>
                 {% endif %}
-                {% if card_money %}
-                    {% if card_money.payment_status == 'Fully Paid' %}<span class="badge badge-green">Fully Paid</span>
-                    {% elif card_money.payment_status == 'Deposit Paid' %}<span class="badge badge-yellow">Deposit Paid</span>
-                    {% elif 'Refund' in card_money.payment_status %}<span class="badge badge-red">{{ card_money.payment_status }}</span>
-                    {% endif %}
-                {% endif %}
+                {% if card_money and card_money.payment_status != 'Pending' %}{{ payment_badge(card_money.payment_status) }}{% endif %}
                 {% if item.priority == 'High' %}<span class="badge badge-red">High</span>{% endif %}
                 {% if item.follow_up_due_date and item.follow_up_due_date < today %}<span class="badge badge-yellow">Follow-up due</span>{% endif %}
             </div>
@@ -81,6 +241,118 @@
     </div>
     {% endfor %}
 </section>
+
+{% elif requests %}
+<div class="card" style="padding:0;overflow:hidden">
+    <table class="data-table">
+        <thead><tr>
+            <th>Request</th><th>Customer</th><th>Trip</th><th>Stage</th><th>Payment</th>
+            <th style="text-align:right">Total</th><th style="text-align:right">Paid</th><th style="text-align:right">Outstanding</th>
+            <th>Owner</th><th>Follow-up</th><th></th>
+        </tr></thead>
+        <tbody>
+        {% for item in requests %}
+        {% set row_money = money.get(item.request_id) %}
+        {% set detail_url = url_for('private_requests.detail', request_id=item.request_id) %}
+        <tr onclick="window.location='{{ detail_url }}'">
+            <td class="mono">
+                {{ item.request_id }}
+                <div class="pr-sub">{{ item.created_at.strftime('%d %b %Y') if item.created_at else '—' }}</div>
+            </td>
+            <td>
+                {% if item.traveler %}
+                <div class="primary">{{ item.traveler.full_name or item.traveler.traveler_id }}</div>
+                <div class="pr-sub">{{ item.traveler.traveler_id }}{% if item.traveler.whatsapp_raw %} · {{ item.traveler.whatsapp_raw }}{% endif %}</div>
+                {% elif item.lead %}
+                <div class="primary">{{ item.lead.customer_name or item.lead_id }}</div>
+                <div class="pr-sub">Lead {{ item.lead_id }}</div>
+                {% else %}
+                <div style="color:var(--text-muted)">Not linked</div>
+                {% endif %}
+            </td>
+            <td style="max-width:190px">
+                <div class="primary" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ item.destination or 'No destination' }}</div>
+                <div class="pr-sub">
+                    {{ service_types.get(item.service_type, item.service_type) }} · {{ item.trip_scope }}
+                    · {{ item.party_size }} pax
+                </div>
+            </td>
+            <td>
+                {{ stage_badge(item.stage) }}
+                {% if item.is_consultation_overdue or item.is_design_overdue %}<span class="badge badge-red">Overdue</span>{% endif %}
+                {% if item.priority == 'High' %}<span class="badge badge-red">High</span>{% endif %}
+            </td>
+            <td>{{ payment_badge(row_money.payment_status if row_money else 'Pending') }}</td>
+            <td class="mono" style="text-align:right">
+                {% if row_money and row_money.contract_value is not none %}
+                {{ '{:,.0f}'.format(row_money.contract_value) }} {{ row_money.currency }}
+                {% elif item.budget_amount %}
+                <span style="color:var(--text-muted)" title="Customer's stated budget, not an agreed price">~{{ '{:,.0f}'.format(item.budget_amount) }} {{ item.budget_currency or '' }}</span>
+                {% else %}<span style="color:var(--text-muted)">—</span>{% endif %}
+            </td>
+            <td class="mono" style="text-align:right;color:{{ 'var(--accent)' if row_money and row_money.paid else 'var(--text-muted)' }}">
+                {% if row_money and row_money.paid %}{{ '{:,.0f}'.format(row_money.paid) }} {{ row_money.currency }}{% else %}—{% endif %}
+            </td>
+            <td class="mono" style="text-align:right">
+                {% if row_money and row_money.outstanding %}
+                <span style="color:var(--yellow)">{{ '{:,.0f}'.format(row_money.outstanding) }} {{ row_money.currency }}</span>
+                {% elif row_money and row_money.outstanding is none and row_money.paid %}
+                <span style="color:var(--text-muted)" title="No agreed price recorded, so the balance is unknown">Unknown</span>
+                {% else %}<span style="color:var(--text-muted)">—</span>{% endif %}
+            </td>
+            <td>
+                {{ item.assigned_user.display_name if item.assigned_user else (item.assigned_to or 'Unassigned') }}
+            </td>
+            <td class="pr-sub">
+                {% if item.follow_up_due_date %}
+                <span {% if item.follow_up_due_date < today %}style="color:var(--red)"{% endif %}>{{ item.follow_up_due_date.strftime('%d %b %Y') }}</span>
+                {% else %}Not scheduled{% endif %}
+            </td>
+            <td onclick="event.stopPropagation()">
+                <div class="pr-actions">
+                    <a href="{{ detail_url }}" class="btn btn-ghost btn-sm">Open</a>
+                    {% if can_delete %}
+                    <form method="post" action="{{ url_for('private_requests.delete', request_id=item.request_id) }}"
+                          style="margin:0" onsubmit="return confirm('Delete {{ item.request_id }} permanently? This cannot be undone.')">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                    </form>
+                    {% endif %}
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="pagination">
+    <span class="pr-sub" style="margin-right:0.5rem">{{ pagination.total }} total</span>
+    {% if pagination.has_prev %}
+    <a href="{{ url_for('private_requests.index', page=pagination.prev_num, q=search, stage=selected_stage, payment=selected_payment, service_type=selected_service, scope=selected_scope, queue=selected_queue, employee_id=selected_employee_id) }}" class="page-btn">← Prev</a>
+    {% endif %}
+    {% for p in pagination.iter_pages() %}
+        {% if p %}<a href="{{ url_for('private_requests.index', page=p, q=search, stage=selected_stage, payment=selected_payment, service_type=selected_service, scope=selected_scope, queue=selected_queue, employee_id=selected_employee_id) }}" class="page-btn {% if p == pagination.page %}active{% endif %}">{{ p }}</a>
+        {% else %}<span style="padding:0 0.25rem;color:var(--text-muted)">…</span>{% endif %}
+    {% endfor %}
+    {% if pagination.has_next %}
+    <a href="{{ url_for('private_requests.index', page=pagination.next_num, q=search, stage=selected_stage, payment=selected_payment, service_type=selected_service, scope=selected_scope, queue=selected_queue, employee_id=selected_employee_id) }}" class="page-btn">Next →</a>
+    {% endif %}
+</div>
+
+{% else %}
+<div class="card" style="text-align:center;padding:3rem">
+    <div style="font-weight:700;color:var(--text-main);margin-bottom:0.4rem">No private requests found</div>
+    <div style="color:var(--text-muted);font-size:0.83rem;margin-bottom:1.25rem">
+        {% if has_filters %}Nothing matches this filter.{% else %}Requests arrive from the agent, or you can add one by hand.{% endif %}
+    </div>
+    {% if has_filters %}
+    <a href="{{ url_for('private_requests.index') }}" class="btn btn-ghost">Clear filters</a>
+    {% else %}
+    <button onclick="openModal('newRequest')" class="btn btn-primary">+ New Request</button>
+    {% endif %}
+</div>
+{% endif %}
 
 <!-- NEW REQUEST MODAL -->
 <div id="newRequest" class="modal-overlay">
@@ -172,6 +444,7 @@
                         <div class="form-group">
                             <label class="form-label">Budget</label>
                             <input class="form-input" type="number" min="0" step="0.01" name="budget_amount">
+                            <div class="form-hint">What the customer says they want to spend. The agreed price is set later, on the request page.</div>
                         </div>
                         <div class="form-group">
                             <label class="form-label">Currency</label>

@@ -522,6 +522,289 @@ def test_detail_page_offers_no_forward_move_once_closed(private_request_app) -> 
     assert "cannot move any further" in body
 
 
+# ---------------------------------------------------------------------------
+# List layout. The board was the only view: no search, no filters, no
+# pagination, and no way to answer "which of these owes us money" without
+# opening every card. It is now laid out like the Bookings and Leads pages --
+# counters, one filter bar, a table -- with the board kept as a second view.
+# ---------------------------------------------------------------------------
+def test_the_index_renders_a_filterable_table_by_default(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    _login_as_employee(app, client)
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000100", stage="registered")
+
+    body = client.get("/admin/private-requests/").get_data(as_text=True)
+    # Table, filter bar and counters -- the same furniture as the other pages.
+    assert 'class="data-table"' in body
+    assert 'name="q"' in body
+    assert 'name="queue"' in body
+    assert "All Payments" in body
+    assert "PRT-000100" in body
+    assert "Maldives" in body
+    assert "Private Traveler" in body
+    # Money is stated per currency and labelled, never blended.
+    assert "Collected (EGP)" in body
+    assert "Outstanding (USD)" in body
+
+
+def test_the_board_is_still_available_as_a_view(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    _login_as_employee(app, client)
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000101", stage="designing")
+
+    board = client.get("/admin/private-requests/?view=board").get_data(as_text=True)
+    assert 'class="private-board"' in board
+    assert "PRT-000101" in board
+    table = client.get("/admin/private-requests/").get_data(as_text=True)
+    assert 'class="private-board"' not in table
+
+
+def test_search_matches_request_id_destination_and_customer(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    _login_as_employee(app, client)
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000110", stage="registered")
+        other = _seed_request(db, request_id="PRT-000111", stage="registered")
+        other.destination = "Santorini"
+        db.session.commit()
+
+    for term, expected, missing in (
+        ("PRT-000110", "PRT-000110", "PRT-000111"),
+        ("Santorini", "PRT-000111", "PRT-000110"),
+        ("Private Traveler", "PRT-000110", None),
+    ):
+        body = client.get(f"/admin/private-requests/?q={term}").get_data(as_text=True)
+        assert expected in body
+        if missing:
+            assert f'>{missing}\n' not in body and f"{missing}<" not in body
+
+
+def test_filters_narrow_the_list_by_stage_and_payment(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    _login_as_employee(app, client)
+    with app.app_context():
+        from app.services.private_trip_money import record_payment, set_agreed_price
+
+        _seed_request(db, request_id="PRT-000120", stage="registered")
+        paid = _seed_request(db, request_id="PRT-000121", stage="designing")
+        set_agreed_price(paid, amount=1000, currency="USD")
+        record_payment(paid, amount=1000, currency="USD", occurred_on="2026-08-01")
+        db.session.commit()
+
+    by_stage = client.get("/admin/private-requests/?stage=designing").get_data(as_text=True)
+    assert "PRT-000121" in by_stage
+    assert "PRT-000120" not in by_stage
+
+    # Payment status is derived from the ledger, so filtering by it is
+    # filtering by what was actually received.
+    by_payment = client.get("/admin/private-requests/?payment=Fully+Paid").get_data(as_text=True)
+    assert "PRT-000121" in by_payment
+    assert "PRT-000120" not in by_payment
+
+    pending = client.get("/admin/private-requests/?payment=Pending").get_data(as_text=True)
+    assert "PRT-000120" in pending
+    assert "PRT-000121" not in pending
+
+
+def test_the_money_work_queues_answer_who_still_owes_us(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    _login_as_employee(app, client)
+    with app.app_context():
+        from app.services.private_trip_money import record_payment, set_agreed_price
+
+        owing = _seed_request(db, request_id="PRT-000130", stage="designing")
+        set_agreed_price(owing, amount=1000, currency="USD")
+        record_payment(owing, amount=400, currency="USD", occurred_on="2026-08-01")
+        unpriced = _seed_request(db, request_id="PRT-000131", stage="consultation_done")
+        record_payment(unpriced, amount=100, currency="USD", occurred_on="2026-08-01")
+        db.session.commit()
+
+    balance = client.get("/admin/private-requests/?queue=has_balance").get_data(as_text=True)
+    assert "PRT-000130" in balance
+    assert "PRT-000131" not in balance  # no price, so the balance is unknown
+
+    no_price = client.get("/admin/private-requests/?queue=unpriced").get_data(as_text=True)
+    assert "PRT-000131" in no_price
+    assert "PRT-000130" not in no_price
+
+
+def test_the_list_pages_at_twenty_five_rows(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    _login_as_employee(app, client)
+    with app.app_context():
+        for index in range(27):
+            _seed_request(db, request_id=f"PRT-0002{index:02d}", stage="registered")
+
+    first = client.get("/admin/private-requests/").get_data(as_text=True)
+    assert "27 total" in first
+    assert 'class="page-btn' in first
+
+    # Newest first, so page two holds the two oldest -- the rows page one
+    # cannot fit.
+    second = client.get("/admin/private-requests/?page=2").get_data(as_text=True)
+    assert "PRT-000200" in second
+    assert "PRT-000201" in second
+    assert "PRT-000226" not in second
+
+
+def test_a_legacy_converted_request_still_appears_in_the_list(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    _login_as_employee(app, client)
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000140", stage="converted")
+
+    table = client.get("/admin/private-requests/").get_data(as_text=True)
+    assert "PRT-000140" in table
+    board = client.get("/admin/private-requests/?view=board").get_data(as_text=True)
+    assert "PRT-000140" in board
+
+
+# ---------------------------------------------------------------------------
+# Delete. Junk and duplicate requests had to be lived with; there was no way
+# to remove one. Admin only, and refused outright once money is recorded --
+# the payment ledger is append-only, so deleting a request that holds payments
+# would erase financial history that closed months were reported from.
+# ---------------------------------------------------------------------------
+def test_a_request_with_no_money_can_be_deleted(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    csrf_token = _login_as(app, client, role="admin")
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000150", stage="registered")
+
+    response = client.post(
+        "/admin/private-requests/PRT-000150/delete",
+        data={"csrf_token": csrf_token},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert "deleted permanently" in response.get_data(as_text=True)
+
+    with app.app_context():
+        from app.models.private_trip_request import PrivateTripRequest
+
+        assert db.session.get(PrivateTripRequest, "PRT-000150") is None
+
+
+def test_deleting_a_request_removes_its_fees_and_assignment_history(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    csrf_token = _login_as(app, client, role="admin")
+    with app.app_context():
+        from app.services.additional_fees import add_fee
+        from app.services.private_trip_money import set_agreed_price
+
+        item = _seed_request(db, request_id="PRT-000151", stage="consultation_done")
+        set_agreed_price(item, amount=1000, currency="USD")
+        add_fee(private_request=item, label="Visa", amount="100", currency="USD")
+        db.session.commit()
+
+    client.post(
+        "/admin/private-requests/PRT-000151/delete",
+        data={"csrf_token": csrf_token},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        from app.models.additional_fee import AdditionalFee
+        from app.models.assignment_history import AssignmentHistory
+        from app.models.private_trip_request import PrivateTripRequest
+
+        assert db.session.get(PrivateTripRequest, "PRT-000151") is None
+        assert AdditionalFee.query.filter_by(private_request_id="PRT-000151").count() == 0
+        assert AssignmentHistory.query.filter_by(
+            resource_type="private_trip_request", resource_id="PRT-000151"
+        ).count() == 0
+
+
+def test_a_request_holding_money_is_never_deleted(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    csrf_token = _login_as(app, client, role="admin")
+    with app.app_context():
+        from app.services.private_trip_money import record_payment, set_agreed_price
+
+        item = _seed_request(db, request_id="PRT-000152", stage="deposit_paid")
+        set_agreed_price(item, amount=1000, currency="USD")
+        record_payment(item, amount=250, currency="USD", occurred_on="2026-08-01")
+        db.session.commit()
+
+    response = client.post(
+        "/admin/private-requests/PRT-000152/delete",
+        data={"csrf_token": csrf_token},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "cannot be deleted" in body
+    assert "Mark it lost instead" in body
+
+    with app.app_context():
+        from app.models.private_trip_request import PrivateTripRequest
+        from app.models.private_trip_transaction import PrivateTripTransaction
+
+        assert db.session.get(PrivateTripRequest, "PRT-000152") is not None
+        # The payment record survives untouched -- that is the point.
+        assert PrivateTripTransaction.query.filter_by(request_id="PRT-000152").count() == 1
+
+
+def test_delete_is_refused_for_a_non_admin_employee(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    csrf_token = _login_as(app, client, role="agent")
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000153", stage="registered")
+
+    # Auth is disabled in this fixture's environment, which is what makes the
+    # permission check a no-op; turn it on so the role is actually consulted.
+    app.config["CRM_AUTH_ENABLED"] = True
+    try:
+        response = client.post(
+            "/admin/private-requests/PRT-000153/delete",
+            data={"csrf_token": csrf_token},
+        )
+    finally:
+        app.config["CRM_AUTH_ENABLED"] = False
+
+    assert response.status_code == 403
+    with app.app_context():
+        from app.models.private_trip_request import PrivateTripRequest
+
+        assert db.session.get(PrivateTripRequest, "PRT-000153") is not None
+
+
+def test_the_delete_button_is_only_rendered_for_an_admin(private_request_app) -> None:
+    app, db = private_request_app
+    client = app.test_client()
+    _login_as(app, client, role="agent")
+    with app.app_context():
+        _seed_request(db, request_id="PRT-000154", stage="registered")
+
+    app.config["CRM_AUTH_ENABLED"] = True
+    try:
+        agent_view = client.get("/admin/private-requests/PRT-000154").get_data(as_text=True)
+    finally:
+        app.config["CRM_AUTH_ENABLED"] = False
+    assert "Delete Request" not in agent_view
+
+    _login_as(app, client, role="admin")
+    app.config["CRM_AUTH_ENABLED"] = True
+    try:
+        admin_view = client.get("/admin/private-requests/PRT-000154").get_data(as_text=True)
+    finally:
+        app.config["CRM_AUTH_ENABLED"] = False
+    assert "Delete Request" in admin_view
+
+
 def test_detail_page_formats_timestamps_instead_of_printing_raw_datetimes(private_request_app) -> None:
     app, db = private_request_app
     client = app.test_client()
