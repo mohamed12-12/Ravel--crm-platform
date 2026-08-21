@@ -58,6 +58,8 @@ from services.ai_agent.validation.lexicon import (
     EXPLANATION_REQUEST_SUBSTRING_TERMS,
     GENERIC_TRIP_CHANGE_TERMS,
     HUMAN_HANDOFF_TERMS,
+    NAME_DECLARATION_PREFIXES,
+    NON_NAME_TOKENS,
     ONLY_OPTION_QUESTION_TERMS,
     OPTION_NUMBER_PREFIX_TERMS,
     OPTION_ORDINAL_TERMS,
@@ -2236,7 +2238,15 @@ class ToolCallingSessionRuntime:
                 "\u0644\u0627\u0632\u0645 \u0643\u0627\u0645\u0644",
                 "\u064a\u0639\u0646\u064a \u0627\u0644\u0627\u0633\u0645 \u0627\u0644\u062b\u0644\u0627\u062b\u064a",
                 "\u0627\u0644\u0627\u0633\u0645 \u0627\u0644\u062b\u0644\u0627\u062b\u064a",
-                "\u0643\u0627\u0645\u0644",
+                # "\u0643\u0627\u0645\u0644" on its own used to be here. It is a SUBSTRING check, and
+                # \u0643\u0627\u0645\u0644 is a very common Egyptian family name -- so anyone called
+                # "\u0647\u062f\u064a \u0645\u0635\u0637\u0641\u064a \u0643\u0627\u0645\u0644" had their own name read as a question about
+                # the name format and re-asked forever. The phrasings that
+                # actually ask about the format all name the field too.
+                "\u0627\u0644\u0627\u0633\u0645 \u0643\u0627\u0645\u0644",
+                "\u0627\u0633\u0645 \u0643\u0627\u0645\u0644",
+                "\u0643\u0627\u0645\u0644 \u0644\u064a\u0647",
+                "\u0643\u0627\u0645\u0644\u061f",
             )
         )
 
@@ -7038,6 +7048,7 @@ class ToolCallingSessionRuntime:
             "candidate_raw_phone": raw_phone,
             "candidate_destination": destination_name,
             "candidate_preferred_date": "August" if "august" in lowered or "أغسطس" in lowered else "",
+            "candidate_declared_customer_name": ToolCallingSessionRuntime._declared_full_name(text),
             "candidate_birthday": ToolCallingSessionRuntime._extract_birthday(text),
             "candidate_nationality": ToolCallingSessionRuntime._extract_nationality_hint(text),
             "candidate_flight_option": flight_option,
@@ -7306,6 +7317,31 @@ class ToolCallingSessionRuntime:
                 session.room_group = "mixed"
             self._update_collection_state(session, room_type=True, room_group=True)
 
+        # "اسمي خالد جاد ماجد" said BEFORE the WhatsApp number. Live 2026-08-20
+        # transcript: the customer volunteered their name twice while the phone
+        # was being asked for, the persona layer greeted them by it both times,
+        # but nothing ever stored it -- so after the lookup found no profile the
+        # workflow asked for the name a third time, the model rewrote that
+        # prompt into "is your full name X?", and the customer's "اه ده رقمي"
+        # was captured as the answer.
+        #
+        # Only an EXPLICIT declaration is honoured here (see
+        # _declared_full_name); a bare three-word message during phone
+        # collection is deliberately NOT captured, since at that step it is far
+        # more likely to be something else entirely. Never overrides a
+        # CRM-verified traveler's name, and stops once the lead exists so the
+        # saved record and the session cannot drift apart.
+        declared_name = str(hints.get("candidate_declared_customer_name") or "").strip()
+        if (
+            declared_name
+            and declared_name != str(session.customer_name or "").strip()
+            and not self._preview_has_verified_traveler(session)
+            and not getattr(session, "new_traveler_lead_saved", False)
+        ):
+            session.customer_name = declared_name
+            self._update_collection_state(session, customer_name=True)
+            agent_logger.info("Captured a declared customer name session=%s", session.id)
+
         raw_phone = str(hints.get("candidate_raw_phone") or "").strip()
         if raw_phone:
             session.raw_phone = raw_phone
@@ -7327,6 +7363,14 @@ class ToolCallingSessionRuntime:
         existing generic re-ask instead of a specific-but-misleading reason.
         """
         name = re.sub(r"\s+", " ", str(text or "").strip())
+        # "لا اسمي خالد جاد ماجد" / "my name is Khaled Gad Maged": strip the
+        # declaration and validate only the name itself. Without this the whole
+        # sentence passed every structural check (5 Arabic tokens, all 2+ chars)
+        # and "لا اسمي خالد جاد ماجد" would have been stored verbatim as the
+        # customer's legal name.
+        declared = cls._strip_name_declaration(name)
+        if declared:
+            name = declared
         if not name or len(name) > 80:
             return "", ""
         if _PHONE_CANDIDATE_RE.search(name):
@@ -7382,6 +7426,16 @@ class ToolCallingSessionRuntime:
         # punctuation per word before validating the word itself.
         parts = [part.strip(_NAME_EDGE_PUNCTUATION) for part in name.split(" ")]
         parts = [part for part in parts if part]
+        # Live 2026-08-20 transcript: "اه ده رقمي" ("yes, that's my number") was
+        # SAVED as a customer's full name (lead LD00003), because an
+        # affirmation + a demonstrative + "my number" is three Arabic tokens of
+        # 2+ characters that are not all identical -- every structural check
+        # this function had. Returns no reason on purpose: this is not a
+        # badly-formed name, it is an answer to a different question, so the
+        # message must stay available to the off-script router rather than
+        # earning a "please send three parts" correction.
+        if cls._has_non_name_token(parts):
+            return "", ""
         if len(parts) < 3:
             return "", "too_few_tokens"
         if not all(_NAME_TOKEN_RE.fullmatch(part) for part in parts):
@@ -7394,6 +7448,61 @@ class ToolCallingSessionRuntime:
             # in some cultures, so only an all-identical triple+ is rejected.
             return "", "repeated_tokens"
         return " ".join(parts), ""
+
+    @classmethod
+    def _has_non_name_token(cls, parts: list[str]) -> bool:
+        """True if any token is a word that is never part of a person's name.
+
+        Exact token match against NON_NAME_TOKENS after the same folding
+        _normalize_trip_reference applies, never a substring test -- so real
+        names that merely contain one of these as a fragment still pass
+        ("بسمه" is not "بس", "نعمه" is not "نعم", "اسماء" is not "اسم").
+        """
+
+        for part in parts:
+            token = cls._normalize_trip_reference(part)
+            if token and token in NON_NAME_TOKENS:
+                return True
+        return False
+
+    @classmethod
+    def _strip_name_declaration(cls, text: str) -> str:
+        """Return the name part of an explicit declaration, or "".
+
+        Works on the ORIGINAL casing/spelling (the caller still validates and
+        stores that), using the normalized form only to locate the prefix, so
+        the stored name keeps the customer's own spelling.
+        """
+
+        raw = re.sub(r"\s+", " ", str(text or "").strip())
+        if not raw:
+            return ""
+        normalized = cls._normalize_trip_reference(raw)
+        words = raw.split(" ")
+        # Longest prefix first: "لا اسمي" must win over "اسمي", otherwise the
+        # leading "لا" is left behind and rejected as a non-name token.
+        for prefix in sorted(NAME_DECLARATION_PREFIXES, key=len, reverse=True):
+            if not normalized.startswith(prefix):
+                continue
+            skip = len(prefix.split(" "))
+            remainder = " ".join(words[skip:]).strip(" :،,-")
+            if remainder:
+                return remainder
+        return ""
+
+    @classmethod
+    def _declared_full_name(cls, text: str) -> str:
+        """A validated full name from an explicit "my name is X" declaration.
+
+        Distinct from _extract_valid_full_name (which accepts a bare name):
+        only an explicit declaration may overwrite a name captured earlier in
+        the same conversation, so an unprompted three-word message can never
+        silently replace one the customer already gave.
+        """
+
+        if not cls._strip_name_declaration(text):
+            return ""
+        return cls._validate_name_tokens(text)[0]
 
     @classmethod
     def _extract_valid_full_name(cls, text: str) -> str:

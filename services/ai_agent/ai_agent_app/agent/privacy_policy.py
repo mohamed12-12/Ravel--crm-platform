@@ -8,6 +8,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from services.ai_agent.validation.lexicon import OWN_PHONE_CORRECTION_TERMS
+
 
 @dataclass(frozen=True)
 class AgentPrivacyResponse:
@@ -82,28 +84,74 @@ class AgentPrivacyPolicy:
         "their details",
         "someone's",
     )
+    # A first-person POSSESSIVE only. The bare pronouns "\u0627\u0646\u0627"/"\u0623\u0646\u0627" and "me"
+    # used to be listed here, and since one self term anywhere in the message
+    # cancels the whole cross-traveler check, they let the two most ordinary
+    # sentence openings in either language through untouched:
+    # "show me another traveler's booking" and "\u0627\u0646\u0627 \u0639\u0627\u064a\u0632 \u0628\u064a\u0627\u0646\u0627\u062a \u0645\u062d\u0645\u062f \u0627\u0634\u0631\u0641" were
+    # both allowed. The Egyptian possessives below replace what "\u0627\u0646\u0627" was
+    # really covering ("\u0627\u0644\u0645\u0644\u0641 \u0628\u062a\u0627\u0639\u064a"), without matching a sentence that is
+    # about somebody else.
     _SELF_AR = (
         "\u0628\u064a\u0627\u0646\u0627\u062a\u064a",
         "\u0645\u0639\u0644\u0648\u0645\u0627\u062a\u064a",
         "\u0645\u0644\u0641\u064a",
         "\u062d\u062c\u0632\u064a",
-        "\u0627\u0646\u0627",
-        "\u0623\u0646\u0627",
+        "\u0628\u062a\u0627\u0639\u064a",
+        "\u0628\u062a\u0627\u0639\u062a\u064a",
+        "\u062e\u0627\u0635\u062a\u064a",
+        "\u0644\u064a\u0627 \u0627\u0646\u0627",
     )
-    _SELF_EN = ("my profile", "my details", "my data", "my booking", "me")
+    _SELF_EN = ("my profile", "my details", "my data", "my booking", "my own")
 
     @classmethod
     def evaluate_user_message(cls, user_text: str, session_context: dict[str, Any]) -> AgentPrivacyResponse | None:
         if not cls._session_is_bound(session_context):
             return None
         language = cls._detect_language(user_text)
-        if cls._contains_other_phone(user_text, session_context) or cls._looks_like_other_traveler_request(user_text):
+        blocked = cls._looks_like_other_traveler_request(user_text)
+        if not blocked and cls._contains_other_phone(user_text, session_context):
+            # A phone number that differs from the session's is not by itself a
+            # request for someone else's data -- it is usually the customer
+            # giving or correcting their OWN number. Live 2026-08-20 transcript:
+            # the first number found no profile, the customer sent
+            # "اه بس الرقم ده 01240789320" (their real one) and got the
+            # cross-traveler refusal, so the corrected number was never even
+            # merged into the session.
+            #
+            # Checked in this order on purpose: a message that reads as a data
+            # request about another person ("عايز بيانات الرقم ده ...") is
+            # already blocked above and never reaches this allowance.
+            blocked = not cls._phone_is_offered_as_own_identity(user_text, session_context)
+        if blocked:
             return AgentPrivacyResponse(
                 intent="other_traveler_data_request",
                 language=language,
                 text=cls.AR_RESPONSE if language == "ar" else cls.EN_RESPONSE,
             )
         return None
+
+    @classmethod
+    def _phone_is_offered_as_own_identity(cls, user_text: str, context: dict[str, Any]) -> bool:
+        """True when the message explicitly frames the number as the sender's own.
+
+        "اه بس الرقم ده 01240789320", "رقمي الصح ...", "my number is ...",
+        "غير الرقم لـ ..." are identity inputs, not questions about anyone's
+        data, so they must reach the identity lookup instead of the
+        cross-traveler refusal. Honoured for a verified session too, so a
+        traveler can correct the number on their own file.
+
+        A BARE differing number is still blocked, verified or not, because that
+        is what a phone-fishing attempt also looks like -- see
+        test_different_phone_after_bound_session_is_blocked_before_model, which
+        pins exactly that case.
+        """
+
+        normalized = cls._normalize(user_text)
+        return any(
+            cls._contains_phrase(normalized, cls._normalize(term))
+            for term in OWN_PHONE_CORRECTION_TERMS
+        )
 
     @classmethod
     def guard_tool_call(
@@ -165,6 +213,14 @@ class AgentPrivacyPolicy:
 
     @classmethod
     def _contains_other_phone(cls, user_text: str, context: dict[str, Any]) -> bool:
+        if not cls._session_phone_keys(context):
+            # Nothing to contrast against. A session that holds no phone number
+            # at all cannot have "another traveler's" number in it -- whatever
+            # arrives is simply the first one given. `_session_is_bound` counts
+            # a customer_name on its own, so once a name is captured before the
+            # phone step (which now happens for "اسمي خالد جاد ماجد"), the very
+            # first number the customer sent was being refused.
+            return False
         for phone in cls._phone_candidates(user_text):
             if not cls._phone_matches_session(phone, context):
                 return True
@@ -176,10 +232,9 @@ class AgentPrivacyPolicy:
         return [match.group(0).strip() for match in re.finditer(r"(?:\+|00)?\d[\d\s().-]{7,}\d", normalized)]
 
     @classmethod
-    def _phone_matches_session(cls, requested: str, context: dict[str, Any]) -> bool:
-        requested_key = cls._phone_key(requested)
-        if not requested_key:
-            return True
+    def _session_phone_keys(cls, context: dict[str, Any]) -> set[str]:
+        """Every phone number already on record for this session, comparably keyed."""
+
         candidates = [context.get("raw_phone"), context.get("pending_raw_phone")]
         phone_normalization = context.get("phone_normalization") if isinstance(context.get("phone_normalization"), dict) else {}
         candidates.extend(
@@ -198,7 +253,15 @@ class AgentPrivacyPolicy:
                 known.get("normalized_whatsapp"),
             ]
         )
-        return any(requested_key == cls._phone_key(str(candidate or "")) for candidate in candidates if candidate)
+        keys = {cls._phone_key(str(candidate or "")) for candidate in candidates if candidate}
+        return {key for key in keys if key}
+
+    @classmethod
+    def _phone_matches_session(cls, requested: str, context: dict[str, Any]) -> bool:
+        requested_key = cls._phone_key(requested)
+        if not requested_key:
+            return True
+        return requested_key in cls._session_phone_keys(context)
 
     @classmethod
     def _traveler_matches_session(cls, requested_traveler_id: str, context: dict[str, Any]) -> bool:

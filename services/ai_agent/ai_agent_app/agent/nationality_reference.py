@@ -169,6 +169,21 @@ for _form, _canonical in _NATIONALITIES.items():
     _FOLDED_NATIONALITIES.setdefault(_fold_arabic(_form), _canonical)
 
 
+def _without_definite_article(value: str) -> str:
+    """Strip a leading Arabic definite article, or return "" if there is none.
+
+    Live 2026-08-20 transcript: a customer answered "العراقيه" and was told
+    "مش قادر أتعرف على الجنسية دي"; "عراقي" on the next turn worked. Answering
+    with the article is completely ordinary Arabic ("أنا العراقية"), and it
+    broke every row in the table, not just this one -- "المصريه",
+    "السعوديه" and "الاماراتيه" all failed the same way.
+    """
+
+    if len(value) > 4 and value.startswith("ال"):
+        return value[2:]
+    return ""
+
+
 def resolve_nationality(text: str) -> str:
     """Return the canonical nationality for a recognized demonym/country name, or ''."""
     normalized = " ".join(str(text or "").strip().casefold().split())
@@ -178,7 +193,16 @@ def resolve_nationality(text: str) -> str:
     # Only reached when the literal spelling is unknown, so an unrecognized
     # nationality still fails closed exactly as before -- folding widens what
     # counts as the SAME word, it never invents a new nationality.
-    return _FOLDED_NATIONALITIES.get(_fold_arabic(normalized), "")
+    folded = _FOLDED_NATIONALITIES.get(_fold_arabic(normalized), "")
+    if folded:
+        return folded
+    # Tried LAST so a nationality whose own spelling begins with "ال"
+    # ("الماني") is always matched as itself first, and stripping can never
+    # shadow a real entry.
+    bare = _without_definite_article(normalized)
+    if not bare:
+        return ""
+    return _NATIONALITIES.get(bare, "") or _FOLDED_NATIONALITIES.get(_fold_arabic(bare), "")
 
 
 def looks_like_currency_code(text: str) -> bool:

@@ -105,6 +105,19 @@ def test_recognized_nationalities_resolve_in_english_and_arabic() -> None:
         ("سوريه", "Syrian"),
         ("اماراتيه", "Emirati"),
         ("إماراتي", "Emirati"),
+        # Live 2026-08-21 regression, same table, next gap: the customer
+        # answered "العراقيه" -- with the definite article, completely ordinary
+        # Arabic -- was rejected, and only got through on the next turn with
+        # "عراقي". Every row had this hole too.
+        ("العراقيه", "Iraqi"),
+        ("العراقية", "Iraqi"),
+        ("المصريه", "Egyptian"),
+        ("السعوديه", "Saudi"),
+        ("الاماراتيه", "Emirati"),
+        # A nationality whose own spelling starts with "ال" must still match as
+        # itself, before any article stripping is attempted.
+        ("الماني", "German"),
+        ("المانيه", "German"),
     ],
 )
 def test_arabic_spelling_variants_of_a_nationality_resolve(text: str, expected: str) -> None:
@@ -118,6 +131,12 @@ def test_arabic_spelling_variants_of_a_nationality_resolve(text: str, expected: 
         "أنا مش متأكد من جنسيتي",
         "أنا من كوكب بعيد",
         "",
+        # Article stripping must not turn a bare article, or any other
+        # "ال"-prefixed word, into a nationality.
+        "ال",
+        "الا",
+        "الله",
+        "الحمد لله",
     ],
 )
 def test_arabic_folding_does_not_invent_a_nationality(text: str) -> None:

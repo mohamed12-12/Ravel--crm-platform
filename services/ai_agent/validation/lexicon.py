@@ -551,6 +551,169 @@ REQUEST_STATUS_QUESTION_TERMS: set[str] = {
     "did my request go through",
 }
 
+# Words that are never one part of a real person's name. Canonical source for
+# ToolCallingSessionRuntime._validate_name_tokens' token-level rejection.
+#
+# Live 2026-08-20 transcript: a customer answered the name question with
+# "اه ده رقمي" ("yes, that's my number") and it was SAVED as their full name --
+# lead LD00003 was created with customer_name = "اه ده رقمي". The validator
+# only checked structure (3+ tokens, Arabic letters, each 2+ characters, not all
+# identical), and an affirmation plus a demonstrative plus "my number" passes
+# every one of those.
+#
+# Matched as EXACT tokens against _normalize_trip_reference output (bare alef,
+# ة→ه, ى→ي), never as substrings -- so real names that merely contain one of
+# these as a fragment are unaffected: "بسمه" ≠ "بس", "نعمه" ≠ "نعم",
+# "اسماء" ≠ "اسم", "رقيه" ≠ "رقم", "دينا" ≠ "دي".
+NON_NAME_TOKENS: set[str] = {
+    # Affirmation / negation / acknowledgement
+    "اه",
+    "اها",
+    "ايوه",
+    "ايوا",
+    "نعم",
+    "اكيد",
+    "تمام",
+    "ماشي",
+    "حاضر",
+    "لا",
+    "لأ",
+    "مش",
+    "بس",
+    "yes",
+    "yeah",
+    "yep",
+    "no",
+    "nope",
+    "ok",
+    "okay",
+    "sure",
+    "correct",
+    "right",
+    "wrong",
+    # Demonstratives / pronouns
+    "ده",
+    "دى",
+    "دي",
+    "دا",
+    "هذا",
+    "هذه",
+    "كده",
+    "كدا",
+    "انا",
+    "انت",
+    "هو",
+    "هي",
+    "this",
+    "that",
+    "it",
+    "is",
+    "my",
+    "me",
+    "i",
+    "the",
+    # The fields the agent asks about -- a customer naming the FIELD is
+    # answering a different question, not giving a name.
+    "اسم",
+    "اسمي",
+    "الاسم",
+    "رقم",
+    "رقمي",
+    "الرقم",
+    "نمره",
+    "نمرتي",
+    "تليفون",
+    "تليفوني",
+    "التليفون",
+    "موبايل",
+    "موبايلي",
+    "الموبايل",
+    "واتس",
+    "واتساب",
+    "واتسابي",
+    "الواتساب",
+    "جنسيتي",
+    "الجنسيه",
+    "ميلادي",
+    "بياناتي",
+    "ملفي",
+    "name",
+    "number",
+    "phone",
+    "mobile",
+    "whatsapp",
+    "nationality",
+    "birthday",
+}
+
+# "My name is X" / "لا اسمي X" -- an EXPLICIT name declaration, which may
+# arrive before the WhatsApp number is even given. Canonical source for
+# ToolCallingSessionRuntime._declared_full_name. Matched as a prefix of
+# _normalize_trip_reference output; the remainder is then validated as a name
+# like any other answer, so a declaration alone can never save garbage.
+NAME_DECLARATION_PREFIXES: tuple[str, ...] = (
+    "اسمي هو",
+    "اسمي",
+    "انا اسمي",
+    "اسمى",
+    "انا اسمى",
+    "الاسم هو",
+    "اسم العميل",
+    "لا اسمي",
+    "لا انا اسمي",
+    "my name is",
+    "my full name is",
+    "my name's",
+    "i am called",
+    "im called",
+    "name is",
+    "the name is",
+)
+
+# "This is my (correct) number" -- the customer is CORRECTING or supplying
+# their OWN phone number, not asking about anybody else's. Canonical source for
+# AgentPrivacyPolicy._phone_is_offered_as_own_identity.
+#
+# Live 2026-08-20 transcript: the customer's first number found no profile, so
+# they sent "اه بس الرقم ده 01240789320" -- their real number -- and got the
+# cross-traveler privacy refusal ("لا أستطيع مشاركة بيانات أي مسافر آخر"),
+# because any phone differing from the one already in the session counted as
+# "another traveler's phone".
+OWN_PHONE_CORRECTION_TERMS: set[str] = {
+    "رقمي",
+    "نمرتي",
+    "تليفوني",
+    "موبايلي",
+    "واتسابي",
+    "رقم بتاعي",
+    "الرقم بتاعي",
+    "رقمي الصح",
+    "الرقم الصح",
+    "الرقم ده",
+    "رقم ده",
+    "ده الرقم",
+    "دا الرقم",
+    "ده رقم",
+    "غير الرقم",
+    "بدل الرقم",
+    "صحح الرقم",
+    "رقم تاني",
+    "رقم اخر",
+    "my number",
+    "my phone",
+    "my whatsapp",
+    "my mobile",
+    "this is my",
+    "this number",
+    "the number is",
+    "correct number",
+    "right number",
+    "change my number",
+    "another number",
+    "different number",
+    "use this number",
+}
+
 OPTION_ORDINAL_TERMS: dict[str, int] = {
     "الاول": 1,
     "الأول": 1,
