@@ -30,6 +30,8 @@ from app.security import (
     current_user_id,
     has_permission,
 )
+from app.models.additional_fee import AdditionalFee
+from app.services.additional_fees import add_fee, fee_total, fees_for_booking, void_fee
 from app.services.booking_audit import record_booking_created, record_booking_note
 from app.services.refund_limits import (
     format_money,
@@ -40,6 +42,8 @@ from app.services.refund_limits import (
 from app.services.traveler_stats import recalculate_traveler_stats
 from services.crm.system_services import payment_rules
 from services.crm.system_services.payment_rules import payment_state_token, validate_payment_transition
+from services.crm.system_services.fee_rules import ADDITIONAL_FEE_CATEGORIES
+from services.crm.system_services.revenue_rules import booking_revenue_breakdown
 from services.crm.system_services.trip_pricing import ROOM_PRICE_TYPES
 
 logger = logging.getLogger(__name__)
@@ -362,10 +366,21 @@ def detail(booking_id):
         active_trips = [trip] + active_trips
     trips_data = [t.to_dict() for t in active_trips]
 
+    # Additional fees the employee has added on top of the trip price. The
+    # breakdown is computed by the same rule Revenue Analytics uses, so the
+    # value shown on this page is exactly what the booking contributes there.
+    fees = fees_for_booking(booking.booking_id)
+    fees_total = fee_total(fees, booking.currency)
+    revenue_breakdown = booking_revenue_breakdown(booking, trip, fees)
+
     return render_template('bookings/detail.html',
                            booking=booking,
                            traveler=traveler,
                            trip=trip,
+                           fees=fees,
+                           fees_total=fees_total,
+                           fee_categories=ADDITIONAL_FEE_CATEGORIES,
+                           revenue_breakdown=revenue_breakdown,
                            commercial_context=commercial_context,
                            event_trail=event_trail,
                            status_history=status_history,
@@ -375,7 +390,7 @@ def detail(booking_id):
                            can_assign=has_permission('assign_work'),
                            can_change_payment_status=_can_change_payment_status(),
                            missing_fields=booking.compute_missing_fields(),
-                           refund_allowance=refund_allowance_for_booking(booking, trip),
+                           refund_allowance=refund_allowance_for_booking(booking, trip, fees_total),
                            format_money=format_money,
                            expected_payment_state=payment_state_token(booking.payment_status, booking.refund_amount),
                            refund_payment_statuses=sorted(REFUND_PAYMENT_STATUSES),
@@ -648,14 +663,19 @@ def update_status(booking_id):
         effective_trip = trip_for_update
     else:
         effective_trip = db.session.get(Trip, booking.trip_id) if booking.trip_id else None
+    effective_currency = (new_currency if currency_submitted else booking.currency) or ''
     effective_allowance = refund_allowance(
         trip=effective_trip,
         room_type=(new_room_type if room_type_submitted else booking.room_type) or '',
-        currency=(new_currency if currency_submitted else booking.currency) or '',
+        currency=effective_currency,
         group_size=new_group_size if (group_size_submitted and new_group_size) else booking.group_size,
         payment_status=payment_for_service or booking.payment_status,
         already_refunded=booking.refund_amount,
         booking_id=booking.booking_id,
+        # Fees are part of what the customer paid, so they are part of what
+        # may be refunded -- priced in the currency this save will leave the
+        # booking in, since fees in any other are not part of its total.
+        fees_total=fee_total(fees_for_booking(booking.booking_id), effective_currency),
     )
     try:
         _validate_refund_amount_for_status(
@@ -790,6 +810,87 @@ def update_status(booking_id):
     return redirect(url_for('bookings.detail', booking_id=booking_id))
 
 
+@bookings_bp.route('/<string:booking_id>/fees', methods=['POST'])
+def add_booking_fee(booking_id):
+    """Record an additional fee on this booking (visa, insurance, transfer...).
+
+    Ordinary sales work, so any employee with CRM write access may add one --
+    the same gate every other field on this page uses. Voiding one moves money
+    the other way and takes the refund permission instead.
+
+    A fee counts toward revenue for this booking under exactly the same
+    recognition rule as the trip price: it is earned when the booking is in a
+    revenue status, in the booking's own currency, never converted.
+    """
+    booking = db.get_or_404(TripBooking, booking_id)
+    if not can_view_assigned_record(booking.assigned_to_user_id):
+        abort(403)
+    try:
+        fee = add_fee(
+            booking=booking,
+            label=request.form.get('label'),
+            amount=request.form.get('amount'),
+            currency=request.form.get('currency'),
+            category=request.form.get('category'),
+            notes=request.form.get('notes'),
+            actor_user_id=current_user_id(),
+            actor_name=current_actor(),
+        )
+        record_booking_note(
+            booking,
+            note=f"Additional fee added: {fee.label} -- {fee.amount:,.2f} {fee.currency}.",
+            actor=current_actor(),
+        )
+        db.session.commit()
+    except ValueError as exc:
+        db.session.rollback()
+        if request.is_json:
+            return jsonify({'error': str(exc)}), 400
+        flash(str(exc), 'error')
+        return redirect(url_for('bookings.detail', booking_id=booking_id))
+    if booking.traveler_id:
+        try:
+            recalculate_traveler_stats(booking.traveler_id)
+        except Exception:
+            logger.error("Traveler stats recalculation failed booking_id=%s", booking_id, exc_info=True)
+            db.session.rollback()
+    flash(f"Added {fee.label} ({fee.amount:,.2f} {fee.currency}) to this booking.", 'success')
+    return redirect(url_for('bookings.detail', booking_id=booking_id))
+
+
+@bookings_bp.route('/<string:booking_id>/fees/<int:fee_id>/void', methods=['POST'])
+def void_booking_fee(booking_id, fee_id):
+    """Take a fee off a booking, with a reason, without deleting the record."""
+    booking = db.get_or_404(TripBooking, booking_id)
+    if not can_view_assigned_record(booking.assigned_to_user_id):
+        abort(403)
+    if not _can_change_payment_status():
+        abort(403)
+    fee = db.session.get(AdditionalFee, fee_id)
+    if fee is None or fee.booking_id != booking.booking_id:
+        abort(404)
+    try:
+        void_fee(fee, reason=request.form.get('reason'), actor_user_id=current_user_id())
+        record_booking_note(
+            booking,
+            note=f"Additional fee removed: {fee.label} -- {fee.amount:,.2f} {fee.currency}. Reason: {fee.void_reason}",
+            actor=current_actor(),
+        )
+        db.session.commit()
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), 'error')
+        return redirect(url_for('bookings.detail', booking_id=booking_id))
+    if booking.traveler_id:
+        try:
+            recalculate_traveler_stats(booking.traveler_id)
+        except Exception:
+            logger.error("Traveler stats recalculation failed booking_id=%s", booking_id, exc_info=True)
+            db.session.rollback()
+    flash(f"{fee.public_ref} removed from this booking.", 'success')
+    return redirect(url_for('bookings.detail', booking_id=booking_id))
+
+
 @bookings_bp.route('/<string:booking_id>/delete', methods=['POST'])
 def delete(booking_id):
     booking = db.get_or_404(TripBooking, booking_id)
@@ -799,6 +900,10 @@ def delete(booking_id):
 
     BookingStatusHistory.query.filter_by(booking_id=booking_id).delete(synchronize_session=False)
     BookingEventTrail.query.filter(BookingEventTrail.booking_id == booking_id).delete(synchronize_session=False)
+    # Fees point at this booking, so they go with it -- otherwise the delete
+    # fails on the foreign key (Postgres) or leaves rows pointing at nothing
+    # (SQLite), and those rows would keep contributing to revenue totals.
+    AdditionalFee.query.filter(AdditionalFee.booking_id == booking_id).delete(synchronize_session=False)
 
     if lead_id:
         replacement_booking_id = db.session.execute(

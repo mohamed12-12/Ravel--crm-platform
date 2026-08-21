@@ -117,24 +117,54 @@ def _empty_revenue_totals() -> dict[str, float]:
 
 
 def _attach_booking_revenue_totals(travelers: list[Traveler]) -> dict[str, dict[str, float]]:
+    """Per-traveler revenue, per currency: trip bookings plus private trips.
+
+    Both are included because both are money this traveler paid Ravel, and a
+    profile that showed only one would understate what the customer is worth.
+    They are recognized by their own rules -- a booking on status, a private
+    trip on money received -- and the two never cross currencies.
+    """
     traveler_ids = [t.traveler_id for t in travelers if t.traveler_id]
     totals = {traveler_id: _empty_revenue_totals() for traveler_id in traveler_ids}
     if not traveler_ids:
         return {}
 
+    from app.models.private_trip_request import PrivateTripRequest
     from app.models.trip import Trip
+    from app.services.additional_fees import fees_for_bookings
+    from app.services.private_trip_money import money_for_many
 
     bookings = TripBooking.query.filter(TripBooking.traveler_id.in_(traveler_ids)).all()
     trip_ids = {booking.trip_id for booking in bookings if booking.trip_id}
     trips = {trip.trip_id: trip for trip in Trip.query.filter(Trip.trip_id.in_(trip_ids)).all()} if trip_ids else {}
+    booking_fees = fees_for_bookings([booking.booking_id for booking in bookings if booking.booking_id])
     for booking in bookings:
-        breakdown = booking_revenue_breakdown(booking, trips.get(booking.trip_id))
+        breakdown = booking_revenue_breakdown(
+            booking, trips.get(booking.trip_id), booking_fees.get(booking.booking_id, [])
+        )
         if breakdown is None:
             continue
         bucket = totals.setdefault(booking.traveler_id, _empty_revenue_totals())
         bucket[breakdown.currency] += breakdown.net
         bucket[f"{breakdown.currency}_gross"] += breakdown.gross
         bucket[f"{breakdown.currency}_refunds"] += breakdown.refunds
+
+    private_requests = PrivateTripRequest.query.filter(
+        PrivateTripRequest.traveler_id.in_(traveler_ids)
+    ).all()
+    private_money = money_for_many(private_requests)
+    for item in private_requests:
+        # A request converted before conversion was retired already has its
+        # money on the booking it produced, counted in the loop above.
+        if item.converted_booking_id:
+            continue
+        money = private_money.get(item.request_id)
+        if money is None or money.currency not in ("USD", "EGP"):
+            continue
+        bucket = totals.setdefault(item.traveler_id, _empty_revenue_totals())
+        bucket[money.currency] += money.net_revenue
+        bucket[f"{money.currency}_gross"] += money.gross_revenue
+        bucket[f"{money.currency}_refunds"] += money.refunded
 
     for traveler in travelers:
         revenue = totals.get(traveler.traveler_id, _empty_revenue_totals())
@@ -467,10 +497,22 @@ def detail(traveler_id):
         egp_refunds=revenue_totals["EGP_refunds"],
     )
 
+    # Private/custom trips, with the money actually recorded against each.
+    from app.models.private_trip_request import PrivateTripRequest
+    from app.services.private_trip_money import money_for_many
+
+    private_requests = (
+        PrivateTripRequest.query.filter(PrivateTripRequest.traveler_id == traveler_id)
+        .order_by(PrivateTripRequest.created_at.desc())
+        .all()
+    )
+
     return render_template(
         'travelers/detail.html',
         traveler=traveler,
         revenue_summary=revenue_summary,
+        private_requests=private_requests,
+        private_money=money_for_many(private_requests),
         leads=leads,
         bookings=bookings,
         ce_bookings=ce_bookings,

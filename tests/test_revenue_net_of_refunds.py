@@ -325,7 +325,10 @@ class RevenueNetOfRefundsTests(unittest.TestCase):
         self._seed_booking(currency="USD", payment_status="Partial Refund", refund_amount=120.0)
         body = self.client.get("/admin/revenue-analytics").get_data(as_text=True)
         self.assertIn("Total Net Revenue (USD)", body)
-        self.assertIn("1000.00 gross", body)
+        # Money on this page carries thousands separators, matching the booking
+        # pages -- the gross and refund components still have to be visible
+        # next to the net headline, which is what this test is really pinning.
+        self.assertIn("1,000.00 gross", body)
         self.assertIn("120.00 refunded", body)
 
     # === ONE SOURCE OF TRUTH =============================================

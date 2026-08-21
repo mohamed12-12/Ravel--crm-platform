@@ -104,8 +104,14 @@ def booking_contract_value(
     room_type: str = "",
     currency: str = "",
     group_size: int | None = 1,
+    fees_total: float = 0.0,
 ) -> float | None:
-    """Total list value of a booking: room price for the currency x party size.
+    """Total list value of a booking: room price x party size, plus fees.
+
+    `fees_total` is the booking's live additional fees in the same currency
+    (visa, insurance, transfers). They are part of what the customer paid, so
+    they are part of what can be given back -- leaving them out would refuse a
+    legitimate refund of a fee the employee had added.
 
     Deliberately *not* revenue_rules.booking_revenue(): that function returns
     None unless the booking is already in a revenue-recognising status, and a
@@ -134,7 +140,8 @@ def booking_contract_value(
         party = max(int(group_size or 1), 1)
     except (TypeError, ValueError):
         party = 1
-    return unit_price * party
+    extra = float(fees_total or 0.0)
+    return unit_price * party + (extra if extra > 0 else 0.0)
 
 
 def resolve_amount_paid(
@@ -175,6 +182,7 @@ def refund_allowance(
     payment_status: str | None = None,
     already_refunded: float | None = None,
     booking_id: str = "",
+    fees_total: float = 0.0,
 ) -> RefundAllowance:
     """Work out the refund ceiling for one booking's effective field values.
 
@@ -186,7 +194,11 @@ def refund_allowance(
     """
     normalized_currency = str(currency or "").strip().upper()
     value = booking_contract_value(
-        trip, room_type=room_type, currency=normalized_currency, group_size=group_size
+        trip,
+        room_type=room_type,
+        currency=normalized_currency,
+        group_size=group_size,
+        fees_total=fees_total,
     )
     paid, paid_is_recorded = resolve_amount_paid(payment_status, value, booking_id)
 
@@ -213,7 +225,9 @@ def refund_allowance(
     )
 
 
-def refund_allowance_for_booking(booking: Any, trip: Any = None) -> RefundAllowance:
+def refund_allowance_for_booking(
+    booking: Any, trip: Any = None, fees_total: float = 0.0
+) -> RefundAllowance:
     """The allowance for a booking exactly as it is stored right now."""
     return refund_allowance(
         trip=trip,
@@ -223,6 +237,7 @@ def refund_allowance_for_booking(booking: Any, trip: Any = None) -> RefundAllowa
         payment_status=getattr(booking, "payment_status", None),
         already_refunded=getattr(booking, "refund_amount", None),
         booking_id=getattr(booking, "booking_id", "") or "",
+        fees_total=fees_total,
     )
 
 

@@ -519,6 +519,134 @@ def _ensure_booking_transactions_table(app: Flask) -> None:
                 connection.execute(text(statement))
 
 
+def _ensure_money_schema(app: Flask) -> None:
+    """Add the private-trip money tables and columns to existing SQLite DBs.
+
+    Covers everything the private-trip ledger, additional fees and the
+    per-traveler private-trip counter need. Same startup-DDL convention as the
+    functions above (Postgres gets these from the Alembic migration); grouped
+    into one function because the three changes are one feature and a database
+    that has some of them but not others cannot render the request page.
+    """
+    uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
+    if not uri.startswith("sqlite"):
+        return
+
+    with app.app_context():
+        inspector = db.inspect(db.engine)
+        table_names = set(inspector.get_table_names())
+
+        with db.engine.begin() as connection:
+            if "travelers" in table_names:
+                traveler_columns = {column["name"] for column in inspector.get_columns("travelers")}
+                if "private_trips_count" not in traveler_columns:
+                    connection.execute(text(
+                        "ALTER TABLE travelers ADD COLUMN private_trips_count INTEGER DEFAULT 0"
+                    ))
+
+            if "private_trip_requests" in table_names:
+                request_columns = {
+                    row[1]
+                    for row in connection.execute(text("PRAGMA table_info(private_trip_requests)")).fetchall()
+                }
+                for column_name, column_type in (
+                    ("agreed_price_amount", "FLOAT"),
+                    ("agreed_price_currency", "VARCHAR(3)"),
+                ):
+                    if column_name not in request_columns:
+                        connection.execute(text(
+                            f"ALTER TABLE private_trip_requests ADD COLUMN {column_name} {column_type}"
+                        ))
+
+            connection.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS private_trip_transactions (
+                    transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    public_ref VARCHAR(24),
+                    request_id VARCHAR(20) NOT NULL,
+                    traveler_id VARCHAR(20),
+                    entry_type VARCHAR(16) NOT NULL,
+                    amount FLOAT NOT NULL,
+                    currency VARCHAR(3) NOT NULL,
+                    occurred_on DATE NOT NULL,
+                    date_precision VARCHAR(16) NOT NULL DEFAULT 'exact',
+                    method VARCHAR(40),
+                    reference VARCHAR(120),
+                    reason TEXT,
+                    notes TEXT,
+                    source VARCHAR(32) NOT NULL DEFAULT 'crm_ui',
+                    is_inferred BOOLEAN NOT NULL DEFAULT 0,
+                    is_non_refundable BOOLEAN NOT NULL DEFAULT 0,
+                    reverses_id INTEGER,
+                    idempotency_key VARCHAR(200),
+                    created_by_user_id INTEGER,
+                    created_by VARCHAR(100),
+                    created_at DATETIME NOT NULL,
+                    CONSTRAINT ck_private_trip_transactions_amount_positive CHECK (amount > 0),
+                    CONSTRAINT ck_private_trip_transactions_entry_type
+                        CHECK (entry_type IN ('payment', 'refund')),
+                    FOREIGN KEY(request_id) REFERENCES private_trip_requests (request_id),
+                    FOREIGN KEY(traveler_id) REFERENCES travelers (traveler_id),
+                    FOREIGN KEY(reverses_id) REFERENCES private_trip_transactions (transaction_id),
+                    FOREIGN KEY(created_by_user_id) REFERENCES users (id)
+                )
+                """
+            ))
+            connection.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS additional_fees (
+                    fee_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    booking_id VARCHAR(50),
+                    private_request_id VARCHAR(20),
+                    traveler_id VARCHAR(20),
+                    label VARCHAR(120) NOT NULL,
+                    category VARCHAR(40) NOT NULL DEFAULT 'other',
+                    amount FLOAT NOT NULL,
+                    currency VARCHAR(3) NOT NULL,
+                    notes TEXT,
+                    created_at DATETIME NOT NULL,
+                    created_by_user_id INTEGER,
+                    created_by VARCHAR(100),
+                    voided_at DATETIME,
+                    voided_by_user_id INTEGER,
+                    void_reason TEXT,
+                    CONSTRAINT ck_additional_fees_amount_positive CHECK (amount > 0),
+                    CONSTRAINT ck_additional_fees_exactly_one_parent CHECK (
+                        (booking_id IS NOT NULL AND private_request_id IS NULL)
+                        OR (booking_id IS NULL AND private_request_id IS NOT NULL)
+                    ),
+                    FOREIGN KEY(booking_id) REFERENCES trip_bookings (booking_id),
+                    FOREIGN KEY(private_request_id) REFERENCES private_trip_requests (request_id),
+                    FOREIGN KEY(traveler_id) REFERENCES travelers (traveler_id),
+                    FOREIGN KEY(created_by_user_id) REFERENCES users (id),
+                    FOREIGN KEY(voided_by_user_id) REFERENCES users (id)
+                )
+                """
+            ))
+            for statement in (
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_private_trip_transactions_public_ref "
+                "ON private_trip_transactions (public_ref)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_private_trip_transactions_idempotency_key "
+                "ON private_trip_transactions (idempotency_key)",
+                "CREATE INDEX IF NOT EXISTS ix_private_trip_transactions_request_id "
+                "ON private_trip_transactions (request_id)",
+                "CREATE INDEX IF NOT EXISTS ix_private_trip_transactions_traveler_id "
+                "ON private_trip_transactions (traveler_id)",
+                "CREATE INDEX IF NOT EXISTS ix_private_trip_transactions_created_at "
+                "ON private_trip_transactions (created_at)",
+                "CREATE INDEX IF NOT EXISTS ix_private_trip_transactions_reverses_id "
+                "ON private_trip_transactions (reverses_id)",
+                "CREATE INDEX IF NOT EXISTS ix_private_trip_transactions_request_entry "
+                "ON private_trip_transactions (request_id, entry_type)",
+                "CREATE INDEX IF NOT EXISTS ix_additional_fees_booking_id ON additional_fees (booking_id)",
+                "CREATE INDEX IF NOT EXISTS ix_additional_fees_private_request_id "
+                "ON additional_fees (private_request_id)",
+                "CREATE INDEX IF NOT EXISTS ix_additional_fees_traveler_id ON additional_fees (traveler_id)",
+                "CREATE INDEX IF NOT EXISTS ix_additional_fees_created_at ON additional_fees (created_at)",
+            ):
+                connection.execute(text(statement))
+
+
 def _ensure_traveler_documents_table(app: Flask) -> None:
     uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
     if not uri.startswith("sqlite"):
@@ -792,6 +920,14 @@ def create_app(config_name=None):
     from .services.booking_ledger import register_booking_ledger_listeners
     register_booking_ledger_listeners()
 
+    # The private trip ledger is the same contract for private/custom trips,
+    # which carry their own price, fees and payments instead of being turned
+    # into a synthetic booking.
+    from .models.private_trip_transaction import PrivateTripTransaction
+    from .models.additional_fee import AdditionalFee
+    from .services.private_trip_ledger import register_private_trip_ledger_listeners
+    register_private_trip_ledger_listeners()
+
     @login_manager.user_loader
     def load_user(user_id):
         return db.session.get(User, int(user_id))
@@ -806,6 +942,7 @@ def create_app(config_name=None):
     _ensure_relational_assignment_schema(app)
     _ensure_booking_history_columns(app)
     _ensure_booking_transactions_table(app)
+    _ensure_money_schema(app)
     _ensure_traveler_documents_table(app)
     _ensure_trip_media_table(app)
     _normalize_sqlite_temporal_values(app)

@@ -61,14 +61,16 @@
                         · created {{ item.created_at.strftime('%d %b %Y %H:%M') if item.created_at else '—' }}
                     </div>
                 </div>
-                {% if next_stage %}
+                {% if next_stage == 'deposit_paid' %}
+                {# "Deposit paid" is a claim about money, so it asks for the
+                   money. The old version posted the customer's stated budget
+                   as the deposit through a hidden field -- recording an amount
+                   nobody had confirmed was received. #}
+                <button type="button" class="btn btn-success btn-sm" onclick="openModal('recordDeposit')">Record Deposit →</button>
+                {% elif next_stage %}
                 <form method="post" action="{{ url_for('private_requests.update_stage', request_id=item.request_id) }}" style="margin:0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="stage" value="{{ next_stage }}">
-                    {% if next_stage == 'deposit_paid' %}
-                    <input type="hidden" name="deposit_amount" value="{{ item.deposit_amount or item.budget_amount or '' }}">
-                    <input type="hidden" name="deposit_currency" value="{{ item.deposit_currency or item.budget_currency or 'EGP' }}">
-                    {% endif %}
                     <button type="submit" class="btn btn-success btn-sm">{{ next_stage.replace('_', ' ')|title }} →</button>
                 </form>
                 {% endif %}
@@ -174,12 +176,17 @@
                         {% if item.lead_id %}<a class="mono" href="{{ url_for('leads.detail', lead_id=item.lead_id) }}">{{ item.lead_id }}</a>{% else %}None{% endif %}
                     </div>
                 </div>
+                {% if item.converted_booking_id %}
+                {# Legacy only: requests converted before the conversion step was
+                   retired. Their money lives on that booking, which is why this
+                   request contributes nothing to private trip revenue. #}
                 <div>
-                    <div class="form-label">Converted Booking</div>
+                    <div class="form-label">Converted Booking (legacy)</div>
                     <div style="color:var(--text-main)">
-                        {% if item.converted_booking_id %}<a class="mono" href="{{ url_for('bookings.detail', booking_id=item.converted_booking_id) }}">{{ item.converted_booking_id }}</a>{% else %}Not converted{% endif %}
+                        <a class="mono" href="{{ url_for('bookings.detail', booking_id=item.converted_booking_id) }}">{{ item.converted_booking_id }}</a>
                     </div>
                 </div>
+                {% endif %}
                 {% if item.notes %}
                 <div class="col-span-2">
                     <div class="form-label">Notes</div>
@@ -189,49 +196,203 @@
             </div>
         </div>
 
-        {% if not item.converted_booking_id and item.stage == 'paid' %}
+        {# ------------------------------------------------------------ MONEY
+           Every figure in this card is read from the fee rows and the payment
+           ledger. The agreed price is what the customer owes; revenue is only
+           what has actually been received, which is why the two are shown as
+           separate lines and never added together. #}
+        {% set cur = money.currency or item.budget_currency or '' %}
+        {% macro amt(value) -%}
+            {%- if cur == 'USD' -%}${{ '{:,.2f}'.format(value) }}{%- else -%}{{ '{:,.2f}'.format(value) }}{{ ' ' ~ cur if cur }}{%- endif -%}
+        {%- endmacro %}
         <div class="card">
-            <div class="card-header"><span class="card-title">Convert To Booking</span></div>
-            <form class="grid-2" method="post" action="{{ url_for('private_requests.convert', request_id=item.request_id) }}" style="gap:1rem">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <div class="form-group">
-                    <label class="form-label">Trip Name</label>
-                    <input class="form-input" name="trip_name" value="Private {{ item.destination }}">
+            <div class="card-header">
+                <span class="card-title">Money</span>
+                <div style="display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap">
+                    {% if money.payment_status == 'Fully Paid' %}<span class="badge badge-green">Fully Paid</span>
+                    {% elif money.payment_status == 'Deposit Paid' %}<span class="badge badge-yellow">Deposit Paid</span>
+                    {% elif 'Refund' in money.payment_status %}<span class="badge badge-red">{{ money.payment_status }}</span>
+                    {% else %}<span class="badge badge-gray">Payment: Pending</span>{% endif %}
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="openModal('setPrice')">
+                        {{ 'Edit Price' if money.price else 'Set Price' }}
+                    </button>
                 </div>
-                <div class="form-group">
-                    <label class="form-label">Arabic Trip Name</label>
-                    <input class="form-input" name="trip_name_ar" value="Private {{ item.destination }}">
+            </div>
+
+            {% if item.converted_booking_id %}
+            <p style="color:var(--yellow);font-size:0.8rem;margin-bottom:0.75rem">
+                This request was converted to booking
+                <a class="mono" href="{{ url_for('bookings.detail', booking_id=item.converted_booking_id) }}">{{ item.converted_booking_id }}</a>
+                before conversion was retired. Its money is recorded there, so nothing here counts toward private trip revenue.
+            </p>
+            {% endif %}
+
+            <div class="work-summary">
+                <div class="work-item">
+                    <div class="work-label">Agreed Price</div>
+                    <div class="work-value">{% if money.price %}{{ amt(money.price) }}{% else %}<span style="color:var(--yellow)">Not agreed yet</span>{% endif %}</div>
                 </div>
-                <div class="form-group">
-                    <label class="form-label">Room Type</label>
-                    <select class="form-select" name="room_type">
-                        <option>Single</option>
-                        <option selected>Double</option>
-                        <option>Triple</option>
-                    </select>
+                <div class="work-item">
+                    <div class="work-label">Additional Fees</div>
+                    <div class="work-value">{% if money.fees %}{{ amt(money.fees) }}{% else %}None{% endif %}</div>
                 </div>
-                <div class="form-group">
-                    <label class="form-label">Currency</label>
-                    <select class="form-select" name="currency">
-                        {% for currency in currencies %}
-                        <option value="{{ currency }}" {% if currency == (item.deposit_currency or item.budget_currency) %}selected{% endif %}>{{ currency }}</option>
-                        {% endfor %}
-                    </select>
+                <div class="work-item">
+                    <div class="work-label">Total Owed</div>
+                    <div class="work-value">{% if money.contract_value is not none %}{{ amt(money.contract_value) }}{% else %}Unknown{% endif %}</div>
                 </div>
-                <div class="form-group">
-                    <label class="form-label">Total Price</label>
-                    <input class="form-input" type="number" min="0" step="0.01" name="total_price" value="{{ item.budget_amount or '' }}">
+                <div class="work-item">
+                    <div class="work-label">Received</div>
+                    <div class="work-value" style="color:var(--green)">{{ amt(money.paid) }}</div>
                 </div>
-                <div class="form-group" style="align-self:end">
-                    <button type="submit" class="btn btn-primary">Convert</button>
+                <div class="work-item">
+                    <div class="work-label">Refunded</div>
+                    <div class="work-value" {% if money.refunded %}style="color:var(--red)"{% endif %}>{% if money.refunded %}-{{ amt(money.refunded) }}{% else %}None{% endif %}</div>
                 </div>
-            </form>
+                <div class="work-item">
+                    <div class="work-label">Revenue Recognized</div>
+                    <div class="work-value" style="color:var(--accent)">{{ amt(money.net_revenue) }}</div>
+                </div>
+                <div class="work-item">
+                    <div class="work-label">Outstanding</div>
+                    <div class="work-value" {% if money.outstanding %}style="color:var(--yellow)"{% endif %}>
+                        {% if money.outstanding is none %}Unknown{% else %}{{ amt(money.outstanding) }}{% endif %}
+                    </div>
+                </div>
+                {% if ledger.non_refundable_paid %}
+                <div class="work-item">
+                    <div class="work-label">Non-refundable</div>
+                    <div class="work-value">{{ amt(ledger.non_refundable_paid) }}</div>
+                </div>
+                {% endif %}
+            </div>
+
+            <p style="color:var(--text-muted);font-size:0.75rem;margin-top:0.75rem">
+                Only money received counts as revenue — the agreed price is a commitment, not income.
+                {% if money.outstanding is none and money.paid %}
+                No price is recorded, so the outstanding balance cannot be calculated.
+                {% endif %}
+                {% if money.currency_conflict %}
+                <br><span style="color:var(--red)">This request is priced in {{ item.agreed_price_currency }} but paid in {{ ledger.currency }}. The CRM never converts currencies — fix one of the two.</span>
+                {% endif %}
+            </p>
+
+            <div style="display:flex;gap:0.5rem;margin-top:0.85rem;flex-wrap:wrap">
+                <button type="button" class="btn btn-primary btn-sm" onclick="openModal('recordPayment')">Record Payment</button>
+                {% if can_move_money %}
+                <button type="button" class="btn btn-danger btn-sm" onclick="openModal('recordRefund')"
+                        {% if max_refund <= 0 %}disabled title="Nothing refundable: no refundable payment has been recorded."{% endif %}>Record Refund</button>
+                {% endif %}
+                <button type="button" class="btn btn-ghost btn-sm" onclick="openModal('addFee')">Add Fee</button>
+            </div>
+
+            {# ---- Fees ---- #}
+            <div style="margin-top:1.25rem">
+                <div class="form-label" style="margin-bottom:0.4rem">Additional Fees</div>
+                {% if fees %}
+                <div style="overflow-x:auto">
+                <table style="width:100%;border-collapse:collapse;font-size:0.8rem">
+                    <thead><tr>
+                        <th style="text-align:left;padding:0.35rem 0.5rem;color:var(--text-muted);font-size:0.68rem;text-transform:uppercase">Fee</th>
+                        <th style="text-align:left;padding:0.35rem 0.5rem;color:var(--text-muted);font-size:0.68rem;text-transform:uppercase">Type</th>
+                        <th style="text-align:right;padding:0.35rem 0.5rem;color:var(--text-muted);font-size:0.68rem;text-transform:uppercase">Amount</th>
+                        <th style="text-align:left;padding:0.35rem 0.5rem;color:var(--text-muted);font-size:0.68rem;text-transform:uppercase">Added</th>
+                        <th></th>
+                    </tr></thead>
+                    <tbody>
+                    {% for fee in fees %}
+                    <tr style="border-top:1px solid var(--border){% if not fee.is_active %};opacity:0.5{% endif %}">
+                        <td style="padding:0.45rem 0.5rem;color:var(--text-main)">
+                            {{ fee.label }}
+                            {% if not fee.is_active %}<span class="badge badge-gray" style="margin-left:0.35rem">Removed</span>{% endif %}
+                            {% if fee.notes %}<div style="color:var(--text-muted);font-size:0.72rem">{{ fee.notes }}</div>{% endif %}
+                            {% if fee.void_reason %}<div style="color:var(--text-muted);font-size:0.72rem">Removed: {{ fee.void_reason }}</div>{% endif %}
+                        </td>
+                        <td style="padding:0.45rem 0.5rem;color:var(--text-dim)">{{ fee.category_label }}</td>
+                        <td style="padding:0.45rem 0.5rem;text-align:right;font-family:'JetBrains Mono',monospace;color:var(--text-main)">
+                            {{ '{:,.2f}'.format(fee.amount) }} {{ fee.currency }}
+                        </td>
+                        <td style="padding:0.45rem 0.5rem;color:var(--text-muted);font-size:0.72rem">
+                            {{ fee.created_at.strftime('%d %b %Y') if fee.created_at else '—' }}{% if fee.created_by %} · {{ fee.created_by }}{% endif %}
+                        </td>
+                        <td style="padding:0.45rem 0.5rem;text-align:right">
+                            {% if fee.is_active and can_move_money %}
+                            <form method="post" action="{{ url_for('private_requests.void_private_fee', request_id=item.request_id, fee_id=fee.fee_id) }}"
+                                  style="margin:0;display:flex;gap:0.35rem;justify-content:flex-end">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <input class="form-input" type="text" name="reason" placeholder="Reason" required
+                                       style="max-width:150px;padding:0.25rem 0.4rem;font-size:0.72rem">
+                                <button type="submit" class="btn btn-ghost btn-sm">Remove</button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+                {% else %}
+                <p style="color:var(--text-muted);font-size:0.8rem">No additional fees on this request.</p>
+                {% endif %}
+            </div>
+
+            {# ---- Ledger ---- #}
+            <div style="margin-top:1.25rem">
+                <div class="form-label" style="margin-bottom:0.4rem">Payment Ledger</div>
+                {% if transactions %}
+                <div style="overflow-x:auto">
+                <table style="width:100%;border-collapse:collapse;font-size:0.8rem">
+                    <thead><tr>
+                        <th style="text-align:left;padding:0.35rem 0.5rem;color:var(--text-muted);font-size:0.68rem;text-transform:uppercase">Date</th>
+                        <th style="text-align:left;padding:0.35rem 0.5rem;color:var(--text-muted);font-size:0.68rem;text-transform:uppercase">Ref</th>
+                        <th style="text-align:left;padding:0.35rem 0.5rem;color:var(--text-muted);font-size:0.68rem;text-transform:uppercase">Type</th>
+                        <th style="text-align:right;padding:0.35rem 0.5rem;color:var(--text-muted);font-size:0.68rem;text-transform:uppercase">Amount</th>
+                        <th style="text-align:left;padding:0.35rem 0.5rem;color:var(--text-muted);font-size:0.68rem;text-transform:uppercase">Method</th>
+                        <th></th>
+                    </tr></thead>
+                    <tbody>
+                    {% for entry in transactions %}
+                    <tr style="border-top:1px solid var(--border){% if entry.reverses_id %};opacity:0.55{% endif %}">
+                        <td style="padding:0.45rem 0.5rem;color:var(--text-dim)">{{ entry.occurred_on.strftime('%d %b %Y') if entry.occurred_on else '—' }}</td>
+                        <td style="padding:0.45rem 0.5rem" class="mono">{{ entry.public_ref or entry.transaction_id }}</td>
+                        <td style="padding:0.45rem 0.5rem">
+                            {% if entry.is_payment %}<span class="badge badge-green">Payment</span>{% else %}<span class="badge badge-red">Refund</span>{% endif %}
+                            {% if entry.reverses_id %}<span class="badge badge-gray">Correction</span>{% endif %}
+                            {% if entry.is_non_refundable %}<span class="badge badge-gray">Non-refundable</span>{% endif %}
+                        </td>
+                        <td style="padding:0.45rem 0.5rem;text-align:right;font-family:'JetBrains Mono',monospace;color:{{ 'var(--green)' if entry.is_payment else 'var(--red)' }}">
+                            {{ '' if entry.is_payment else '-' }}{{ '{:,.2f}'.format(entry.amount) }} {{ entry.currency }}
+                        </td>
+                        <td style="padding:0.45rem 0.5rem;color:var(--text-dim)">
+                            {{ method_label(entry.method) }}
+                            {% if entry.reference %}<div style="color:var(--text-muted);font-size:0.72rem">{{ entry.reference }}</div>{% endif %}
+                            {% if entry.reason %}<div style="color:var(--text-muted);font-size:0.72rem">{{ entry.reason }}</div>{% endif %}
+                        </td>
+                        <td style="padding:0.45rem 0.5rem;text-align:right">
+                            {% if can_move_money and not entry.reverses_id %}
+                            <form method="post" action="{{ url_for('private_requests.reverse_transaction', request_id=item.request_id, transaction_id=entry.transaction_id) }}"
+                                  style="margin:0;display:flex;gap:0.35rem;justify-content:flex-end">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <input class="form-input" type="text" name="reason" placeholder="Reason" required
+                                       style="max-width:150px;padding:0.25rem 0.4rem;font-size:0.72rem">
+                                <button type="submit" class="btn btn-ghost btn-sm">Reverse</button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+                <p style="color:var(--text-muted);font-size:0.72rem;margin-top:0.5rem">
+                    Entries are never edited or deleted. A mistake is corrected by a reversal, which leaves both rows visible.
+                </p>
+                {% else %}
+                <p style="color:var(--text-muted);font-size:0.8rem">
+                    No payments recorded yet, so this request has earned nothing.
+                </p>
+                {% endif %}
+            </div>
         </div>
-        {% elif not item.converted_booking_id and item.stage != 'lost' %}
-        <div class="card">
-            <p style="color:var(--text-muted);font-size:0.83rem;margin:0">Conversion is available once this request reaches the <strong>paid</strong> stage (currently <strong>{{ item.stage }}</strong>).</p>
-        </div>
-        {% endif %}
 
         {% if assigned_history %}
         <div class="card">
@@ -260,17 +421,17 @@
         <div class="card">
             <div class="card-title" style="margin-bottom:1rem">Actions</div>
             <div style="display:flex;flex-direction:column;gap:0.5rem">
-                {% if next_stage %}
+                {% if next_stage == 'deposit_paid' %}
+                <button type="button" class="btn btn-primary" style="width:100%" onclick="openModal('recordDeposit')">→ Record Deposit</button>
+                {% elif next_stage %}
                 <form method="post" action="{{ url_for('private_requests.update_stage', request_id=item.request_id) }}" style="margin:0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="stage" value="{{ next_stage }}">
-                    {% if next_stage == 'deposit_paid' %}
-                    <input type="hidden" name="deposit_amount" value="{{ item.deposit_amount or item.budget_amount or '' }}">
-                    <input type="hidden" name="deposit_currency" value="{{ item.deposit_currency or item.budget_currency or 'EGP' }}">
-                    {% endif %}
                     <button type="submit" class="btn btn-primary" style="width:100%">→ Move to {{ next_stage.replace('_', ' ')|title }}</button>
                 </form>
                 {% endif %}
+                <button type="button" class="btn btn-ghost" onclick="openModal('recordPayment')">Record Payment</button>
+                <button type="button" class="btn btn-ghost" onclick="openModal('addFee')">Add Fee</button>
                 <button type="button" class="btn btn-ghost" onclick="runPrivateRequestQuickAction('mark_contacted')">Mark Customer Contacted</button>
                 <button type="button" class="btn btn-ghost" onclick="runPrivateRequestQuickAction('waiting_customer')">Waiting for Customer</button>
                 <button type="button" class="btn btn-ghost" onclick="openModal('editRequest')">Edit Request</button>
@@ -510,6 +671,267 @@
     </div>
 </div>
 {% endif %}
+
+{# ------------------------------------------------------------ MONEY MODALS #}
+{% set money_currency = money.currency or item.agreed_price_currency or item.budget_currency or '' %}
+
+<!-- SET PRICE -->
+<div id="setPrice" class="modal-overlay">
+    <div class="modal-box" style="max-width:460px">
+        <div class="modal-header">
+            <span class="modal-title">{{ 'Edit Agreed Price' if money.price else 'Set Agreed Price' }}</span>
+            <button class="modal-close" onclick="closeModal('setPrice')">Close</button>
+        </div>
+        <form method="post" action="{{ url_for('private_requests.update_price', request_id=item.request_id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="grid-2" style="gap:1rem">
+                <div class="form-group">
+                    <label class="form-label">Agreed Price</label>
+                    <input class="form-input" type="number" min="0.01" step="0.01" name="agreed_price_amount"
+                           value="{{ item.agreed_price_amount or '' }}" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Currency</label>
+                    <select class="form-select" name="agreed_price_currency" required>
+                        {% for currency in currencies %}
+                        <option value="{{ currency }}"
+                            {% if (item.agreed_price_currency or ledger.currency or item.budget_currency) == currency %}selected{% endif %}>{{ currency }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+            <div class="form-hint" style="margin-top:0.5rem">
+                What the customer agreed to pay, excluding additional fees.
+                {% if item.budget_amount %}They said their budget was {{ '{:,.0f}'.format(item.budget_amount) }} {{ item.budget_currency or '' }}.{% endif %}
+                {% if ledger.currency %}Payments are already recorded in {{ ledger.currency }}, so the price must be in {{ ledger.currency }} too.{% endif %}
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1rem">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('setPrice')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Price</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- RECORD PAYMENT -->
+<div id="recordPayment" class="modal-overlay">
+    <div class="modal-box" style="max-width:520px">
+        <div class="modal-header">
+            <span class="modal-title">Record Payment Received</span>
+            <button class="modal-close" onclick="closeModal('recordPayment')">Close</button>
+        </div>
+        <form method="post" action="{{ url_for('private_requests.add_payment', request_id=item.request_id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="grid-2" style="gap:1rem">
+                <div class="form-group">
+                    <label class="form-label">Amount Received</label>
+                    <input class="form-input" type="number" min="0.01" step="0.01" name="amount" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Currency</label>
+                    {% if money_currency %}
+                    <input class="form-input" type="text" value="{{ money_currency }}" readonly
+                           style="background:var(--bg-base);color:var(--text-muted)">
+                    <input type="hidden" name="currency" value="{{ money_currency }}">
+                    <div class="form-hint">Fixed by this request. Currencies are never converted.</div>
+                    {% else %}
+                    <select class="form-select" name="currency" required>
+                        {% for currency in currencies %}<option value="{{ currency }}">{{ currency }}</option>{% endfor %}
+                    </select>
+                    <div class="form-hint">This fixes the currency for the whole request.</div>
+                    {% endif %}
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Date Received</label>
+                    <input class="form-input" type="date" name="occurred_on" max="{{ today.strftime('%Y-%m-%d') }}"
+                           value="{{ today.strftime('%Y-%m-%d') }}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Method</label>
+                    <select class="form-select" name="method">
+                        {% for key, label in payment_methods.items() %}
+                        <option value="{{ key }}" {% if key == 'bank_transfer' %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Reference</label>
+                    <input class="form-input" type="text" name="reference" placeholder="Transfer ID, receipt number…">
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Notes</label>
+                    <input class="form-input" type="text" name="notes" placeholder="Optional">
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+                        <input type="checkbox" name="is_non_refundable" value="1">
+                        Non-refundable (deposit funding design work)
+                    </label>
+                    <div class="form-hint">Excluded from the refund ceiling, so the policy is enforced rather than remembered.</div>
+                </div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1rem">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('recordPayment')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Record Payment</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if next_stage == 'deposit_paid' %}
+<!-- RECORD DEPOSIT (stage move) -->
+<div id="recordDeposit" class="modal-overlay">
+    <div class="modal-box" style="max-width:520px">
+        <div class="modal-header">
+            <span class="modal-title">Record Deposit &amp; Move to Deposit Paid</span>
+            <button class="modal-close" onclick="closeModal('recordDeposit')">Close</button>
+        </div>
+        <form method="post" action="{{ url_for('private_requests.update_stage', request_id=item.request_id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="stage" value="deposit_paid">
+            <div class="grid-2" style="gap:1rem">
+                <div class="form-group">
+                    <label class="form-label">Deposit Received</label>
+                    <input class="form-input" type="number" min="0.01" step="0.01" name="deposit_amount"
+                           value="{{ ledger.total_paid if ledger.total_paid else '' }}"
+                           {% if not ledger.total_paid %}required{% endif %}>
+                    {% if ledger.total_paid %}
+                    <div class="form-hint">{{ '{:,.2f}'.format(ledger.total_paid) }} {{ ledger.currency }} is already recorded — leave this blank to use it.</div>
+                    {% endif %}
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Currency</label>
+                    {% if money_currency %}
+                    <input class="form-input" type="text" value="{{ money_currency }}" readonly style="background:var(--bg-base);color:var(--text-muted)">
+                    <input type="hidden" name="deposit_currency" value="{{ money_currency }}">
+                    {% else %}
+                    <select class="form-select" name="deposit_currency" required>
+                        {% for currency in currencies %}
+                        <option value="{{ currency }}" {% if item.budget_currency == currency %}selected{% endif %}>{{ currency }}</option>
+                        {% endfor %}
+                    </select>
+                    {% endif %}
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Date Received</label>
+                    <input class="form-input" type="date" name="deposit_paid_on" max="{{ today.strftime('%Y-%m-%d') }}"
+                           value="{{ today.strftime('%Y-%m-%d') }}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Method</label>
+                    <select class="form-select" name="deposit_method">
+                        {% for key, label in payment_methods.items() %}
+                        <option value="{{ key }}" {% if key == 'bank_transfer' %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+            <div class="form-hint" style="margin-top:0.5rem">
+                Recorded as a non-refundable payment in the ledger, and it starts the 10-working-day design clock.
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1rem">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('recordDeposit')">Cancel</button>
+                <button type="submit" class="btn btn-success">Record &amp; Move</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+{% if can_move_money %}
+<!-- RECORD REFUND -->
+<div id="recordRefund" class="modal-overlay">
+    <div class="modal-box" style="max-width:520px">
+        <div class="modal-header">
+            <span class="modal-title">Record Refund</span>
+            <button class="modal-close" onclick="closeModal('recordRefund')">Close</button>
+        </div>
+        <form method="post" action="{{ url_for('private_requests.add_refund', request_id=item.request_id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="grid-2" style="gap:1rem">
+                <div class="form-group">
+                    <label class="form-label">Amount Refunded</label>
+                    <input class="form-input" type="number" min="0.01" step="0.01" name="amount"
+                           max="{{ '%.2f'|format(max_refund) }}" required>
+                    <div class="form-hint">
+                        At most {{ '{:,.2f}'.format(max_refund) }} {{ money_currency }} —
+                        refundable money received{% if ledger.non_refundable_paid %}, excluding the {{ '{:,.2f}'.format(ledger.non_refundable_paid) }} {{ money_currency }} non-refundable deposit{% endif %}{% if ledger.total_refunded %}, less {{ '{:,.2f}'.format(ledger.total_refunded) }} already refunded{% endif %}.
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Date Refunded</label>
+                    <input class="form-input" type="date" name="occurred_on" max="{{ today.strftime('%Y-%m-%d') }}"
+                           value="{{ today.strftime('%Y-%m-%d') }}">
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Reason</label>
+                    <input class="form-input" type="text" name="reason" required placeholder="Why is money being returned?">
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Reference</label>
+                    <input class="form-input" type="text" name="reference" placeholder="Transfer ID, receipt number…">
+                </div>
+            </div>
+            <input type="hidden" name="currency" value="{{ money_currency }}">
+            <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1rem">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('recordRefund')">Cancel</button>
+                <button type="submit" class="btn btn-danger">Record Refund</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+<!-- ADD FEE -->
+<div id="addFee" class="modal-overlay">
+    <div class="modal-box" style="max-width:520px">
+        <div class="modal-header">
+            <span class="modal-title">Add Additional Fee</span>
+            <button class="modal-close" onclick="closeModal('addFee')">Close</button>
+        </div>
+        <form method="post" action="{{ url_for('private_requests.add_private_fee', request_id=item.request_id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="grid-2" style="gap:1rem">
+                <div class="form-group col-span-2">
+                    <label class="form-label">What is the fee for?</label>
+                    <input class="form-input" type="text" name="label" required placeholder="e.g. Visa processing for 2 travellers">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Type</label>
+                    <select class="form-select" name="category">
+                        {% for key, label in fee_categories.items() %}
+                        <option value="{{ key }}" {% if key == 'other' %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Amount</label>
+                    <input class="form-input" type="number" min="0.01" step="0.01" name="amount" required>
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Currency</label>
+                    {% if money_currency %}
+                    <input class="form-input" type="text" value="{{ money_currency }}" readonly style="background:var(--bg-base);color:var(--text-muted)">
+                    <input type="hidden" name="currency" value="{{ money_currency }}">
+                    <div class="form-hint">Fees are in the request's currency so they can be added to its total.</div>
+                    {% else %}
+                    <div class="form-hint" style="color:var(--yellow)">
+                        Set the agreed price first — a fee needs a currency to be added to.
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Notes</label>
+                    <input class="form-input" type="text" name="notes" placeholder="Optional">
+                </div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1rem">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('addFee')">Cancel</button>
+                <button type="submit" class="btn btn-primary" {% if not money_currency %}disabled{% endif %}>Add Fee</button>
+            </div>
+        </form>
+    </div>
+</div>
 
 {% include "admin/_entity_picker.html" %}
 {% endblock %}

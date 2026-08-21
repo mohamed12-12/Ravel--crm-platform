@@ -4,6 +4,7 @@ from datetime import datetime
 
 from app.extensions import db
 from services.crm.system_services.private_trips import (
+    PRIVATE_REQUEST_CLOSED_STAGES,
     consultation_due_from,
     normalize_private_service_type,
     normalize_private_stage,
@@ -34,8 +35,16 @@ class PrivateTripRequest(db.Model):
     boys_count = db.Column(db.Integer, nullable=False, default=0)
     girls_count = db.Column(db.Integer, nullable=False, default=0)
 
+    # What the customer said they wanted to spend. A stated intention, not
+    # money and not a quote -- deliberately never used for revenue.
     budget_amount = db.Column(db.Float)
     budget_currency = db.Column(db.String(3))
+
+    # What Ravel actually quoted and the customer agreed to. This is the
+    # figure the outstanding balance and the derived payment status are
+    # measured against; the money itself lives in private_trip_transactions.
+    agreed_price_amount = db.Column(db.Float)
+    agreed_price_currency = db.Column(db.String(3))
 
     stage = db.Column(db.String(40), nullable=False, default="registered", index=True)
     stage_changed_at = db.Column(db.DateTime, nullable=False, default=utc_now)
@@ -99,7 +108,7 @@ class PrivateTripRequest(db.Model):
         return bool(
             self.consultation_due_at
             and not self.consultation_done_at
-            and self.stage not in {"converted", "lost"}
+            and self.stage not in PRIVATE_REQUEST_CLOSED_STAGES
             and _naive(self.consultation_due_at) < utc_now().replace(tzinfo=None)
         )
 
@@ -108,7 +117,7 @@ class PrivateTripRequest(db.Model):
         return bool(
             self.design_due_at
             and not self.design_delivered_at
-            and self.stage not in {"converted", "lost"}
+            and self.stage not in PRIVATE_REQUEST_CLOSED_STAGES
             and _naive(self.design_due_at) < utc_now().replace(tzinfo=None)
         )
 
@@ -141,6 +150,8 @@ class PrivateTripRequest(db.Model):
             "girls_count": self.girls_count,
             "budget_amount": self.budget_amount,
             "budget_currency": self.budget_currency,
+            "agreed_price_amount": self.agreed_price_amount,
+            "agreed_price_currency": self.agreed_price_currency,
             "stage": self.stage,
             "stage_changed_at": self.stage_changed_at.isoformat() if self.stage_changed_at else None,
             "assigned_to_user_id": self.assigned_to_user_id,

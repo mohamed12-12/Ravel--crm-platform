@@ -122,93 +122,63 @@ def _seed_request(db, *, request_id: str, stage: str, with_deposit: bool = False
     return item
 
 
-def test_convert_is_rejected_before_the_paid_stage(private_request_app) -> None:
+# ---------------------------------------------------------------------------
+# Conversion to a booking is retired. A private request now carries its own
+# agreed price, additional fees and payment ledger, so converting one into a
+# synthetic Trip + TripBooking would make the same money countable twice --
+# once on the request and once on the booking it spawned. "paid" is the final
+# stage, and these tests pin that the route, the stage and the button are all
+# actually gone rather than merely hidden.
+# ---------------------------------------------------------------------------
+def test_the_convert_route_no_longer_exists(private_request_app) -> None:
     app, db = private_request_app
     client = app.test_client()
     csrf_token = _login_as_employee(app, client)
     with app.app_context():
-        _seed_request(db, request_id="PRT-000001", stage="registered")
+        _seed_request(db, request_id="PRT-000001", stage="paid", with_deposit=True)
 
     response = client.post(
         "/admin/private-requests/PRT-000001/convert",
-        data={"csrf_token": csrf_token},
+        data={"csrf_token": csrf_token, "room_type": "Double", "currency": "USD", "total_price": "5000"},
         follow_redirects=True,
     )
 
-    assert response.status_code == 200
-    body = response.get_data(as_text=True)
-    assert "must reach the &#39;paid&#39; stage" in body or "must reach the 'paid' stage" in body
+    assert response.status_code == 404
 
     with app.app_context():
         from app.models.booking import TripBooking
         from app.models.private_trip_request import PrivateTripRequest
 
         item = db.session.get(PrivateTripRequest, "PRT-000001")
+        assert item.stage == "paid"
         assert item.converted_booking_id is None
-        assert item.stage == "registered"
+        # No synthetic trip or booking is created for a private trip any more.
         assert TripBooking.query.count() == 0
 
 
-@pytest.mark.parametrize(
-    "stage",
-    ["consultation_scheduled", "consultation_done", "deposit_pending", "deposit_paid", "designing", "design_delivered", "payment_pending"],
-)
-def test_convert_is_rejected_at_every_stage_before_paid(private_request_app, stage) -> None:
+def test_paid_is_the_terminal_stage(private_request_app) -> None:
     app, db = private_request_app
     client = app.test_client()
     csrf_token = _login_as_employee(app, client)
     with app.app_context():
-        _seed_request(db, request_id="PRT-000002", stage=stage, with_deposit=True)
+        _seed_request(db, request_id="PRT-000002", stage="paid", with_deposit=True)
 
-    response = client.post(
-        "/admin/private-requests/PRT-000002/convert",
-        data={"csrf_token": csrf_token},
-        follow_redirects=True,
-    )
-    assert response.status_code == 200
-    assert "must reach the" in response.get_data(as_text=True)
+    for target in ("converted", "lost"):
+        response = client.post(
+            "/admin/private-requests/PRT-000002/stage",
+            data={"csrf_token": csrf_token, "stage": target},
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert "Cannot move" in response.get_data(as_text=True)
 
     with app.app_context():
-        from app.models.booking import TripBooking
         from app.models.private_trip_request import PrivateTripRequest
 
-        item = db.session.get(PrivateTripRequest, "PRT-000002")
-        assert item.converted_booking_id is None
-        assert item.stage == stage
-        assert TripBooking.query.count() == 0
+        assert db.session.get(PrivateTripRequest, "PRT-000002").stage == "paid"
 
 
-def test_convert_succeeds_once_the_request_is_at_the_paid_stage(private_request_app) -> None:
-    app, db = private_request_app
-    client = app.test_client()
-    csrf_token = _login_as_employee(app, client)
-    with app.app_context():
-        _seed_request(db, request_id="PRT-000003", stage="paid", with_deposit=True)
-
-    response = client.post(
-        "/admin/private-requests/PRT-000003/convert",
-        data={"csrf_token": csrf_token, "room_type": "Double", "currency": "USD", "total_price": "5000"},
-        follow_redirects=True,
-    )
-    assert response.status_code == 200
-
-    with app.app_context():
-        from app.models.booking import TripBooking
-        from app.models.booking_transaction import BookingTransaction
-        from app.models.private_trip_request import PrivateTripRequest
-
-        item = db.session.get(PrivateTripRequest, "PRT-000003")
-        assert item.stage == "converted"
-        assert item.converted_booking_id is not None
-
-        booking = db.session.get(TripBooking, item.converted_booking_id)
-        assert booking is not None
-
-        txn = BookingTransaction.query.filter_by(booking_id=booking.booking_id).one()
-        assert txn.is_non_refundable is True
-
-
-def test_the_convert_form_only_renders_at_the_paid_stage(private_request_app) -> None:
+def test_the_detail_page_offers_money_actions_instead_of_conversion(private_request_app) -> None:
     app, db = private_request_app
     client = app.test_client()
     _login_as_employee(app, client)
@@ -216,12 +186,14 @@ def test_the_convert_form_only_renders_at_the_paid_stage(private_request_app) ->
         _seed_request(db, request_id="PRT-000004", stage="deposit_paid", with_deposit=True)
         _seed_request(db, request_id="PRT-000005", stage="paid", with_deposit=True)
 
-    not_yet = client.get("/admin/private-requests/PRT-000004").get_data(as_text=True)
-    assert "Convert To Booking" not in not_yet
-    assert "Conversion is available once this request reaches" in not_yet
-
-    ready = client.get("/admin/private-requests/PRT-000005").get_data(as_text=True)
-    assert "Convert To Booking" in ready
+    for request_id in ("PRT-000004", "PRT-000005"):
+        body = client.get(f"/admin/private-requests/{request_id}").get_data(as_text=True)
+        assert "Convert To Booking" not in body
+        assert "Conversion is available once this request reaches" not in body
+        # The money panel replaces it, and it says plainly what is revenue.
+        assert "Record Payment" in body
+        assert "Revenue Recognized" in body
+        assert "Only money received counts as revenue" in body
 
 
 # ---------------------------------------------------------------------------
@@ -506,8 +478,6 @@ def test_detail_page_links_every_related_record(private_request_app) -> None:
     body = client.get("/admin/private-requests/PRT-000030").get_data(as_text=True)
     assert "/leads/LD00777" in body
     assert "/travelers/TR-PRT-000030" in body
-    # Still the paid-stage conversion form, unchanged.
-    assert "Convert To Booking" in body
 
 
 def test_index_board_renders_with_the_new_request_form(private_request_app) -> None:

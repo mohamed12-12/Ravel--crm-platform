@@ -118,6 +118,90 @@
             </div>
         </div>
 
+        {# ---------------------------------------------------------- FEES
+           Money the customer owes on top of the trip price: visas, insurance,
+           transfers, upgrades. Counted as revenue for this booking under
+           exactly the same rule as the trip price, in the booking's own
+           currency -- nothing here is ever converted. #}
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Additional Fees</span>
+                <button type="button" class="btn btn-primary btn-sm" onclick="openModal('addFee')">Add Fee</button>
+            </div>
+            {% if fees %}
+            <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:0.82rem">
+                <thead><tr>
+                    <th style="text-align:left;padding:0.4rem 0.5rem;color:var(--text-muted);font-size:0.68rem;text-transform:uppercase;letter-spacing:0.05em">Fee</th>
+                    <th style="text-align:left;padding:0.4rem 0.5rem;color:var(--text-muted);font-size:0.68rem;text-transform:uppercase;letter-spacing:0.05em">Type</th>
+                    <th style="text-align:right;padding:0.4rem 0.5rem;color:var(--text-muted);font-size:0.68rem;text-transform:uppercase;letter-spacing:0.05em">Amount</th>
+                    <th style="text-align:left;padding:0.4rem 0.5rem;color:var(--text-muted);font-size:0.68rem;text-transform:uppercase;letter-spacing:0.05em">Added</th>
+                    <th></th>
+                </tr></thead>
+                <tbody>
+                {% for fee in fees %}
+                <tr style="border-top:1px solid var(--border){% if not fee.is_active %};opacity:0.5{% endif %}">
+                    <td style="padding:0.5rem;color:var(--text-main)">
+                        {{ fee.label }}
+                        {% if not fee.is_active %}<span class="badge badge-gray" style="margin-left:0.35rem">Removed</span>{% endif %}
+                        {% if fee.currency != booking.currency %}<span class="badge badge-red" style="margin-left:0.35rem">Not {{ booking.currency or 'set' }}</span>{% endif %}
+                        {% if fee.notes %}<div style="color:var(--text-muted);font-size:0.72rem">{{ fee.notes }}</div>{% endif %}
+                        {% if fee.void_reason %}<div style="color:var(--text-muted);font-size:0.72rem">Removed: {{ fee.void_reason }}</div>{% endif %}
+                    </td>
+                    <td style="padding:0.5rem;color:var(--text-dim)">{{ fee.category_label }}</td>
+                    <td class="mono" style="padding:0.5rem;text-align:right;color:var(--text-main)">{{ '{:,.2f}'.format(fee.amount) }} {{ fee.currency }}</td>
+                    <td style="padding:0.5rem;color:var(--text-muted);font-size:0.73rem">
+                        {{ fee.created_at.strftime('%d %b %Y') if fee.created_at else '—' }}{% if fee.created_by %} · {{ fee.created_by }}{% endif %}
+                    </td>
+                    <td style="padding:0.5rem;text-align:right">
+                        {% if fee.is_active and can_change_payment_status %}
+                        <form method="post" action="{{ url_for('bookings.void_booking_fee', booking_id=booking.booking_id, fee_id=fee.fee_id) }}"
+                              style="margin:0;display:flex;gap:0.35rem;justify-content:flex-end">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input class="form-input" type="text" name="reason" placeholder="Reason" required
+                                   style="max-width:150px;padding:0.25rem 0.4rem;font-size:0.72rem">
+                            <button type="submit" class="btn btn-ghost btn-sm">Remove</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            {% else %}
+            <p style="color:var(--text-muted);font-size:0.83rem">
+                No additional fees on this booking. Add one for a visa, insurance, transfer or upgrade the customer is paying for.
+            </p>
+            {% endif %}
+
+            {% if revenue_breakdown %}
+            <div class="work-summary" style="margin-top:1rem">
+                <div class="work-item">
+                    <div class="work-label">Trip Value</div>
+                    <div class="work-value">{{ '{:,.2f}'.format(revenue_breakdown.trip_value) }} {{ revenue_breakdown.currency }}</div>
+                </div>
+                <div class="work-item">
+                    <div class="work-label">Additional Fees</div>
+                    <div class="work-value">{{ '{:,.2f}'.format(revenue_breakdown.fees) }} {{ revenue_breakdown.currency }}</div>
+                </div>
+                <div class="work-item">
+                    <div class="work-label">Booking Value</div>
+                    <div class="work-value">{{ '{:,.2f}'.format(revenue_breakdown.gross) }} {{ revenue_breakdown.currency }}</div>
+                </div>
+                <div class="work-item">
+                    <div class="work-label">Counts As Revenue</div>
+                    <div class="work-value" style="color:var(--accent)">{{ '{:,.2f}'.format(revenue_breakdown.net) }} {{ revenue_breakdown.currency }}</div>
+                </div>
+            </div>
+            {% elif fees_total %}
+            <p style="color:var(--yellow);font-size:0.78rem;margin-top:0.75rem">
+                {{ '{:,.2f}'.format(fees_total) }} {{ booking.currency or '' }} in fees is recorded, but this booking is not in a
+                revenue-counting status yet, so none of it is counted as revenue.
+            </p>
+            {% endif %}
+        </div>
+
         <div class="card">
             <div class="card-header">
                 <span class="card-title">Activity Timeline</span>
@@ -411,10 +495,69 @@
         {% endif %}
     </div>
 </div>
+
+<!-- ADD FEE MODAL -->
+<div id="addFee" class="modal-overlay">
+    <div class="modal-box" style="max-width:520px">
+        <div class="modal-header">
+            <span class="modal-title">Add Additional Fee</span>
+            <button class="modal-close" onclick="closeModal('addFee')">Close</button>
+        </div>
+        <form method="post" action="{{ url_for('bookings.add_booking_fee', booking_id=booking.booking_id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="grid-2" style="gap:1rem">
+                <div class="form-group col-span-2">
+                    <label class="form-label">What is the fee for?</label>
+                    <input class="form-input" type="text" name="label" required placeholder="e.g. Visa processing, airport transfer">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Type</label>
+                    <select class="form-select" name="category">
+                        {% for key, label in fee_categories.items() %}
+                        <option value="{{ key }}" {% if key == 'other' %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Amount</label>
+                    <input class="form-input" type="number" min="0.01" step="0.01" name="amount" required>
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Currency</label>
+                    {% if booking.currency %}
+                    <input class="form-input" type="text" value="{{ booking.currency }}" readonly
+                           style="background:var(--bg-base);color:var(--text-muted)">
+                    <input type="hidden" name="currency" value="{{ booking.currency }}">
+                    <div class="form-hint">The booking's currency, so the fee can be added to its total. Currencies are never converted.</div>
+                    {% else %}
+                    <div class="form-hint" style="color:var(--yellow)">
+                        Set this booking's currency first — a fee needs a total to be added to.
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="form-group col-span-2">
+                    <label class="form-label">Notes</label>
+                    <input class="form-input" type="text" name="notes" placeholder="Optional">
+                </div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:0.75rem;margin-top:1rem">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('addFee')">Cancel</button>
+                <button type="submit" class="btn btn-primary" {% if not booking.currency %}disabled{% endif %}>Add Fee</button>
+            </div>
+        </form>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 {% include "bookings/_trip_room_selector.html" %}
+<script>
+function openModal(id) { var m = document.getElementById(id); if (m) m.classList.add('open'); }
+function closeModal(id) { var m = document.getElementById(id); if (m) m.classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(function (m) {
+    m.addEventListener('click', function (e) { if (e.target === m) m.classList.remove('open'); });
+});
+</script>
 <script>
 const BOOKING_TRIPS_DATA = {{ trips_data | tojson | safe }};
 const bookingDetailSelector = initBookingRoomSelector({

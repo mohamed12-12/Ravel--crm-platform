@@ -3610,6 +3610,8 @@ class UnifiedCRMService:
                 girls_count INTEGER NOT NULL DEFAULT 0,
                 budget_amount REAL,
                 budget_currency TEXT,
+                agreed_price_amount REAL,
+                agreed_price_currency TEXT,
                 stage TEXT NOT NULL DEFAULT 'registered',
                 stage_changed_at TEXT NOT NULL,
                 assigned_to_user_id INTEGER,

@@ -12,5 +12,7 @@ from .booking_event import BookingEventTrail
 from .booking_transaction import BookingTransaction
 from .handoff import HandoffQueue
 from .private_trip_request import PrivateTripRequest
+from .private_trip_transaction import PrivateTripTransaction
+from .additional_fee import AdditionalFee
 from .copy_library import DMCopyLibrary, LanguageTemplate
 from .user import User

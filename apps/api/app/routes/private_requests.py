@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import logging
 import math
 from datetime import date, datetime, timezone
 
-from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import or_
 
 from app.extensions import db
-from app.models import BookingTransaction, Lead, PrivateTripRequest, Traveler, Trip, TripBooking
-from app.models.booking_transaction import ENTRY_PAYMENT, SOURCE_PRIVATE_TRIP_DEPOSIT
-from app.security import current_user, current_user_id, employee_session_required, has_permission
+from app.models import AdditionalFee, Lead, PrivateTripRequest, PrivateTripTransaction, Traveler
+from app.models.private_trip_transaction import SOURCE_PRIVATE_DEPOSIT_STAGE
+from app.security import current_actor, current_user, current_user_id, employee_session_required, has_permission
+from app.services.additional_fees import add_fee, fees_for_private_request, void_fee
 from app.services.assignments import (
     active_assignees,
     apply_assignment,
@@ -17,6 +19,20 @@ from app.services.assignments import (
     auto_assign_private_request,
     resolve_user_id,
 )
+from app.services.private_trip_ledger import all_transactions, ledger_totals
+from app.services.private_trip_money import (
+    PAYMENT_METHOD_LABELS,
+    method_label,
+    money_for,
+    money_for_many,
+    record_payment,
+    record_refund,
+    refund_ceiling,
+    reverse_entry,
+    set_agreed_price,
+)
+from app.services.traveler_stats import recalculate_traveler_stats
+from services.crm.system_services.fee_rules import ADDITIONAL_FEE_CATEGORIES
 from services.crm.system_services.private_trips import (
     PRIVATE_BUDGET_CURRENCIES,
     PRIVATE_REQUEST_STAGES,
@@ -30,10 +46,39 @@ from services.crm.system_services.private_trips import (
     normalize_private_stage,
     utc_now,
 )
-from services.crm.system_services.trip_pricing import serialize_room_prices
 
+logger = logging.getLogger(__name__)
 
 private_requests_bp = Blueprint("private_requests", __name__, url_prefix="/admin/private-requests")
+
+
+def _can_move_money() -> bool:
+    """Whether this employee may give money back or undo a recorded entry.
+
+    Recording a payment is ordinary sales work, available to any employee with
+    CRM write access. Refunds and reversals move money the other way, so they
+    take the same permission the booking pages already require for a refund
+    (`change_payment_status`: admin and manager only).
+    """
+    if not current_app.config.get("CRM_AUTH_ENABLED", False):
+        return True
+    return has_permission("change_payment_status")
+
+
+def _refresh_traveler_stats(traveler_id: str | None) -> None:
+    """Keep the traveler profile's private-trip count and revenue in step.
+
+    Best-effort, exactly as the booking routes treat it: a counter that is one
+    request stale is a display problem, while letting it abort the money write
+    that has just been committed would be a real one.
+    """
+    if not traveler_id:
+        return
+    try:
+        recalculate_traveler_stats(traveler_id)
+    except Exception:
+        logger.error("Traveler stats recalculation failed traveler_id=%s", traveler_id, exc_info=True)
+        db.session.rollback()
 
 
 def _parse_date(value: str | None) -> date | None:
@@ -83,11 +128,18 @@ def index():
     columns = {stage: [] for stage in PRIVATE_REQUEST_STAGES}
     for item in requests:
         columns.setdefault(item.stage or "registered", []).append(item)
+    # Retired stages ("converted") are not offered as columns, but rows that
+    # are still sitting in one must not vanish from the board -- they are only
+    # rendered while any request actually holds them.
+    stages = list(PRIVATE_REQUEST_STAGES) + [
+        stage for stage in columns if stage not in PRIVATE_REQUEST_STAGES and columns[stage]
+    ]
     return render_template(
         "admin/private_requests.html",
         requests=requests,
         columns=columns,
-        stages=PRIVATE_REQUEST_STAGES,
+        stages=stages,
+        money=money_for_many(requests),
         selected_stage=selected_stage,
         service_types=PRIVATE_SERVICE_TYPES,
         scopes=PRIVATE_TRIP_SCOPES,
@@ -251,6 +303,8 @@ def detail(request_id: str):
     # were invalid transitions that only produced a "Cannot move X to Y" flash.
     # Resolve the single legal next step here instead.
     forward_stages = sorted(PRIVATE_REQUEST_TRANSITIONS.get(item.stage, set()) - {"lost"})
+    fees = fees_for_private_request(item.request_id)
+    totals = ledger_totals(item.request_id)
     return render_template(
         "admin/private_request_detail.html",
         item=item,
@@ -265,6 +319,17 @@ def detail(request_id: str):
         assigned_user=item.assigned_user,
         assigned_history=assignment_history("private_trip_request", item.request_id),
         today=date.today(),
+        # Money. Every figure here is read from the ledger and the fee rows --
+        # nothing on this page reports an amount that was not recorded.
+        money=money_for(item, totals=totals, fees=fees),
+        ledger=totals,
+        transactions=all_transactions(item.request_id),
+        fees=fees,
+        fee_categories=ADDITIONAL_FEE_CATEGORIES,
+        payment_methods=PAYMENT_METHOD_LABELS,
+        method_label=method_label,
+        max_refund=refund_ceiling(item, totals=totals),
+        can_move_money=_can_move_money(),
     )
 
 
@@ -403,113 +468,239 @@ def update_stage(request_id: str):
         flash(f"Cannot move {item.request_id} from {item.stage} to {target or 'unknown'}.", "error")
         return redirect(url_for("private_requests.detail", request_id=item.request_id))
     now = utc_now().replace(tzinfo=None)
-    item.mark_stage(target, when=now)
+
+    # "Deposit paid" is a claim about money, so it has to be backed by money.
+    # The deposit is recorded in the ledger -- either from the amount typed on
+    # this form, or from payments already recorded in the money panel -- and
+    # the milestone fields are then a snapshot of it rather than a second,
+    # independent record that can drift away from the ledger.
     if target == "deposit_paid":
-        amount = _parse_float(request.form.get("deposit_amount"))
-        currency = str(request.form.get("deposit_currency") or item.budget_currency or "").strip().upper()
-        if amount:
-            item.deposit_amount = amount
-            item.deposit_currency = currency if currency in PRIVATE_BUDGET_CURRENCIES else item.budget_currency
-            item.deposit_paid_at = now
-            item.deposit_is_refundable = False
-            item.design_due_at = design_due_from(now).replace(tzinfo=None)
+        totals = ledger_totals(item.request_id)
+        typed_amount = _parse_float(request.form.get("deposit_amount"))
+        if typed_amount:
+            currency = str(request.form.get("deposit_currency") or "").strip().upper()
+            try:
+                entry = record_payment(
+                    item,
+                    amount=typed_amount,
+                    currency=currency or None,
+                    occurred_on=request.form.get("deposit_paid_on"),
+                    method=request.form.get("deposit_method") or "bank_transfer",
+                    notes=f"Private trip deposit for {item.request_id}.",
+                    # Policy: the private-trip deposit funds design work and is
+                    # not refundable once taken. Recorded on the entry so the
+                    # refund ceiling enforces the policy instead of restating it.
+                    is_non_refundable=True,
+                    source=SOURCE_PRIVATE_DEPOSIT_STAGE,
+                    # One deposit entry per request, whatever a double-submitted
+                    # form or a retried request does.
+                    idempotency_key=f"private-deposit:{item.request_id}",
+                    actor_user_id=current_user_id(),
+                    actor_name=current_actor(),
+                )
+            except ValueError as exc:
+                db.session.rollback()
+                flash(str(exc), "error")
+                return redirect(url_for("private_requests.detail", request_id=item.request_id))
+            deposit_amount = entry.amount
+            deposit_currency = entry.currency
+            deposit_on = entry.occurred_on
+        elif totals.total_paid > 0:
+            deposit_amount = totals.total_paid
+            deposit_currency = totals.currency
+            deposit_on = totals.last_payment_on or now.date()
+        else:
+            flash(
+                f"Record the deposit payment before marking {item.request_id} as deposit paid -- "
+                "the amount is what the design deadline and the refund limit are calculated from.",
+                "error",
+            )
+            return redirect(url_for("private_requests.detail", request_id=item.request_id))
+
+        item.mark_stage(target, when=now)
+        item.deposit_amount = deposit_amount
+        item.deposit_currency = deposit_currency
+        item.deposit_paid_at = datetime.combine(deposit_on, datetime.min.time()) if deposit_on else now
+        item.deposit_is_refundable = False
+        item.design_due_at = design_due_from(item.deposit_paid_at).replace(tzinfo=None)
+    else:
+        item.mark_stage(target, when=now)
+
     if target == "lost":
         item.lost_reason = str(request.form.get("lost_reason") or "").strip() or item.lost_reason
     db.session.commit()
+    _refresh_traveler_stats(item.traveler_id)
     flash(f"Private request {item.request_id} moved to {target}.", "success")
     return redirect(url_for("private_requests.detail", request_id=item.request_id))
 
 
-@private_requests_bp.route("/<string:request_id>/convert", methods=["POST"])
+# ---------------------------------------------------------------------------
+# Money
+#
+# A private trip is priced by hand and settled in instalments, so these routes
+# are where its revenue comes from. Two rules hold across all of them: every
+# amount is recorded, never inferred, and every entry is denominated in the
+# request's one currency (app/services/private_trip_money.py enforces both).
+#
+# The "convert to booking" route that used to live here is gone. It built a
+# synthetic Trip + TripBooking so a private trip's money could travel through
+# the booking revenue engine; now that a request carries its own price, fees
+# and payments, converting one would make the same money countable twice.
+# ---------------------------------------------------------------------------
+
+
+@private_requests_bp.route("/<string:request_id>/price", methods=["POST"])
 @employee_session_required
-def convert(request_id: str):
+def update_price(request_id: str):
+    """Set what the customer agreed to pay. Not revenue -- see the money panel."""
     item = db.get_or_404(PrivateTripRequest, request_id)
-    if item.converted_booking_id:
-        flash("This private request is already converted.", "info")
-        return redirect(url_for("bookings.detail", booking_id=item.converted_booking_id))
-    # PRIVATE_REQUEST_TRANSITIONS already encodes "paid" as the only stage that
-    # may move to "converted" -- but unlike update_stage(), this route never
-    # checked it, so an employee could convert straight from "registered" and
-    # skip the whole consultation/deposit/design pipeline the stages exist to
-    # enforce (and, with no deposit recorded yet, create a booking with no
-    # payment evidence at all).
-    if not can_transition_private_stage(item.stage, "converted"):
-        flash(
-            f"{item.request_id} must reach the 'paid' stage before it can be converted "
-            f"(currently '{item.stage}').",
-            "error",
+    try:
+        set_agreed_price(
+            item,
+            amount=request.form.get("agreed_price_amount"),
+            currency=request.form.get("agreed_price_currency"),
         )
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), "error")
         return redirect(url_for("private_requests.detail", request_id=item.request_id))
-    traveler = db.session.get(Traveler, item.traveler_id) if item.traveler_id else None
-    if traveler is None:
-        flash("Link a traveler before converting this private request.", "error")
-        return redirect(url_for("private_requests.detail", request_id=item.request_id))
-    room_type = str(request.form.get("room_type") or "Double").strip().title()
-    if room_type not in {"Single", "Double", "Triple"}:
-        room_type = "Double"
-    currency = str(request.form.get("currency") or item.deposit_currency or item.budget_currency or "EGP").strip().upper()
-    if currency not in PRIVATE_BUDGET_CURRENCIES:
-        currency = "EGP"
-    total_price = _parse_float(request.form.get("total_price")) or item.budget_amount or item.deposit_amount or 0
-    unit_price = round(total_price / max(int(item.party_size or 1), 1), 2) if total_price else 0
-    now = utc_now().replace(tzinfo=None)
-    trip = Trip(
-        trip_id=_next_prefixed_id(Trip, "trip_id", "RT-PRV-", 6),
-        trip_name=str(request.form.get("trip_name") or f"Private {item.destination}").strip(),
-        trip_name_ar=str(request.form.get("trip_name_ar") or f"Private {item.destination}").strip(),
-        type=item.trip_scope,
-        year=now.year,
-        start_date=item.start_date_pref,
-        end_date=item.end_date_pref,
-        sales_status="Closed",
-        is_private=True,
-        single_total=1 if room_type == "Single" else 0,
-        double_total=1 if room_type == "Double" else 0,
-        triple_total=1 if room_type == "Triple" else 0,
-        public_price=f"{total_price:,.2f} {currency}" if total_price else "",
-        room_prices_json=serialize_room_prices({room_type: {currency: str(unit_price or total_price)}}),
-        public_description=f"Private/custom trip created from {item.request_id}.",
-        sales_notes=f"Private request {item.request_id}; service={item.service_type}; deposit non-refundable.",
-    )
-    booking = TripBooking(
-        booking_id=_next_prefixed_id(TripBooking, "booking_id", "BK", 6),
-        trip_id=trip.trip_id,
-        trip_name=trip.trip_name,
-        traveler_id=traveler.traveler_id,
-        traveler_name=traveler.full_name,
-        room_type=room_type,
-        room_group="mixed" if item.boys_count and item.girls_count else None,
-        currency=currency,
-        group_size=max(int(item.party_size or 1), 1),
-        boys_count=int(item.boys_count or 0),
-        girls_count=int(item.girls_count or 0),
-        booking_status="Payment Pending",
-        payment_status="Deposit Paid" if item.deposit_amount else "Pending",
-        booking_source="Private Request",
-        lead_id=item.lead_id,
-        booking_notes=f"Converted from private request {item.request_id}. Deposit is non-refundable.",
-        missing_info=False,
-    )
-    db.session.add(trip)
-    db.session.add(booking)
-    db.session.flush()
-    if item.deposit_amount and item.deposit_currency:
-        db.session.add(BookingTransaction(
-            booking_id=booking.booking_id,
-            traveler_id=traveler.traveler_id,
-            entry_type=ENTRY_PAYMENT,
-            amount=float(item.deposit_amount),
-            currency=str(item.deposit_currency).upper(),
-            occurred_on=(item.deposit_paid_at or now).date()
-            if isinstance(item.deposit_paid_at or now, datetime)
-            else now.date(),
-            method="private_deposit",
-            notes=f"Non-refundable private trip deposit from {item.request_id}.",
-            source=SOURCE_PRIVATE_TRIP_DEPOSIT,
-            is_non_refundable=not bool(item.deposit_is_refundable),
-        ))
-    item.converted_booking_id = booking.booking_id
-    item.mark_stage("converted", when=now)
     db.session.commit()
-    flash(f"Private request {item.request_id} converted to booking {booking.booking_id}.", "success")
-    return redirect(url_for("bookings.detail", booking_id=booking.booking_id))
+    flash(
+        f"{item.request_id} priced at {item.agreed_price_amount:,.2f} {item.agreed_price_currency}.",
+        "success",
+    )
+    return redirect(url_for("private_requests.detail", request_id=item.request_id))
+
+
+@private_requests_bp.route("/<string:request_id>/payments", methods=["POST"])
+@employee_session_required
+def add_payment(request_id: str):
+    item = db.get_or_404(PrivateTripRequest, request_id)
+    try:
+        entry = record_payment(
+            item,
+            amount=request.form.get("amount"),
+            currency=request.form.get("currency"),
+            occurred_on=request.form.get("occurred_on"),
+            method=request.form.get("method"),
+            reference=request.form.get("reference"),
+            notes=request.form.get("notes"),
+            is_non_refundable=bool(request.form.get("is_non_refundable")),
+            actor_user_id=current_user_id(),
+            actor_name=current_actor(),
+        )
+        db.session.commit()
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), "error")
+        return redirect(url_for("private_requests.detail", request_id=item.request_id))
+    _refresh_traveler_stats(item.traveler_id)
+    flash(
+        f"Recorded {entry.amount:,.2f} {entry.currency} received on {item.request_id} ({entry.public_ref}).",
+        "success",
+    )
+    return redirect(url_for("private_requests.detail", request_id=item.request_id))
+
+
+@private_requests_bp.route("/<string:request_id>/refunds", methods=["POST"])
+@employee_session_required
+def add_refund(request_id: str):
+    if not _can_move_money():
+        abort(403)
+    item = db.get_or_404(PrivateTripRequest, request_id)
+    try:
+        entry = record_refund(
+            item,
+            amount=request.form.get("amount"),
+            reason=request.form.get("reason"),
+            currency=request.form.get("currency"),
+            occurred_on=request.form.get("occurred_on"),
+            method=request.form.get("method"),
+            reference=request.form.get("reference"),
+            notes=request.form.get("notes"),
+            actor_user_id=current_user_id(),
+            actor_name=current_actor(),
+        )
+        db.session.commit()
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), "error")
+        return redirect(url_for("private_requests.detail", request_id=item.request_id))
+    _refresh_traveler_stats(item.traveler_id)
+    flash(
+        f"Recorded a {entry.amount:,.2f} {entry.currency} refund on {item.request_id} ({entry.public_ref}).",
+        "success",
+    )
+    return redirect(url_for("private_requests.detail", request_id=item.request_id))
+
+
+@private_requests_bp.route("/<string:request_id>/transactions/<int:transaction_id>/reverse", methods=["POST"])
+@employee_session_required
+def reverse_transaction(request_id: str, transaction_id: int):
+    """Undo a recorded entry by mirroring it. The ledger is append-only."""
+    if not _can_move_money():
+        abort(403)
+    item = db.get_or_404(PrivateTripRequest, request_id)
+    entry = db.session.get(PrivateTripTransaction, transaction_id)
+    if entry is None or entry.request_id != item.request_id:
+        abort(404)
+    try:
+        mirror = reverse_entry(
+            entry,
+            reason=request.form.get("reason"),
+            actor_user_id=current_user_id(),
+            actor_name=current_actor(),
+        )
+        db.session.commit()
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), "error")
+        return redirect(url_for("private_requests.detail", request_id=item.request_id))
+    _refresh_traveler_stats(item.traveler_id)
+    flash(f"{entry.public_ref} reversed by {mirror.public_ref}.", "success")
+    return redirect(url_for("private_requests.detail", request_id=item.request_id))
+
+
+@private_requests_bp.route("/<string:request_id>/fees", methods=["POST"])
+@employee_session_required
+def add_private_fee(request_id: str):
+    item = db.get_or_404(PrivateTripRequest, request_id)
+    try:
+        fee = add_fee(
+            private_request=item,
+            label=request.form.get("label"),
+            amount=request.form.get("amount"),
+            currency=request.form.get("currency"),
+            category=request.form.get("category"),
+            notes=request.form.get("notes"),
+            actor_user_id=current_user_id(),
+            actor_name=current_actor(),
+        )
+        db.session.commit()
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), "error")
+        return redirect(url_for("private_requests.detail", request_id=item.request_id))
+    flash(f"Added {fee.label} ({fee.amount:,.2f} {fee.currency}) to {item.request_id}.", "success")
+    return redirect(url_for("private_requests.detail", request_id=item.request_id))
+
+
+@private_requests_bp.route("/<string:request_id>/fees/<int:fee_id>/void", methods=["POST"])
+@employee_session_required
+def void_private_fee(request_id: str, fee_id: int):
+    if not _can_move_money():
+        abort(403)
+    item = db.get_or_404(PrivateTripRequest, request_id)
+    fee = db.session.get(AdditionalFee, fee_id)
+    if fee is None or fee.private_request_id != item.request_id:
+        abort(404)
+    try:
+        void_fee(fee, reason=request.form.get("reason"), actor_user_id=current_user_id())
+        db.session.commit()
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), "error")
+        return redirect(url_for("private_requests.detail", request_id=item.request_id))
+    flash(f"{fee.public_ref} removed from {item.request_id}.", "success")
+    return redirect(url_for("private_requests.detail", request_id=item.request_id))
+

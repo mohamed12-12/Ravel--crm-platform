@@ -81,6 +81,40 @@ def validate_payment_transition(
     raise ValueError(f"Invalid payment status transition: {current} -> {target}")
 
 
+def derive_payment_status(
+    contract_value: float | None,
+    total_paid: float,
+    total_refunded: float,
+) -> str:
+    """The payment status implied by recorded money, from the same vocabulary.
+
+    Used where the money is a ledger rather than a hand-picked label (private
+    trip requests): the status is then a *reading* of the transactions, so it
+    can never claim something the ledger does not support. Nobody types "Fully
+    Paid" here -- it is true only when the receipts add up to the agreed price.
+
+    `contract_value` is the price plus additional fees, or None when no price
+    has been agreed yet. With no price there is no way to tell a deposit from
+    a settled balance, so money received reads as "Deposit Paid": understating
+    is the only safe direction when the claim is about someone's money.
+
+    Refunds outrank everything, because "we gave it back" is the most
+    important fact about a payment. A refund covering everything received is a
+    Full Refund; anything less is Partial.
+    """
+    paid = max(float(total_paid or 0.0), 0.0)
+    refunded = max(float(total_refunded or 0.0), 0.0)
+    if refunded > 0:
+        # >= rather than == so a rounding-tail difference on a genuinely full
+        # refund is not reported as partial.
+        return "Full Refund" if refunded + 0.005 >= paid else "Partial Refund"
+    if paid <= 0:
+        return DEFAULT_PAYMENT_STATUS
+    if contract_value is None or float(contract_value) <= 0:
+        return "Deposit Paid"
+    return "Fully Paid" if paid + 0.005 >= float(contract_value) else "Deposit Paid"
+
+
 def payment_state_token(payment_status: str | None, refund_amount: float | None) -> str:
     """A fingerprint of a booking's money fields, for conflict detection.
 

@@ -43,11 +43,20 @@
     <div class="private-column">
         <h2>{{ stage.replace('_', ' ') }} ({{ columns.get(stage, [])|length }})</h2>
         {% for item in columns.get(stage, []) %}
+        {% set card_money = money.get(item.request_id) if money else none %}
         <a class="request-card" href="{{ url_for('private_requests.detail', request_id=item.request_id) }}">
             <strong>{{ item.request_id }} · {{ item.destination or 'No destination' }}</strong>
             <div class="request-meta">
                 {{ service_types.get(item.service_type, item.service_type) }} · {{ item.trip_scope }}<br>
-                Party {{ item.party_size }} · {% if item.budget_amount %}{{ '{:,.0f}'.format(item.budget_amount) }} {{ item.budget_currency or '' }}{% else %}Budget TBD{% endif %}<br>
+                Party {{ item.party_size }} ·
+                {%- if card_money and card_money.price %} {{ '{:,.0f}'.format(card_money.contract_value) }} {{ card_money.currency }} agreed
+                {%- elif item.budget_amount %} {{ '{:,.0f}'.format(item.budget_amount) }} {{ item.budget_currency or '' }} budget
+                {%- else %} No price yet{% endif %}<br>
+                {# Money received, never the agreed price -- the board shows the
+                   same distinction the request page and Revenue Analytics do. #}
+                {% if card_money and card_money.paid %}
+                Paid {{ '{:,.0f}'.format(card_money.paid) }} {{ card_money.currency }}{% if card_money.outstanding %} · {{ '{:,.0f}'.format(card_money.outstanding) }} left{% endif %}<br>
+                {% endif %}
                 {{ item.assigned_user.display_name if item.assigned_user else (item.assigned_to or 'Unassigned') }}
             </div>
             <div class="card-tags">
@@ -55,6 +64,12 @@
                 <span class="badge badge-red">Overdue</span>
                 {% else %}
                 <span class="badge badge-green">On track</span>
+                {% endif %}
+                {% if card_money %}
+                    {% if card_money.payment_status == 'Fully Paid' %}<span class="badge badge-green">Fully Paid</span>
+                    {% elif card_money.payment_status == 'Deposit Paid' %}<span class="badge badge-yellow">Deposit Paid</span>
+                    {% elif 'Refund' in card_money.payment_status %}<span class="badge badge-red">{{ card_money.payment_status }}</span>
+                    {% endif %}
                 {% endif %}
                 {% if item.priority == 'High' %}<span class="badge badge-red">High</span>{% endif %}
                 {% if item.follow_up_due_date and item.follow_up_due_date < today %}<span class="badge badge-yellow">Follow-up due</span>{% endif %}

@@ -345,9 +345,9 @@
             <div class="card" style="background:linear-gradient(135deg,rgba(0,208,146,0.08),rgba(255,255,255,0.02));border:1px solid rgba(0,208,146,0.22)">
                 <div class="card-header">
                     <h3 class="card-title">Travel Summary</h3>
-                    <span style="font-size:0.75rem;color:var(--text-muted)">Auto-calculated from bookings</span>
+                    <span style="font-size:0.75rem;color:var(--text-muted)">Auto-calculated from bookings and private trips</span>
                 </div>
-                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem">
+                <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:1rem">
                     <div style="text-align:center;padding:1rem;background:rgba(0,208,146,0.08);border-radius:8px;border:1px solid rgba(0,208,146,0.22)">
                         <div style="font-size:1.8rem;font-weight:800;color:#00d092">{{ traveler.local_trips_count or 0 }}</div>
                         <div style="font-size:0.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-top:0.25rem">Local Trips</div>
@@ -355,6 +355,14 @@
                     <div style="text-align:center;padding:1rem;background:rgba(56,185,141,0.08);border-radius:8px;border:1px solid rgba(56,185,141,0.22)">
                         <div style="font-size:1.8rem;font-weight:800;color:#38b98d">{{ traveler.international_trips_count or 0 }}</div>
                         <div style="font-size:0.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-top:0.25rem">Int'l Trips</div>
+                    </div>
+                    {# Private trips are counted separately from local/international:
+                       a private trip has no Trip row to take a type from, and it is
+                       deliberately left out of Total Trips so that figure keeps
+                       meaning exactly what it always has (booking-derived trips). #}
+                    <div style="text-align:center;padding:1rem;background:rgba(197,121,240,0.1);border-radius:8px;border:1px solid rgba(197,121,240,0.24)">
+                        <div style="font-size:1.8rem;font-weight:800;color:#c579f0">{{ traveler.private_trips_count or 0 }}</div>
+                        <div style="font-size:0.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-top:0.25rem">Private Trips</div>
                     </div>
                     <div style="text-align:center;padding:1rem;background:rgba(0,208,146,0.08);border-radius:8px;border:1px solid rgba(0,208,146,0.22)">
                         <div style="font-size:1.8rem;font-weight:800;color:#34d399">{{ traveler.community_events_count or 0 }}</div>
@@ -366,6 +374,63 @@
                     </div>
                 </div>
             </div>
+
+            {# ------------------------------------------------ PRIVATE TRIPS
+               Custom trips are their own record with their own money: an agreed
+               price, fees and a payment ledger. Revenue shown here is what was
+               actually received, never the agreed price. #}
+            {% if private_requests %}
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">Private Trips</h3>
+                    <span style="font-size:0.75rem;color:var(--text-muted)">{{ private_requests|length }} request(s)</span>
+                </div>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Request</th>
+                            <th>Destination</th>
+                            <th>Stage</th>
+                            <th>Payment</th>
+                            <th style="text-align:right">Total</th>
+                            <th style="text-align:right">Paid</th>
+                            <th style="text-align:right">Outstanding</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for request_item in private_requests %}
+                    {% set request_money = private_money.get(request_item.request_id) %}
+                    <tr>
+                        <td class="mono"><a href="{{ url_for('private_requests.detail', request_id=request_item.request_id) }}">{{ request_item.request_id }}</a></td>
+                        <td>{{ request_item.destination or '—' }}</td>
+                        <td>
+                            {% if request_item.stage == 'lost' %}<span class="badge badge-red">Lost</span>
+                            {% elif request_item.stage == 'paid' %}<span class="badge badge-green">Paid</span>
+                            {% else %}<span class="badge badge-yellow">{{ request_item.stage.replace('_', ' ')|title }}</span>{% endif %}
+                        </td>
+                        <td>
+                            {% if request_money %}
+                                {% if request_money.payment_status == 'Fully Paid' %}<span class="badge badge-green">Fully Paid</span>
+                                {% elif request_money.payment_status == 'Deposit Paid' %}<span class="badge badge-yellow">Deposit Paid</span>
+                                {% elif 'Refund' in request_money.payment_status %}<span class="badge badge-red">{{ request_money.payment_status }}</span>
+                                {% else %}<span class="badge badge-gray">Pending</span>{% endif %}
+                            {% else %}—{% endif %}
+                        </td>
+                        <td style="text-align:right" class="mono">
+                            {% if request_money and request_money.contract_value is not none %}{{ '{:,.2f}'.format(request_money.contract_value) }} {{ request_money.currency }}{% else %}—{% endif %}
+                        </td>
+                        <td style="text-align:right" class="mono" >
+                            {% if request_money and request_money.paid %}{{ '{:,.2f}'.format(request_money.paid) }} {{ request_money.currency }}{% else %}—{% endif %}
+                        </td>
+                        <td style="text-align:right" class="mono">
+                            {% if request_money and request_money.outstanding %}<span style="color:var(--yellow)">{{ '{:,.2f}'.format(request_money.outstanding) }} {{ request_money.currency }}</span>{% else %}—{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
 
             <!-- Enhanced Trip Bookings History -->
             <div class="card">

@@ -287,19 +287,16 @@ def dashboard():
 
 @admin_bp.route('/revenue-analytics')
 def revenue_analytics():
-    """Company-wide revenue by year/month. Admin-only (see
-    ADMIN_ROLE_ONLY_ENDPOINTS in app/security.py) since this aggregates
-    money across every traveler, not just the ones an employee owns.
-    Reuses app.services.revenue's booking_revenue()/booking_recognized_at()
-    so this can never silently disagree with the per-traveler Lifetime
-    Revenue figure on travelers/detail.html about what counts as revenue.
+    """Company-wide revenue by year/month/type/source. Admin-only (see
+    ADMIN_ROLE_ONLY_ENDPOINTS in app/security.py) since this aggregates money
+    across every traveler, not just the ones an employee owns.
+
+    The aggregation itself lives in app/services/revenue_analytics.py, which
+    reuses the shared recognition rules -- so this page can never silently
+    disagree with the per-traveler revenue figure on travelers/detail.html or
+    with the money panel on a private request about what counts as revenue.
     """
-    from app.services.revenue import (
-        RECOGNIZED_PAYMENT_STATUSES,
-        REVENUE_BOOKING_STATUSES,
-        booking_recognized_at,
-        booking_revenue_breakdown,
-    )
+    from app.services.revenue_analytics import build_revenue_dashboard
 
     now = datetime.now(timezone.utc)
     try:
@@ -307,134 +304,8 @@ def revenue_analytics():
     except (TypeError, ValueError):
         selected_year = now.year
 
-    bookings = TripBooking.query.all()
-    trip_ids = {b.trip_id for b in bookings if b.trip_id}
-    trips = {t.trip_id: t for t in Trip.query.filter(Trip.trip_id.in_(trip_ids)).all()} if trip_ids else {}
-
-    history_by_booking: dict[str, list] = {}
-    for entry in BookingStatusHistory.query.order_by(BookingStatusHistory.changed_at.asc()).all():
-        history_by_booking.setdefault(entry.booking_id, []).append(entry)
-
-    def _empty_bucket() -> dict[str, float]:
-        # Every figure here is NET of refunds. Gross and refunds are carried
-        # alongside so the dashboard can show what came in, what went back,
-        # and what stayed -- one number alone cannot distinguish a quiet month
-        # from a month of heavy refunds.
-        return {
-            "USD": 0.0, "EGP": 0.0, "count": 0,
-            "USD_gross": 0.0, "EGP_gross": 0.0,
-            "USD_refunds": 0.0, "EGP_refunds": 0.0,
-        }
-
-    def _add(bucket: dict[str, float], breakdown, *, counted: bool = True) -> None:
-        bucket[breakdown.currency] += breakdown.net
-        bucket[f"{breakdown.currency}_gross"] += breakdown.gross
-        bucket[f"{breakdown.currency}_refunds"] += breakdown.refunds
-        if counted:
-            bucket["count"] += 1
-
-    yearly: dict[int, dict[str, float]] = {}
-    monthly: dict[int, dict[str, float]] = {i: _empty_bucket() for i in range(1, 13)}
-    by_trip_type: dict[str, dict[str, float]] = {}
-    available_years: set[int] = {now.year}
-    total = _empty_bucket()
-    this_month = _empty_bucket()
-    needs_attention: list[dict[str, str]] = []
-
-    for booking in bookings:
-        trip = trips.get(booking.trip_id)
-        breakdown = booking_revenue_breakdown(booking, trip)
-        if breakdown is None:
-            # Status/payment don't (yet) call for revenue at all -- e.g. a
-            # Draft or Cancelled booking -- nothing to flag. But if this
-            # booking's status/payment already say it SHOULD be revenue and
-            # it's still excluded, that's exactly the "Completed, Fully
-            # Paid, invisible" gap: currency is missing/invalid, so the
-            # breakdown never even got to look at the trip/room.
-            booking_status_lower = str(booking.booking_status or "").strip().lower()
-            payment_status_lower = str(booking.payment_status or "").strip().lower()
-            if booking_status_lower in REVENUE_BOOKING_STATUSES and payment_status_lower in RECOGNIZED_PAYMENT_STATUSES:
-                missing = booking.compute_missing_fields()
-                if missing:
-                    needs_attention.append({
-                        "booking_id": booking.booking_id,
-                        "traveler_name": booking.traveler_name or "Unknown traveler",
-                        "reason": "Missing " + ", ".join(missing) + ".",
-                    })
-            continue
-        currency = breakdown.currency
-        # Judged on GROSS, deliberately. A fully refunded booking nets zero
-        # while being perfectly well configured -- checking net here would
-        # accuse every completed refund of having no price set.
-        if breakdown.gross <= 0:
-            # Currency/trip/room are all valid, but the trip has no price
-            # configured for this room + currency combination -- the same
-            # class of gap, just discovered one step later.
-            needs_attention.append({
-                "booking_id": booking.booking_id,
-                "traveler_name": booking.traveler_name or "Unknown traveler",
-                "reason": "No price configured for this room/currency combination.",
-            })
-        elif breakdown.refund_exceeds_gross:
-            # Predates the Phase 2 ceiling. Only the booking's own value is
-            # deducted, so totals stay sane, but the record needs a human.
-            needs_attention.append({
-                "booking_id": booking.booking_id,
-                "traveler_name": booking.traveler_name or "Unknown traveler",
-                "reason": (
-                    f"Recorded refund ({breakdown.refunds_recorded:,.2f} {currency}) is larger than "
-                    f"the booking value ({breakdown.gross:,.2f} {currency})."
-                ),
-            })
-        recognized_at = booking_recognized_at(booking, history_by_booking)
-        if not recognized_at:
-            continue
-        year = recognized_at.year
-        available_years.add(year)
-
-        _add(yearly.setdefault(year, _empty_bucket()), breakdown)
-        _add(total, breakdown)
-
-        if year == now.year and recognized_at.month == now.month:
-            _add(this_month, breakdown, counted=False)
-
-        if year == selected_year:
-            _add(monthly[recognized_at.month], breakdown)
-
-        trip_type = str(trip.type).strip().title() if trip and trip.type else "Unspecified"
-        _add(by_trip_type.setdefault(trip_type, _empty_bucket()), breakdown)
-
-    years_sorted = sorted(available_years, reverse=True)
-    yearly_rows = [
-        {"year": year, **yearly.get(year, _empty_bucket())}
-        for year in years_sorted
-    ]
-    monthly_rows = [
-        {"month": month, "label": datetime(2000, month, 1).strftime("%b"), **monthly[month]}
-        for month in range(1, 13)
-    ]
-    max_monthly_usd = max((row["USD"] for row in monthly_rows), default=0.0) or 1.0
-    max_monthly_egp = max((row["EGP"] for row in monthly_rows), default=0.0) or 1.0
-    for row in monthly_rows:
-        row["usd_bar_pct"] = round(min(row["USD"] / max_monthly_usd, 1.0) * 100, 1)
-        row["egp_bar_pct"] = round(min(row["EGP"] / max_monthly_egp, 1.0) * 100, 1)
-
-    trip_type_rows = sorted(by_trip_type.items(), key=lambda item: -(item[1]["USD"] + item[1]["EGP"]))
-
-    return render_template(
-        'admin/revenue_analytics.html',
-        total=total,
-        this_year=yearly.get(now.year, _empty_bucket()),
-        this_month=this_month,
-        yearly_rows=yearly_rows,
-        monthly_rows=monthly_rows,
-        trip_type_rows=trip_type_rows,
-        selected_year=selected_year,
-        available_years=years_sorted,
-        current_year=now.year,
-        current_month_label=now.strftime("%B %Y"),
-        needs_attention=needs_attention,
-    )
+    dashboard = build_revenue_dashboard(selected_year=selected_year, now=now)
+    return render_template('admin/revenue_analytics.html', **dashboard)
 
 
 from app.models.copy_library import DMCopyLibrary, LanguageTemplate

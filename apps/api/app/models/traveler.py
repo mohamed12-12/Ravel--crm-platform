@@ -29,6 +29,11 @@ class Traveler(db.Model):
     local_trips_count = db.Column(db.Integer, default=0)
     international_trips_count = db.Column(db.Integer, default=0)
     total_trips = db.Column(db.Integer, default=0)
+    # Private/custom trips this traveler has taken. Counted separately from
+    # local/international (which are derived from trip bookings) because a
+    # private trip has no Trip row to take a type from, and left out of
+    # total_trips so that figure keeps meaning exactly what it always has.
+    private_trips_count = db.Column(db.Integer, default=0)
     community_events_count = db.Column(db.Integer, default=0)
     lifetime_revenue = db.Column(db.Float, default=0.0)
     preferred_currency = db.Column(db.String(20))
@@ -205,6 +210,7 @@ class Traveler(db.Model):
             "local_trips_count": self.local_trips_count,
             "international_trips_count": self.international_trips_count,
             "total_trips": self.total_trips,
+            "private_trips_count": self.private_trips_count or 0,
             "community_events_count": self.community_events_count,
             "lifetime_revenue": self.lifetime_revenue,
             "preferred_currency": self.preferred_currency,

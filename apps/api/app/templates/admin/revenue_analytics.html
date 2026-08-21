@@ -2,174 +2,540 @@
 {% block title %}Revenue Analytics — Nanovate CRM{% endblock %}
 {% block topbar_title %}Revenue Analytics{% endblock %}
 
+{#
+  Every figure on this page is per currency. USD and EGP are never added
+  together and no exchange rate is applied anywhere -- there isn't one in this
+  system, deliberately.
+
+  Two things earn money and they are recognized differently, which the page
+  says out loud rather than blending: a trip booking is recognized when its
+  status says it is sold (price x party size, plus fees, less refunds), while a
+  private trip is recognized as its payments actually arrive. An agreed private
+  price is never revenue; it appears only under Collections, labelled as money
+  still to collect.
+#}
+
+{# A negative figure is always shown as negative. A month can genuinely net
+   below zero -- a refund recorded in a period with no payments behind it --
+   and printing that as a positive number would be a lie about money. #}
+{% macro money(amount, currency) -%}
+{%- set minus = '-' if amount < 0 else '' -%}
+{%- if currency == 'USD' -%}
+{{ minus }}${{ '{:,.2f}'.format(amount|abs) }}
+{%- else -%}
+{{ minus }}{{ '{:,.2f}'.format(amount|abs) }} EGP
+{%- endif -%}
+{%- endmacro %}
+
+{% macro compact(amount, currency) -%}
+{%- if currency == 'USD' -%}${{ '{:,.0f}'.format(amount) }}{%- else -%}{{ '{:,.0f}'.format(amount) }} EGP{%- endif -%}
+{%- endmacro %}
+
 {% block content %}
 <style>
-    .rev-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
-    @media (max-width: 900px) { .rev-grid { grid-template-columns: repeat(2, 1fr); } }
+    .rev-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+    @media (max-width: 1100px) { .rev-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 620px) { .rev-grid { grid-template-columns: minmax(0, 1fr); } }
 
-    .rev-section { margin-bottom: 1.75rem; }
+    .rev-section { margin-bottom: 1.5rem; }
     .rev-section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.9rem; flex-wrap: wrap; gap: 0.75rem; }
     .rev-section-title { font-size: 1rem; font-weight: 800; color: var(--text-main); }
+    .rev-section-note { color: var(--text-muted); font-size: 0.78rem; }
 
     .rev-year-picker { display: flex; gap: 0.4rem; flex-wrap: wrap; }
-    .rev-year-pill {
-        padding: 0.35rem 0.9rem; border-radius: 999px; font-size: 0.82rem; font-weight: 700;
-        border: 1px solid var(--border); color: var(--text-muted); text-decoration: none;
-    }
+    .rev-year-pill { padding: 0.35rem 0.9rem; border-radius: 999px; font-size: 0.82rem; font-weight: 700; border: 1px solid var(--border); color: var(--text-muted); text-decoration: none; }
     .rev-year-pill.active { background: var(--accent); color: #06120f; border-color: var(--accent); }
     .rev-year-pill:hover:not(.active) { border-color: var(--accent-2); color: var(--text-main); }
 
     .rev-table { width: 100%; border-collapse: collapse; }
-    .rev-table th, .rev-table td { padding: 0.65rem 0.9rem; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.86rem; }
-    .rev-table th { color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
-    .rev-table td.num { text-align: right; font-family: 'JetBrains Mono', monospace; color: var(--text-main); }
+    .rev-table th, .rev-table td { padding: 0.6rem 0.8rem; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+    .rev-table th { color: var(--text-muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
+    .rev-table td.num { text-align: right; font-family: 'JetBrains Mono', monospace; color: var(--text-main); white-space: nowrap; }
+    .rev-table td.num.dim { color: var(--text-muted); }
+    .rev-table td.num.neg { color: var(--red); }
     .rev-table tbody tr:hover { background: rgba(255,255,255,0.02); }
+    .rev-scroll { overflow-x: auto; }
 
-    .rev-bars { display: flex; align-items: flex-end; gap: 0.75rem; height: 200px; padding: 0.5rem 0.5rem 0; overflow-x: auto; }
-    .rev-bar-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; flex: 1; min-width: 42px; height: 100%; }
-    .rev-bar-stack { display: flex; align-items: flex-end; gap: 3px; height: 150px; }
-    .rev-bar { width: 12px; border-radius: 3px 3px 0 0; min-height: 2px; transition: height 0.3s ease; }
-    .rev-bar.usd { background: var(--accent); }
-    .rev-bar.egp { background: var(--accent-2); opacity: 0.75; }
-    .rev-bar-month-label { font-size: 0.68rem; color: var(--text-muted); margin-top: 0.5rem; font-weight: 700; }
-    .rev-legend { display: flex; gap: 1.25rem; font-size: 0.78rem; color: var(--text-muted); margin-top: 0.75rem; }
-    .rev-legend-dot { display: inline-block; width: 8px; height: 8px; border-radius: 999px; margin-right: 0.4rem; }
+    .rev-split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+    @media (max-width: 1000px) { .rev-split { grid-template-columns: minmax(0, 1fr); } }
+
+    .rev-chart { width: 100%; height: auto; display: block; }
+    .rev-chart-title { font-size: 0.78rem; font-weight: 700; color: var(--text-dim); margin-bottom: 0.4rem; }
+    .rev-axis { fill: var(--text-muted); font-size: 10px; font-family: 'JetBrains Mono', monospace; }
+    .rev-grid-line { stroke: rgba(255,255,255,0.07); stroke-width: 1; }
+    .rev-legend { display: flex; gap: 1.1rem; font-size: 0.75rem; color: var(--text-muted); margin-top: 0.6rem; flex-wrap: wrap; }
+    .rev-dot { display: inline-block; width: 8px; height: 8px; border-radius: 999px; margin-right: 0.35rem; }
+
+    .rev-mix { display: flex; flex-direction: column; gap: 0.6rem; }
+    .rev-mix-row { display: grid; grid-template-columns: 1fr auto; gap: 0.4rem 0.75rem; align-items: center; }
+    .rev-mix-label { font-size: 0.8rem; color: var(--text-dim); }
+    .rev-mix-value { font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--text-main); }
+    .rev-mix-track { grid-column: 1 / -1; height: 6px; border-radius: 999px; background: rgba(255,255,255,0.06); overflow: hidden; }
+    .rev-mix-fill { height: 100%; border-radius: 999px; }
+
+    .rev-donut-wrap { display: flex; align-items: center; gap: 1.1rem; flex-wrap: wrap; }
+    .rev-donut { transform: rotate(-90deg); }
+    .rev-donut-total { font-size: 0.72rem; color: var(--text-muted); }
+
+    .rev-metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem 1.25rem; }
+    .rev-metric-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700; }
+    .rev-metric-value { font-size: 1.05rem; font-weight: 800; color: var(--text-main); font-family: 'JetBrains Mono', monospace; }
+    .rev-metric-note { font-size: 0.7rem; color: var(--text-muted); }
+    .rev-up { color: var(--green); }
+    .rev-down { color: var(--red); }
+    .rev-unknown { color: var(--text-muted); font-style: italic; }
 </style>
 
+{# ---------------------------------------------------------------- KPIs #}
 <div class="rev-grid">
-    {# Every figure on this page is net of refunds. Gross and refunds are shown
-       beneath the headline so the netting is visible rather than implied. #}
+    {% for currency in currencies %}
     <div class="kpi-card">
-        <div class="kpi-label">Total Net Revenue (USD)</div>
-        <div class="kpi-value">${{ '%.2f'|format(total.USD) }}</div>
+        <div class="kpi-label">Total Net Revenue ({{ currency }})</div>
+        <div class="kpi-value">{{ money(total[currency], currency) }}</div>
         <div class="kpi-sub">
             All-time, after refunds
-            {% if total.USD_refunds > 0 %}
-            <br>${{ '%.2f'|format(total.USD_gross) }} gross − ${{ '%.2f'|format(total.USD_refunds) }} refunded
+            {% if total[currency ~ '_refunds'] > 0 %}
+            <br>{{ money(total[currency ~ '_gross'], currency) }} gross −
+            {{ money(total[currency ~ '_refunds'], currency) }} refunded
+            {% endif %}
+            {% if total[currency ~ '_fees'] > 0 %}
+            <br>includes {{ money(total[currency ~ '_fees'], currency) }} additional fees
             {% endif %}
         </div>
     </div>
-    <div class="kpi-card">
-        <div class="kpi-label">Total Net Revenue (EGP)</div>
-        <div class="kpi-value">{{ '%.2f'|format(total.EGP) }}</div>
-        <div class="kpi-sub">
-            All-time, after refunds
-            {% if total.EGP_refunds > 0 %}
-            <br>{{ '%.2f'|format(total.EGP_gross) }} gross − {{ '%.2f'|format(total.EGP_refunds) }} refunded
-            {% endif %}
-        </div>
-    </div>
+    {% endfor %}
     <div class="kpi-card">
         <div class="kpi-label">This Year ({{ current_year }})</div>
-        <div class="kpi-value">${{ '%.0f'|format(this_year.USD) }} <span style="font-size:0.9rem;color:var(--text-muted)">/ {{ '%.0f'|format(this_year.EGP) }} EGP</span></div>
+        <div class="kpi-value">{{ compact(this_year['USD'], 'USD') }} <span style="font-size:0.9rem;color:var(--text-muted)">/ {{ compact(this_year['EGP'], 'EGP') }}</span></div>
         <div class="kpi-sub">
-            {{ this_year.count }} recognized booking{{ 's' if this_year.count != 1 else '' }}
+            {{ this_year.count }} recognized entr{{ 'y' if this_year.count == 1 else 'ies' }}
             {% if needs_attention %}<br><span style="color:var(--red)">{{ needs_attention|length }} need{{ 's' if needs_attention|length == 1 else '' }} attention ↓</span>{% endif %}
         </div>
     </div>
     <div class="kpi-card">
         <div class="kpi-label">This Month</div>
-        <div class="kpi-value">${{ '%.0f'|format(this_month.USD) }} <span style="font-size:0.9rem;color:var(--text-muted)">/ {{ '%.0f'|format(this_month.EGP) }} EGP</span></div>
-        <div class="kpi-sub">{{ current_month_label }}</div>
+        <div class="kpi-value">{{ compact(this_month['USD'], 'USD') }} <span style="font-size:0.9rem;color:var(--text-muted)">/ {{ compact(this_month['EGP'], 'EGP') }}</span></div>
+        <div class="kpi-sub">
+            {{ current_month_label }}
+            {% for currency in currencies %}
+                {% set change = insights[currency].month_change %}
+                {% if change is not none %}
+                <br><span class="{{ 'rev-up' if insights[currency].month_direction == 'up' else 'rev-down' }}">
+                    {{ '▲' if insights[currency].month_direction == 'up' else '▼' }} {{ '{:,.1f}'.format(change|abs) }}% {{ currency }}
+                </span> vs last month
+                {% endif %}
+            {% endfor %}
+        </div>
     </div>
 </div>
 
+{# ------------------------------------------------------ Needs attention #}
 {% if needs_attention %}
-<div class="card rev-section" style="border:1px solid rgba(220,50,50,0.35)">
+<div class="card rev-section" style="border:1px solid rgba(239,68,68,0.35)">
     <div class="rev-section-header">
         <span class="rev-section-title" style="color:var(--red)">Needs Attention</span>
-        <span style="color:var(--text-muted);font-size:0.8rem">Recognized bookings not contributing real revenue yet</span>
+        <span class="rev-section-note">Money that looks like revenue but is not being counted</span>
     </div>
+    <div class="rev-scroll">
     <table class="rev-table">
-        <thead><tr><th>Booking ID</th><th>Traveler</th><th>Reason</th><th></th></tr></thead>
+        <thead><tr><th>Record</th><th>Customer</th><th>Why it is excluded</th><th></th></tr></thead>
         <tbody>
         {% for item in needs_attention %}
             <tr>
-                <td class="mono">{{ item.booking_id }}</td>
-                <td>{{ item.traveler_name }}</td>
+                <td class="mono">{{ item.record_id }}</td>
+                <td>{{ item.party }}</td>
                 <td style="color:var(--text-dim)">{{ item.reason }}</td>
-                <td><a href="{{ url_for('bookings.detail', booking_id=item.booking_id) }}" class="btn btn-ghost btn-sm">Fix Booking</a></td>
+                <td><a href="{{ url_for(item.url_endpoint, **item.url_kwargs) }}" class="btn btn-ghost btn-sm">{{ item.action }}</a></td>
             </tr>
         {% endfor %}
         </tbody>
     </table>
+    </div>
 </div>
 {% endif %}
 
+{# ------------------------------------------------------------- Trend #}
 <div class="card rev-section">
     <div class="rev-section-header">
-        <span class="rev-section-title">Monthly breakdown</span>
+        <span class="rev-section-title">Monthly trend</span>
         <div class="rev-year-picker">
             {% for year in available_years %}
             <a href="{{ url_for('admin.revenue_analytics', year=year) }}" class="rev-year-pill {% if year == selected_year %}active{% endif %}">{{ year }}</a>
             {% endfor %}
         </div>
     </div>
-    <div class="rev-bars">
-        {% for row in monthly_rows %}
-        <div class="rev-bar-col">
-            <div class="rev-bar-stack" title="{{ row.label }} {{ selected_year }}: ${{ '%.2f'|format(row.USD) }} / {{ '%.2f'|format(row.EGP) }} EGP ({{ row.count }} booking{{ 's' if row.count != 1 else '' }})">
-                <div class="rev-bar usd" style="height:{{ row.usd_bar_pct }}%"></div>
-                <div class="rev-bar egp" style="height:{{ row.egp_bar_pct }}%"></div>
+    <div class="rev-split">
+        {% for currency in currencies %}
+        {% set chart = charts.trend[currency] %}
+        <div>
+            <div class="rev-chart-title">{{ currency }} — {{ selected_year }}</div>
+            {% if chart.has_data %}
+            <svg class="rev-chart" viewBox="0 0 720 200" role="img"
+                 aria-label="{{ currency }} net revenue by month for {{ selected_year }}">
+                {% for line in chart.gridlines %}
+                <line class="rev-grid-line" x1="{{ chart.plot_left }}" y1="{{ line.y }}" x2="{{ chart.plot_right }}" y2="{{ line.y }}"></line>
+                <text class="rev-axis" x="4" y="{{ line.y + 3 }}">{{ '{:,.0f}'.format(line.value) }}</text>
+                {% endfor %}
+                <path d="{{ chart.area }}" fill="rgba(0,208,146,0.16)"></path>
+                <polyline points="{{ chart.gross_polyline }}" fill="none" stroke="rgba(255,255,255,0.28)"
+                          stroke-width="1.5" stroke-dasharray="4 4"></polyline>
+                <polyline points="{{ chart.polyline }}" fill="none" stroke="var(--accent)" stroke-width="2.5"
+                          stroke-linejoin="round" stroke-linecap="round"></polyline>
+                {% for point in chart.points %}
+                <circle cx="{{ point.x }}" cy="{{ point.y }}" r="3.2" fill="var(--accent)">
+                    <title>{{ point.label }} {{ selected_year }}: net {{ money(point.net, currency) }}{% if point.refunds %} (received {{ money(point.gross, currency) }}, refunded {{ money(point.refunds, currency) }}){% endif %}</title>
+                </circle>
+                {% endfor %}
+                {% for label in chart.labels %}
+                <text class="rev-axis" x="{{ label.x }}" y="196" text-anchor="middle">{{ label.label }}</text>
+                {% endfor %}
+            </svg>
+            <div class="rev-legend">
+                <span><span class="rev-dot" style="background:var(--accent)"></span>Net revenue</span>
+                <span><span class="rev-dot" style="background:rgba(255,255,255,0.4)"></span>Received before refunds</span>
             </div>
-            <div class="rev-bar-month-label">{{ row.label }}</div>
+            {% else %}
+            <p style="color:var(--text-muted);font-size:0.83rem;padding:2rem 0">No {{ currency }} revenue recognized in {{ selected_year }}.</p>
+            {% endif %}
         </div>
         {% endfor %}
     </div>
-    <div class="rev-legend">
-        <span><span class="rev-legend-dot" style="background:var(--accent)"></span>USD</span>
-        <span><span class="rev-legend-dot" style="background:var(--accent-2);opacity:0.75"></span>EGP</span>
-    </div>
-    <table class="rev-table" style="margin-top:1.25rem">
-        <thead><tr><th>Month</th><th class="num">USD</th><th class="num">EGP</th><th class="num">Bookings</th></tr></thead>
+
+    <div class="rev-scroll" style="margin-top:1.25rem">
+    <table class="rev-table">
+        <thead><tr>
+            <th>Month</th>
+            {% for currency in currencies %}<th class="num">{{ currency }} net</th><th class="num">Refunds</th>{% endfor %}
+            <th class="num">Entries</th>
+        </tr></thead>
         <tbody>
         {% for row in monthly_rows %}
             <tr>
                 <td>{{ row.label }} {{ selected_year }}</td>
-                <td class="num">${{ '%.2f'|format(row.USD) }}</td>
-                <td class="num">{{ '%.2f'|format(row.EGP) }}</td>
+                {% for currency in currencies %}
+                <td class="num">{{ money(row[currency], currency) }}</td>
+                <td class="num {{ 'neg' if row[currency ~ '_refunds'] > 0 else 'dim' }}">
+                    {% if row[currency ~ '_refunds'] > 0 %}-{{ '{:,.2f}'.format(row[currency ~ '_refunds']) }}{% else %}—{% endif %}
+                </td>
+                {% endfor %}
                 <td class="num">{{ row.count }}</td>
             </tr>
         {% endfor %}
         </tbody>
     </table>
+    </div>
 </div>
 
+{# --------------------------------------------------- Mix and analysis #}
+<div class="rev-split rev-section">
+    <div class="card">
+        <div class="rev-section-header">
+            <span class="rev-section-title">Where the money comes from</span>
+            <span class="rev-section-note">Net, all time, by trip type</span>
+        </div>
+        <div class="rev-split" style="gap:1.25rem">
+            {% for currency in currencies %}
+            {% set donut = charts.category[currency] %}
+            <div>
+                <div class="rev-chart-title">{{ currency }}</div>
+                {% if donut.has_data %}
+                <div class="rev-donut-wrap">
+                    <svg class="rev-donut" width="140" height="140" viewBox="0 0 140 140" role="img"
+                         aria-label="{{ currency }} revenue share by trip type">
+                        <circle cx="70" cy="70" r="{{ donut.radius }}" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="22"></circle>
+                        {% for segment in donut.segments %}
+                        <circle cx="70" cy="70" r="{{ donut.radius }}" fill="none" stroke="{{ segment.color }}"
+                                stroke-width="22" stroke-dasharray="{{ segment.dash }}" stroke-dashoffset="{{ segment.offset }}">
+                            <title>{{ segment.label }}: {{ money(segment.value, currency) }} ({{ segment.share }}%)</title>
+                        </circle>
+                        {% endfor %}
+                    </svg>
+                    <div class="rev-mix" style="flex:1;min-width:170px">
+                        {% for segment in donut.segments %}
+                        <div class="rev-mix-row">
+                            <span class="rev-mix-label"><span class="rev-dot" style="background:{{ segment.color }}"></span>{{ segment.label }}</span>
+                            <span class="rev-mix-value">{{ segment.share }}%</span>
+                            <span class="rev-mix-track"><span class="rev-mix-fill" style="width:{{ segment.share }}%;background:{{ segment.color }}"></span></span>
+                        </div>
+                        {% endfor %}
+                        <div class="rev-donut-total">Total {{ money(donut.total, currency) }}</div>
+                    </div>
+                </div>
+                {% else %}
+                <p style="color:var(--text-muted);font-size:0.83rem">No {{ currency }} revenue yet.</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="rev-scroll" style="margin-top:1.25rem">
+        <table class="rev-table">
+            <thead><tr><th>Trip type</th>{% for currency in currencies %}<th class="num">{{ currency }}</th>{% endfor %}<th class="num">Entries</th></tr></thead>
+            <tbody>
+            {% for label, bucket in category_rows %}
+                <tr>
+                    <td>{{ label }}</td>
+                    {% for currency in currencies %}<td class="num">{{ money(bucket[currency], currency) }}</td>{% endfor %}
+                    <td class="num">{{ bucket.count }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No recognized revenue yet.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="rev-section-header">
+            <span class="rev-section-title">Analysis</span>
+            <span class="rev-section-note">Each figure is a ratio of two numbers on this page</span>
+        </div>
+        {% for currency in currencies %}
+        {% set metric = insights[currency] %}
+        <div style="margin-bottom:1.1rem">
+            <div class="rev-chart-title">{{ currency }}</div>
+            <div class="rev-metric-grid">
+                <div>
+                    <div class="rev-metric-label">Refund rate</div>
+                    <div class="rev-metric-value">{{ metric.refund_rate }}%</div>
+                    <div class="rev-metric-note">{{ money(metric.refunds, currency) }} of {{ money(metric.gross, currency) }} received</div>
+                </div>
+                <div>
+                    <div class="rev-metric-label">Fees share</div>
+                    <div class="rev-metric-value">{{ metric.fee_share }}%</div>
+                    <div class="rev-metric-note">{{ money(metric.fees, currency) }} from additional fees</div>
+                </div>
+                <div>
+                    <div class="rev-metric-label">Avg per entry</div>
+                    <div class="rev-metric-value">{{ money(metric.average_value, currency) }}</div>
+                    <div class="rev-metric-note">{{ total.count }} recognized entries</div>
+                </div>
+                <div>
+                    <div class="rev-metric-label">{{ selected_year }} vs {{ selected_year - 1 }}</div>
+                    {% if metric.year_change is none %}
+                    <div class="rev-metric-value rev-unknown">n/a</div>
+                    <div class="rev-metric-note">No {{ selected_year - 1 }} revenue to compare</div>
+                    {% else %}
+                    <div class="rev-metric-value {{ 'rev-up' if metric.year_direction == 'up' else 'rev-down' }}">
+                        {{ '▲' if metric.year_direction == 'up' else '▼' }} {{ '{:,.1f}'.format(metric.year_change|abs) }}%
+                    </div>
+                    <div class="rev-metric-note">Year on year</div>
+                    {% endif %}
+                </div>
+                <div>
+                    <div class="rev-metric-label">Still to collect</div>
+                    <div class="rev-metric-value">{{ money(metric.outstanding, currency) }}</div>
+                    <div class="rev-metric-note">Private trips, agreed but unpaid</div>
+                </div>
+                <div>
+                    <div class="rev-metric-label">Collection rate</div>
+                    <div class="rev-metric-value">{{ metric.collection_rate }}%</div>
+                    <div class="rev-metric-note">Of agreed private trip value</div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+
+        <div class="rev-section-header" style="margin-top:0.5rem">
+            <span class="rev-section-title" style="font-size:0.88rem">By source</span>
+        </div>
+        <div class="rev-mix">
+            {% for label, bucket in source_rows %}
+            {# Share of USD net, clamped to 0-100: a period can net below zero
+               (a refund with no payment behind it), and a negative bar width
+               would be meaningless rather than merely small. #}
+            {% set usd_share = ((bucket['USD'] / total['USD'] * 100) if total['USD'] else 0) %}
+            <div class="rev-mix-row">
+                <span class="rev-mix-label">{{ label }}</span>
+                <span class="rev-mix-value">{{ compact(bucket['USD'], 'USD') }} / {{ compact(bucket['EGP'], 'EGP') }}</span>
+                <span class="rev-mix-track">
+                    <span class="rev-mix-fill" style="width:{{ [[usd_share, 0]|max, 100]|min }}%;background:var(--accent)"></span>
+                </span>
+            </div>
+            {% else %}
+            <p style="color:var(--text-muted);font-size:0.83rem">Nothing recognized yet.</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+{# --------------------------------------------------------- Collections #}
 <div class="card rev-section">
-    <div class="rev-section-header"><span class="rev-section-title">Yearly totals</span></div>
+    <div class="rev-section-header">
+        <span class="rev-section-title">Private trip collections</span>
+        <span class="rev-section-note">
+            Agreed price is <strong>not</strong> revenue — only the money received above is.
+            {{ pipeline.open_requests }} request{{ 's' if pipeline.open_requests != 1 else '' }} still open.
+        </span>
+    </div>
+    <div class="rev-grid" style="margin-bottom:1rem">
+        {% for currency in currencies %}
+        <div class="kpi-card">
+            <div class="kpi-label">Agreed ({{ currency }})</div>
+            <div class="kpi-value" style="font-size:1.5rem">{{ money(pipeline.agreed[currency], currency) }}</div>
+            <div class="kpi-sub">Price plus fees, all private trips</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Outstanding ({{ currency }})</div>
+            <div class="kpi-value" style="font-size:1.5rem;{% if pipeline.outstanding[currency] > 0 %}color:var(--yellow){% endif %}">{{ money(pipeline.outstanding[currency], currency) }}</div>
+            <div class="kpi-sub">{{ pipeline.collection_rate[currency] }}% collected</div>
+        </div>
+        {% endfor %}
+    </div>
+    {% if pipeline.unpriced_with_money %}
+    <p style="color:var(--yellow);font-size:0.8rem;margin-bottom:0.75rem">
+        {{ pipeline.unpriced_with_money }} private request{{ 's' if pipeline.unpriced_with_money != 1 else '' }}
+        {{ 'have' if pipeline.unpriced_with_money != 1 else 'has' }} money received but no agreed price, so
+        {{ 'their' if pipeline.unpriced_with_money != 1 else 'its' }} outstanding balance is unknown and excluded above.
+    </p>
+    {% endif %}
+    {% if pipeline.balances %}
+    <div class="rev-scroll">
     <table class="rev-table">
-        <thead><tr><th>Year</th><th class="num">USD</th><th class="num">EGP</th><th class="num">Bookings</th></tr></thead>
+        <thead><tr><th>Request</th><th>Customer</th><th>Destination</th><th>Stage</th><th>Status</th><th class="num">Total</th><th class="num">Paid</th><th class="num">Outstanding</th><th></th></tr></thead>
         <tbody>
-        {% for row in yearly_rows %}
+        {% for row in pipeline.balances %}
             <tr>
-                <td>{{ row.year }}</td>
-                <td class="num">${{ '%.2f'|format(row.USD) }}</td>
-                <td class="num">{{ '%.2f'|format(row.EGP) }}</td>
-                <td class="num">{{ row.count }}</td>
+                <td class="mono">{{ row.record_id }}</td>
+                <td>{{ row.party }}</td>
+                <td>{{ row.destination }}</td>
+                <td style="color:var(--text-dim)">{{ row.stage.replace('_', ' ')|title }}</td>
+                <td>
+                    {% if row.payment_status == 'Fully Paid' %}<span class="badge badge-green">{{ row.payment_status }}</span>
+                    {% elif row.payment_status == 'Deposit Paid' %}<span class="badge badge-yellow">{{ row.payment_status }}</span>
+                    {% elif 'Refund' in row.payment_status %}<span class="badge badge-red">{{ row.payment_status }}</span>
+                    {% else %}<span class="badge badge-gray">{{ row.payment_status }}</span>{% endif %}
+                </td>
+                <td class="num">{{ money(row.contract_value, row.currency) }}</td>
+                <td class="num">{{ money(row.paid, row.currency) }}</td>
+                <td class="num" style="color:var(--yellow)">{{ money(row.outstanding, row.currency) }}</td>
+                <td><a href="{{ url_for('private_requests.detail', request_id=row.record_id) }}" class="btn btn-ghost btn-sm">Open</a></td>
             </tr>
-        {% else %}
-            <tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No recognized revenue yet.</td></tr>
         {% endfor %}
         </tbody>
     </table>
+    </div>
+    {% if pipeline.balance_total > pipeline.balances|length %}
+    <p class="rev-section-note" style="margin-top:0.6rem">
+        Showing the {{ pipeline.balances|length }} largest of {{ pipeline.balance_total }} outstanding balances.
+    </p>
+    {% endif %}
+    {% else %}
+    <p style="color:var(--text-muted);font-size:0.83rem">Nothing outstanding on private trips.</p>
+    {% endif %}
 </div>
 
+{# ------------------------------------------------- Payments & refunds #}
 <div class="card rev-section">
-    <div class="rev-section-header"><span class="rev-section-title">By trip type</span></div>
+    <div class="rev-section-header">
+        <span class="rev-section-title">Payments and refunds — {{ selected_year }}</span>
+        <span class="rev-section-note">Every recorded movement of money, both bookings and private trips</span>
+    </div>
+    {% if transactions %}
+    <div class="rev-scroll">
     <table class="rev-table">
-        <thead><tr><th>Trip Type</th><th class="num">USD</th><th class="num">EGP</th><th class="num">Bookings</th></tr></thead>
+        <thead><tr><th>Date</th><th>Type</th><th>Reference</th><th>Source</th><th>Record</th><th>Customer</th><th class="num">Amount</th><th></th></tr></thead>
         <tbody>
-        {% for trip_type, totals in trip_type_rows %}
-            <tr>
-                <td>{{ trip_type }}</td>
-                <td class="num">${{ '%.2f'|format(totals.USD) }}</td>
-                <td class="num">{{ '%.2f'|format(totals.EGP) }}</td>
-                <td class="num">{{ totals.count }}</td>
+        {% for entry in transactions %}
+            <tr {% if entry.is_reversal or entry.is_reversed %}style="opacity:0.55"{% endif %}>
+                <td>{{ entry.occurred_on.strftime('%d %b %Y') if entry.occurred_on else '—' }}</td>
+                <td>
+                    {% if entry.is_payment %}<span class="badge badge-green">Payment</span>
+                    {% else %}<span class="badge badge-red">Refund</span>{% endif %}
+                    {% if entry.is_reversal %}<span class="badge badge-gray">Correction</span>{% endif %}
+                    {% if entry.is_reversed %}<span class="badge badge-gray">Reversed</span>{% endif %}
+                </td>
+                <td class="mono">{{ entry.reference }}</td>
+                <td style="color:var(--text-dim)">{{ entry.source }}</td>
+                <td class="mono">{{ entry.record_id }}</td>
+                <td>{{ entry.party or '—' }}</td>
+                <td class="num {{ '' if entry.is_payment else 'neg' }}">
+                    {{ '' if entry.is_payment else '-' }}{{ money(entry.amount, entry.currency) }}
+                </td>
+                <td><a href="{{ url_for(entry.url_endpoint, **entry.url_kwargs) }}" class="btn btn-ghost btn-sm">Open</a></td>
             </tr>
-        {% else %}
-            <tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No recognized revenue yet.</td></tr>
         {% endfor %}
         </tbody>
     </table>
+    </div>
+    {% if transaction_total > transactions|length %}
+    <p class="rev-section-note" style="margin-top:0.6rem">
+        Showing the {{ transactions|length }} most recent of {{ transaction_total }} movements in {{ selected_year }}.
+    </p>
+    {% endif %}
+    {% else %}
+    <p style="color:var(--text-muted);font-size:0.83rem">
+        No payments or refunds recorded in {{ selected_year }}.
+        Booking payments predating the ledger are not itemized here — the monthly figures above still include them.
+    </p>
+    {% endif %}
+</div>
+
+{# --------------------------------------------------- Yearly + top rows #}
+<div class="rev-split rev-section">
+    <div class="card">
+        <div class="rev-section-header"><span class="rev-section-title">Yearly totals</span></div>
+        <div class="rev-scroll">
+        <table class="rev-table">
+            <thead><tr><th>Year</th>{% for currency in currencies %}<th class="num">{{ currency }}</th>{% endfor %}<th class="num">Entries</th></tr></thead>
+            <tbody>
+            {% for row in yearly_rows %}
+                <tr>
+                    <td>{{ row.year }}</td>
+                    {% for currency in currencies %}<td class="num">{{ money(row[currency], currency) }}</td>{% endfor %}
+                    <td class="num">{{ row.count }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No recognized revenue yet.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="rev-section-header">
+            <span class="rev-section-title">Top earners</span>
+            <span class="rev-section-note">Net, all time</span>
+        </div>
+        <div class="rev-scroll">
+        <table class="rev-table">
+            <thead><tr><th>Trip</th>{% for currency in currencies %}<th class="num">{{ currency }}</th>{% endfor %}</tr></thead>
+            <tbody>
+            {% for label, bucket in top_rows %}
+                <tr>
+                    <td>{{ label }}</td>
+                    {% for currency in currencies %}
+                    <td class="num {{ 'dim' if not bucket[currency] else '' }}">{% if bucket[currency] %}{{ money(bucket[currency], currency) }}{% else %}—{% endif %}</td>
+                    {% endfor %}
+                </tr>
+            {% else %}
+                <tr><td colspan="3" style="text-align:center;color:var(--text-muted)">No recognized revenue yet.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% if method_rows %}
+        <div class="rev-section-header" style="margin:1rem 0 0.5rem">
+            <span class="rev-section-title" style="font-size:0.88rem">Private trip payment methods</span>
+        </div>
+        <div class="rev-scroll">
+        <table class="rev-table">
+            <thead><tr><th>Method</th>{% for currency in currencies %}<th class="num">{{ currency }} received</th>{% endfor %}</tr></thead>
+            <tbody>
+            {% for method, bucket in method_rows %}
+                <tr>
+                    <td>{{ method.replace('_', ' ')|title }}</td>
+                    {% for currency in currencies %}
+                    <td class="num {{ 'dim' if not bucket[currency ~ '_gross'] else '' }}">{% if bucket[currency ~ '_gross'] %}{{ money(bucket[currency ~ '_gross'], currency) }}{% else %}—{% endif %}</td>
+                    {% endfor %}
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% endif %}
+    </div>
 </div>
 {% endblock %}

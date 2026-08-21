@@ -18,12 +18,15 @@ from dataclasses import replace
 from pathlib import Path
 
 from flask import current_app
+from sqlalchemy import update
 
 from app.extensions import db
 from app.models.booking import CEBooking, TripBooking
+from app.models.private_trip_request import PrivateTripRequest
 from app.models.traveler import Traveler
 from app.models.trip import Trip
 from app.services.revenue import booking_revenue
+from services.crm.system_services.private_trips import is_committed_private_trip
 
 
 def _recalculate_postgres(traveler_id: str) -> None:
@@ -34,6 +37,12 @@ def _recalculate_postgres(traveler_id: str) -> None:
     bookings = TripBooking.query.filter(TripBooking.traveler_id == traveler_id).all()
     trip_ids = {b.trip_id for b in bookings if b.trip_id}
     trips = {t.trip_id: t for t in Trip.query.filter(Trip.trip_id.in_(trip_ids)).all()} if trip_ids else {}
+    # Additional fees are part of what the booking earned, so they belong in
+    # this counter too -- otherwise the stored figure disagrees with the live
+    # revenue summary on the same profile page about the same booking.
+    from app.services.additional_fees import fees_for_bookings
+
+    booking_fees = fees_for_bookings([b.booking_id for b in bookings if b.booking_id])
 
     local = 0
     intl = 0
@@ -54,7 +63,7 @@ def _recalculate_postgres(traveler_id: str) -> None:
         # this booking actually recognizes. Using anything else here is
         # exactly how this figure used to silently drift from what the rest
         # of the CRM shows for the same booking.
-        result = booking_revenue(booking, trip)
+        result = booking_revenue(booking, trip, booking_fees.get(booking.booking_id, []))
         if result is not None:
             _currency, amount = result
             revenue += amount
@@ -83,6 +92,44 @@ def _recalculate_sqlite(traveler_id: str, uri: str) -> None:
     UnifiedCRMService(system_settings).recalculate_traveler_stats(traveler_id)
 
 
+def _recalculate_private_trip_count(traveler_id: str) -> None:
+    """Refresh the traveler's private-trip counter from live private requests.
+
+    Runs for both backends, unlike the booking counters above. The legacy
+    SQLite path routes through UnifiedCRMService, which knows nothing about
+    private trip requests, so a private trip would otherwise never appear on a
+    profile in demo/dev at all. Private requests live in the same database as
+    the Flask app either way, so one ORM read answers it.
+
+    Written with a targeted UPDATE rather than through the loaded Traveler
+    object on purpose: the SQLite path has just rewritten the other counters
+    on this same row through a separate raw connection, and flushing a stale
+    in-session copy of the row would undo that.
+    """
+    requests = PrivateTripRequest.query.filter(
+        PrivateTripRequest.traveler_id == traveler_id
+    ).all()
+    if requests:
+        from app.services.private_trip_ledger import totals_for
+
+        paid_by_request = totals_for([item.request_id for item in requests])
+    else:
+        paid_by_request = {}
+
+    count = 0
+    for item in requests:
+        totals = paid_by_request.get(item.request_id)
+        if is_committed_private_trip(item.stage, total_paid=totals.total_paid if totals else 0.0):
+            count += 1
+
+    db.session.execute(
+        update(Traveler)
+        .where(Traveler.traveler_id == traveler_id)
+        .values(private_trips_count=count)
+    )
+    db.session.commit()
+
+
 def recalculate_traveler_stats(traveler_id: str) -> None:
     """Refresh one traveler's trip/event/revenue counters from live bookings,
     against whichever backend SQLALCHEMY_DATABASE_URI actually points at."""
@@ -91,5 +138,6 @@ def recalculate_traveler_stats(traveler_id: str) -> None:
     uri = str(current_app.config.get("SQLALCHEMY_DATABASE_URI") or "")
     if uri.startswith("sqlite:///"):
         _recalculate_sqlite(traveler_id, uri)
-        return
-    _recalculate_postgres(traveler_id)
+    else:
+        _recalculate_postgres(traveler_id)
+    _recalculate_private_trip_count(traveler_id)
