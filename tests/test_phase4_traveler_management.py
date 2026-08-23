@@ -10,6 +10,7 @@ from contextlib import closing
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
+from sqlalchemy.engine import make_url
 
 SYSTEM_ROOT = Path(__file__).resolve().parent.parent / "apps" / "api"
 if str(SYSTEM_ROOT) not in sys.path:
@@ -35,6 +36,11 @@ def seed_traveler_workbook(path: Path) -> None:
     ws.append(headers)
     wb.save(path)
     wb.close()
+
+
+def sqlite_database_path(uri: str) -> Path:
+    database = make_url(uri).database
+    return Path(database or "")
 
 
 class Phase4TravelerManagementTests(unittest.TestCase):
@@ -97,8 +103,12 @@ class Phase4TravelerManagementTests(unittest.TestCase):
         app = create_app()
         create_app_db_schema(app)
         uri = app.config["SQLALCHEMY_DATABASE_URI"]
-        resolved_db_path = Path(uri.replace("sqlite:////", "").replace("sqlite:///", "", 1))
+        resolved_db_path = sqlite_database_path(uri)
         return app, resolved_db_path, workbook_path
+
+    def test_sqlite_database_path_preserves_posix_absolute_uri(self) -> None:
+        resolved = sqlite_database_path("sqlite:////tmp/rahma-tests/system.db")
+        self.assertEqual(str(resolved).replace("\\", "/"), "/tmp/rahma-tests/system.db")
 
     def test_create_uses_true_max_traveler_id_and_syncs_sheet(self) -> None:
         app, db_path, workbook_path = self._build_app()
