@@ -697,6 +697,21 @@ def _extract_session_linked_ids(session) -> dict[str, str]:
     return linked_ids
 
 
+def _passport_traveler_id_for_session(session) -> str:
+    final_result = session.final_result if isinstance(session.final_result, dict) else {}
+    write_result = final_result.get("write_result") if isinstance(final_result.get("write_result"), dict) else {}
+    traveler = final_result.get("traveler") if isinstance(final_result.get("traveler"), dict) else {}
+    created_traveler = (
+        write_result.get("created_traveler") if isinstance(write_result.get("created_traveler"), dict) else {}
+    )
+    return str(
+        traveler.get("traveler_id")
+        or created_traveler.get("traveler_id")
+        or getattr(session, "traveler_id", "")
+        or ""
+    ).strip()
+
+
 def _preferred_traveler_record(session) -> dict[str, Any]:
     preview = session.preview if isinstance(session.preview, dict) else {}
     final_result = session.final_result if isinstance(session.final_result, dict) else {}
@@ -2315,8 +2330,7 @@ def create_app(
             sessions.handle_passport_attachment(sess, ref)
             if hasattr(sessions, "_persist_session"):
                 sessions._persist_session(sess)
-        traveler = (sess.final_result or {}).get("traveler") or {}
-        traveler_id = str(traveler.get("traveler_id") or "").strip()
+        traveler_id = _passport_traveler_id_for_session(sess)
         passport_save = {}
         passport_crm_synced = False
         if traveler_id and hasattr(gateway, "save_traveler_passport"):

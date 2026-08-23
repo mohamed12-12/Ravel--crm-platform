@@ -1005,6 +1005,54 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
         self.assertTrue((row[0] or "").endswith("passport.jpg"))
         self.assertEqual(row[1], "received")
 
+    def test_passport_upload_route_creates_traveler_document_from_session_traveler_id(self) -> None:
+        client, app = self._tool_calling_app()
+        self._seed_traveler(full_name="Mona Ali")
+        lead_id = self._seed_lead(full_name="Mona Ali", trip_type="international")
+        session = app.config["SESSIONS"].create_session()
+        session.customer_name = "Mona Ali"
+        session.raw_phone = "01112223333"
+        session.pending_raw_phone = "01112223333"
+        session.country_code = "20"
+        session.traveler_id = "TR00999"
+        session.trip_type = "international"
+        session.selected_trip_id = "RT-INT-26-DEM"
+        session.selected_trip_name = "DEmo"
+        session.group_size = 1
+        session.room_type = "Single"
+        session.flight_option = "Without Flight"
+        session.stage = "awaiting_passport_upload"
+        session.final_result = {
+            "write_result": {"lead_update": {"lead_id": lead_id}},
+        }
+        app.config["SESSIONS"]._persist_session(session)
+
+        response = client.post(
+            f"/api/session/{session.id}/passport_attachment",
+            data={"file": (io.BytesIO(b"passport"), "passport.pdf", "application/pdf")},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["passportCrmSynced"])
+        self.assertEqual(payload["passportSave"]["traveler_id"], "TR00999")
+        self.assertTrue(payload["passportSave"]["document_id"])
+        with sqlite3.connect(os.environ["RAHMA_SYSTEM_DB_PATH"]) as conn:
+            row = conn.execute(
+                """
+                SELECT category, original_file_name, storage_path, uploaded_by
+                FROM traveler_documents
+                WHERE traveler_id = ?
+                """,
+                ("TR00999",),
+            ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row[0], "passport")
+        self.assertEqual(row[1], "passport.pdf")
+        self.assertTrue((row[2] or "").endswith("passport.pdf"))
+        self.assertEqual(row[3], "ai-agent-web")
+
     def test_passport_upload_route_accepts_file_after_booking_confirmation_retry(self) -> None:
         client, app = self._tool_calling_app()
         self._seed_traveler(full_name="Mona Ali")
