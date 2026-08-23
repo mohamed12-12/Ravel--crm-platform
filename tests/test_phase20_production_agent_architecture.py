@@ -22,6 +22,9 @@ class TestProductionAgentArchitecture(unittest.TestCase):
         persona = AgentPersona.from_settings(SimpleNamespace(agent_persona_name="Rahvel Agent"))
         self.assertEqual(persona.name, "Rahvel Agent")
         self.assertIn("sales assistant", persona.company_identity.lower())
+        self.assertIn("experienced together", persona.brand_essence.lower())
+        self.assertIn("young egyptian adults", persona.target_audience.lower())
+        self.assertIn("crm-backed", persona.booking_policies.lower())
 
     def test_memory_update(self) -> None:
         memory = AgentMemory()
@@ -54,6 +57,8 @@ class TestProductionAgentArchitecture(unittest.TestCase):
         self.assertEqual(bundle.goal, "help")
         self.assertEqual(bundle.crm_facts["traveler"]["traveler_id"], "TR1")
         self.assertIn("CRM writes are controlled and backend-validated", bundle.system_constraints)
+        self.assertIn("Brand DNA", bundle.system_constraints[-1])
+        self.assertIn("customer_personas", bundle.persona)
 
     def test_safety_layer(self) -> None:
         safety = AgentSafetyLayer()

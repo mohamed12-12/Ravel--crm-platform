@@ -47,5 +47,6 @@ class ContextBuilder:
                 "CRM writes are controlled and backend-validated",
                 "No payment actions",
                 "No unverified CRM claims",
+                "Brand DNA is tone and audience guidance only; CRM facts and workflow policy stay authoritative",
             ],
         )
