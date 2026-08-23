@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from datetime import datetime, timezone
 from dataclasses import replace
 from pathlib import Path
@@ -22,6 +23,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 from services.ai_agent.ai_agent_app.agent import GeminiAgent, SessionFlowManager
+from services.ai_agent.ai_agent_app.agent.crm_api_client import CRMApiError
 from services.ai_agent.ai_agent_app.agent.response_format import response_completeness_issue
 from services.ai_agent.ai_agent_app.agent.response_guard import (
     guard_customer_response,
@@ -54,6 +56,16 @@ ALLOWED_ATTACHMENT_MIME_TYPES = {
     "image/jpeg", "image/png", "image/gif", "image/heic", "image/webp", "application/pdf"
 }
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024  # 10 MB
+_STATS_CACHE_TTL_SECONDS = 30.0
+_STATS_NUMERIC_FIELDS = (
+    "travelerCount",
+    "interactionCount",
+    "leadCount",
+    "bookingDraftCount",
+    "paymentPendingCount",
+    "bookingAlertCount",
+    "qualificationRate",
+)
 _PLACEHOLDER_PATTERN = re.compile(r"\{[a-zA-Z0-9_]+\}")
 _PHONE_CANDIDATE_PATTERN = re.compile(r"(?:\+?\d[\d\s\-\(\)]{7,}\d)")
 _TRIP_MEDIA_URL_PATTERN = re.compile(r"(?:https?://[^\s<>()]+)?/trips/media/[A-Za-z0-9._~:-]+")
@@ -482,6 +494,99 @@ def _static_asset_version(filename: str) -> str:
         return "0"
 
 
+def _stats_cache_ttl_seconds() -> float:
+    raw = os.environ.get("AGENT_STATS_CACHE_SECONDS", "").strip()
+    if not raw:
+        return _STATS_CACHE_TTL_SECONDS
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return _STATS_CACHE_TTL_SECONDS
+
+
+def _gateway_uses_crm_api(gateway: ExcelSheetGateway) -> bool:
+    settings = getattr(gateway, "settings", None)
+    return str(getattr(settings, "crm_access_mode", "") or "").strip().lower() == "api"
+
+
+def _mark_demo_stats_available(stats: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(stats)
+    payload["statsAvailable"] = True
+    payload["statsStale"] = False
+    payload["statsError"] = ""
+    return payload
+
+
+def _unavailable_demo_stats(*, cached: dict[str, Any] | None = None, error: str = "stats_unavailable") -> dict[str, Any]:
+    if cached:
+        payload = dict(cached)
+        payload["statsAvailable"] = True
+        payload["statsStale"] = True
+        payload["statsError"] = error
+        return payload
+
+    payload: dict[str, Any] = {field: None for field in _STATS_NUMERIC_FIELDS}
+    payload.update(
+        {
+            "tripStatusCounts": {},
+            "leadStageCounts": {},
+            "priorityCounts": {},
+            "followUpSummary": {"urgent": None, "dueToday": None, "overdue": None},
+            "pipeline": {
+                "newCustomers": None,
+                "existingTravelers": None,
+                "qualified": None,
+                "followUpNeeded": None,
+                "needsReview": None,
+                "blocked": None,
+                "bookingDrafts": None,
+                "qualificationRate": None,
+            },
+            "recentLeads": [],
+            "dbSource": "unavailable",
+            "statsAvailable": False,
+            "statsStale": False,
+            "statsError": error,
+        }
+    )
+    return payload
+
+
+def _safe_demo_stats(gateway: ExcelSheetGateway) -> dict[str, Any]:
+    """Return optional UI stats without making core agent sessions depend on them.
+
+    In CRM API mode, stats are a dashboard convenience reached through the
+    same authenticated `/api/crm/agent/read` endpoint as core lookups. A 429,
+    5xx, timeout, or connection failure there must not make `/api/session`
+    fail. Non-API backends keep the existing strict behavior so local DB/schema
+    failures are still visible during development and tests.
+    """
+
+    if not _gateway_uses_crm_api(gateway):
+        return _mark_demo_stats_available(gateway.get_demo_stats())
+
+    now = time.monotonic()
+    cached = getattr(gateway, "_safe_demo_stats_cache", None)
+    cached_until = float(getattr(gateway, "_safe_demo_stats_cache_until", 0.0) or 0.0)
+    if isinstance(cached, dict) and cached_until > now:
+        return dict(cached)
+
+    try:
+        stats = _mark_demo_stats_available(gateway.get_demo_stats())
+    except CRMApiError as exc:
+        app_logger.warning("Optional CRM demo stats unavailable; continuing core agent session: %s", exc)
+        stale = cached if isinstance(cached, dict) else None
+        return _unavailable_demo_stats(cached=stale, error="stats_unavailable")
+
+    ttl = _stats_cache_ttl_seconds()
+    setattr(gateway, "_safe_demo_stats_cache", dict(stats))
+    if ttl > 0:
+        setattr(gateway, "_safe_demo_stats_cache_until", now + ttl)
+    else:
+        setattr(gateway, "_safe_demo_stats_cache_until", 0.0)
+    return stats
+
+
 def _serialize_session(gateway: ExcelSheetGateway, session) -> dict[str, Any]:
     runtime_mode = str(getattr(session, "agent_mode", "deterministic") or "deterministic").strip().lower() or "deterministic"
     chat_enabled = runtime_mode in {"tool_calling", "gemini"}
@@ -535,7 +640,7 @@ def _serialize_session(gateway: ExcelSheetGateway, session) -> dict[str, Any]:
         "passportAttachmentRef": session.passport_attachment_ref,
         "passportRequired": str(session.trip_type or "").strip().lower() == "international",
         "passportUploadEnabled": runtime_mode in {"deterministic", "tool_calling", "gemini"},
-        "stats": gateway.get_demo_stats(),
+        "stats": _safe_demo_stats(gateway),
     }
 
 
@@ -1774,7 +1879,7 @@ def create_app(
                 "runtimeWorkbook": workbook_info["runtimeWorkbook"],
                 "sourceWorkbook": workbook_info["sourceWorkbook"],
                 "sheetBackend": "crm-db" if diagnostics else app.config["SETTINGS"].sheet_backend,
-                "stats": gateway.get_demo_stats(),
+                "stats": _safe_demo_stats(gateway),
                 "activeDbPath": diagnostics["db_path"] if diagnostics else str(_system_db_path()),
                 "dbDiagnostics": diagnostics,
             }
@@ -1976,7 +2081,7 @@ def create_app(
         gateway.reset_runtime_workbook()
         sessions: SessionFlowManager = app.config["SESSIONS"]
         sessions.clear()
-        return jsonify({"ok": True, "stats": gateway.get_demo_stats()})
+        return jsonify({"ok": True, "stats": _safe_demo_stats(gateway)})
 
     @app.post("/api/session")
     @limiter.limit("20 per minute")

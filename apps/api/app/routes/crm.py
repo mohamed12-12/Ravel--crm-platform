@@ -1,10 +1,11 @@
 # app/routes/crm.py
+import os
 from dataclasses import replace
 from pathlib import Path
 
 from flask import Blueprint, request, jsonify, current_app
 from app.services.identity import merge_travelers, find_duplicates
-from app.extensions import db, socketio
+from app.extensions import db, limiter, socketio
 import logging
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,7 @@ def _agent_runtime():
 
 
 @crm_bp.route('/agent/read', methods=['POST'])
+@limiter.limit(lambda: os.environ.get("CRM_AGENT_READ_RATE_LIMIT", "300 per hour"))
 def agent_read():
     data = request.get_json(silent=True) or {}
     action = str(data.get("action") or "").strip()

@@ -130,5 +130,53 @@ class AgentApiRateLimitTests(unittest.TestCase):
         self.assertEqual(statuses[5], 429)
 
 
+class CRMAgentReadRateLimitTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmpdir = Path(".tmp-test-workdirs") / f"ratelimit-crm-agent-read-{uuid.uuid4().hex}"
+        self.tmpdir.mkdir(parents=True, exist_ok=True)
+        db_path = self.tmpdir / "app.db"
+        os.environ["RATELIMIT_ENABLED"] = "true"
+        os.environ["CRM_AGENT_READ_RATE_LIMIT"] = "5 per minute"
+        os.environ["CRM_API_TOKEN"] = "rate-limit-agent-token"
+        os.environ["DATABASE_URL"] = f"sqlite:///{db_path.resolve().as_posix()}"
+        os.environ["RAHMA_SYSTEM_DB_PATH"] = str(db_path)
+        _reset_app_modules()
+        from app import create_app
+
+        self.app = create_app("development")
+        self.app.config["TESTING"] = True
+        from app.extensions import db
+
+        self.db = db
+        with self.app.app_context():
+            db.create_all()
+        self.client = self.app.test_client()
+
+    def tearDown(self) -> None:
+        with self.app.app_context():
+            self.db.session.remove()
+            self.db.engine.dispose()
+        os.environ.pop("RATELIMIT_ENABLED", None)
+        os.environ.pop("CRM_AGENT_READ_RATE_LIMIT", None)
+        os.environ.pop("CRM_API_TOKEN", None)
+        os.environ.pop("DATABASE_URL", None)
+        os.environ.pop("RAHMA_SYSTEM_DB_PATH", None)
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        _reset_app_modules()
+
+    def test_crm_agent_read_endpoint_keeps_explicit_rate_limit(self) -> None:
+        headers = {"Authorization": "Bearer rate-limit-agent-token"}
+        statuses = [
+            self.client.post(
+                "/api/crm/agent/read",
+                json={"action": "unsupported_test_action", "payload": {}},
+                headers=headers,
+            ).status_code
+            for _ in range(6)
+        ]
+        self.assertTrue(all(code == 422 for code in statuses[:5]))
+        self.assertEqual(statuses[5], 429)
+
+
 if __name__ == "__main__":
     unittest.main()
