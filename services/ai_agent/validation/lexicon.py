@@ -81,6 +81,7 @@ AFFIRMATIVE_TERMS: set[str] = {
     "confirm",
     "book it",
     "go ahead",
+    "\u062a\u0645",
     "تمام",
     "ماشي",
     "موافق",

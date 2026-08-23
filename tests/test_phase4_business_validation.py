@@ -384,6 +384,38 @@ class TestPhase4BusinessValidation(unittest.TestCase):
         self.assertEqual(result.decision, APPROVED)
         self.assertIn("controlled human review", " ".join(result.reasons))
 
+    def test_passport_upload_failure_handoff_is_approved(self) -> None:
+        with self._patch_service():
+            validator = self._build_validator()
+            result = validator.validate_action(
+                action="create_handoff",
+                payload={
+                    "traveler_id": "TRINTL",
+                    "reason_code": "passport_upload_failed",
+                    "reason_text": "Customer could not upload the required passport attachment.",
+                },
+                session_context={"session_id": "sess-passport-upload-failed"},
+            )
+
+        self.assertEqual(result.decision, APPROVED)
+        self.assertIn("controlled human review", " ".join(result.reasons))
+
+    def test_missing_trip_price_handoff_is_approved(self) -> None:
+        with self._patch_service():
+            validator = self._build_validator()
+            result = validator.validate_action(
+                action="create_handoff",
+                payload={
+                    "traveler_id": "TRACTIVE",
+                    "reason_code": "missing_trip_price",
+                    "reason_text": "CRM is missing a usable price for the selected room.",
+                },
+                session_context={"session_id": "sess-missing-trip-price", "required_step": "create_pricing_handoff"},
+            )
+
+        self.assertEqual(result.decision, APPROVED)
+        self.assertIn("controlled human review", " ".join(result.reasons))
+
     def test_validation_decision_is_logged(self) -> None:
         with self._patch_service():
             validator = self._build_validator()

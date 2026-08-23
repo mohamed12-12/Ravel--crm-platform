@@ -837,7 +837,7 @@ class SessionFlowManager:
             if not self._passport_required_for_session(session):
                 self._clear_passport_state(session)
                 return self._advance_after_flight_decision(session, gateway)
-            if session.passport_attachment_ref and lowered in {"done", "continue", "uploaded", "sent", "تمام", "جاهز", "next", "ok", "okay"}:
+            if session.passport_attachment_ref and lowered in {"done", "continue", "uploaded", "sent", "تمام", "تم", "جاهز", "next", "ok", "okay"}:
                 # Passport collection complete — proceed to room type
                 self._set_stage(session, "awaiting_currency")
                 session.messages.append({"role": "assistant", "text": self._currency_prompt(gateway, session.language)})
@@ -1554,7 +1554,11 @@ class SessionFlowManager:
     def handle_passport_attachment(self, session: SessionState, attachment_ref: str) -> None:
         """Record an uploaded passport attachment reference on the session."""
         ref = str(attachment_ref or "").strip()
-        if session.stage != "awaiting_passport_upload" or not self._passport_required_for_session(session):
+        if (
+            session.stage
+            not in {"awaiting_passport_upload", "awaiting_currency", "awaiting_confirmation", "waiting"}
+            or not self._passport_required_for_session(session)
+        ):
             agent_logger.warning("Session %s: ignored passport attachment outside required passport step", session.id)
             return
         if not self._allowed_passport_attachment_ref(ref):

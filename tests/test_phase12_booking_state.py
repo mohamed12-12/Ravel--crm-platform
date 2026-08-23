@@ -58,6 +58,11 @@ MIXED_INVENTORY_TRIP = {
     "girls_double": 3,
     "boys_triple": 2,
     "girls_triple": 2,
+    "room_prices": {
+        "Single": {"EGP": "6000", "USD": "150"},
+        "Double": {"EGP": "5000", "USD": "120"},
+        "Triple": {"EGP": "4500", "USD": "100"},
+    },
 }
 
 
@@ -248,6 +253,23 @@ def test_mixed_group_counts_and_no_family_units_derive_gender_rooms(runtime: Too
     assert by_gender["girls"] == {"room_type": "Double", "room_group": "girls", "rooms": 1}
     assert session.room_requirements["boys_rooms_requested"] == 1
     assert session.room_requirements["girls_rooms_requested"] == 1
+
+
+def test_family_units_leading_zero_reply_does_not_create_family_room(runtime: ToolCallingSessionRuntime) -> None:
+    session = _selected_trip_session(runtime)
+
+    session = _send(runtime, "3", session)
+    session = _send(runtime, "2 boys and 2 girls", session)
+    session = _send(runtime, "01", session)
+    assert session.stage == "room_type_required"
+    assert session.family_units == 0
+
+    session = _send(runtime, "double", session)
+
+    by_gender = _by_gender(session)
+    assert "family" not in by_gender
+    assert by_gender["boys"] == {"room_type": "Double", "room_group": "boys", "rooms": 1}
+    assert by_gender["girls"] == {"room_type": "Double", "room_group": "girls", "rooms": 1}
 
 
 def test_mixed_family_units_share_rooms_before_gender_remainders(runtime: ToolCallingSessionRuntime) -> None:

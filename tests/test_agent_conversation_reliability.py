@@ -1209,6 +1209,87 @@ def test_handoff_acknowledgement_does_not_create_duplicate(runtime: ToolCallingS
     assert session.handoff_state == "handed_off"
 
 
+def test_passport_upload_problem_at_confirmation_creates_crm_handoff(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    executor = FakeHandoffExecutor(succeeds=True)
+    runtime._write_executor = executor
+    session = _selected_trip_session(runtime, TRIPS[0])
+    session.language = "ar"
+    session.stage = "booking_confirmation_required"
+    session.booking_confirmation_requested = True
+    session.room_group = "boys"
+    session.room_type = "Single"
+    session.group_size = 1
+    session.group_nationality_type = "single"
+    session.flight_option = "Without Flight"
+    session.currency = "EGP"
+    session.preview["collection_state"].update(
+        {
+            "room_group": True,
+            "room_type": True,
+            "group_size": True,
+            "group_nationality_type": True,
+            "flight_option": True,
+            "currency": True,
+        }
+    )
+
+    session = _send(runtime, "\u0628\u062d\u0627\u0648\u0644 \u0627\u0631\u0641\u0639\u0647 \u0645\u0634 \u0631\u0627\u0636\u064a", session)
+
+    reply = session.messages[-1]["text"]
+    assert len(executor.calls) == 1
+    assert executor.calls[0]["action"] == "create_handoff"
+    assert executor.calls[0]["payload"]["reason_code"] == "passport_upload_failed"
+    assert executor.calls[0]["payload"]["metadata"]["missing_information"] == ["passport_attachment_ref"]
+    assert session.handoff_state == "handed_off"
+    assert session.stage == "human_handoff_required"
+    assert session.final_result["handoff_reason"] == "passport_upload_failed"
+    assert session.booking_confirmed is False
+    assert "passport_attachment_ref" not in reply
+    assert "Ravel" in reply
+    assert "\u0646\u0639\u0645" not in reply
+
+
+def test_missing_local_trip_price_creates_crm_handoff_before_confirmation(
+    runtime: ToolCallingSessionRuntime,
+) -> None:
+    executor = FakeHandoffExecutor(succeeds=True)
+    runtime._write_executor = executor
+    trip = {
+        "trip_id": "RT-LOC-MISSING-PRICE",
+        "trip_name": "Sharm Missing Price Demo",
+        "type": "Local",
+        "trip_type": "local",
+        "start_date": "2026-08-24",
+        "end_date": "2026-08-30",
+        "available_single": 4,
+        "available_double": 4,
+        "boys_double": 4,
+        "girls_double": 4,
+        "room_prices": {"Double": {"EGP": "5000"}},
+    }
+    session = _selected_trip_session(runtime, trip)
+
+    session = _send(runtime, "3", session)
+    session = _send(runtime, "2 boys and 2 girls", session)
+    session = _send(runtime, "01", session)
+    session = _send(runtime, "2", session)
+    session = _send(runtime, "1", session)
+
+    reply = session.messages[-1]["text"]
+    assert session.family_units == 0
+    assert len(executor.calls) == 1
+    assert executor.calls[0]["action"] == "create_handoff"
+    assert executor.calls[0]["payload"]["reason_code"] == "missing_trip_price"
+    assert "missing_trip_price" in executor.calls[0]["payload"]["notes"]
+    assert session.stage == "human_handoff_required"
+    assert session.handoff_state == "handed_off"
+    assert "unlisted" not in reply.lower()
+    assert "Which payment currency" not in reply
+    assert "booking draft" not in reply.lower()
+
+
 def test_arabic_booking_intent_after_completed_booking_asks_choice_without_duplicate(runtime: ToolCallingSessionRuntime) -> None:
     session = _completed_booking_session(runtime, language="ar")
     original_booking = dict(session.booking_result or {})
@@ -1682,15 +1763,16 @@ def test_booking_confirmation_requested_handles_unclear_reply_without_model_fall
             "flight_option": True,
             "currency": True,
         },
-        "trip_reference": {
-            "trip_id": "RT-LOC-26-DEM",
-            "trip_name": "DEMOO3",
-            "type": "Local",
-            "trip_type": "local",
-            "available_double": 3,
-            "girls_double": 3,
-        },
-    }
+            "trip_reference": {
+                "trip_id": "RT-LOC-26-DEM",
+                "trip_name": "DEMOO3",
+                "type": "Local",
+                "trip_type": "local",
+                "available_double": 3,
+                "girls_double": 3,
+                "public_price": "3000 EGP",
+            },
+        }
     session.preview["trip_result"] = {"open_trips": [session.preview["trip_reference"]], "date_tbd_trips": []}
     runtime._conversation_ai = RewritingAgent(rewrite_reply="this model path should not run")
 

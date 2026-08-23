@@ -1510,6 +1510,7 @@ class GeminiWriteToolExecutor:
             "room_type": "room type",
             "flight_option": "flight preference",
             "selected_trip_id": "selected trip",
+            "passport_attachment_ref": "passport attachment",
         }
         if raw in labels:
             return labels[raw]
@@ -1522,6 +1523,10 @@ class GeminiWriteToolExecutor:
         missing = validation_payload.get("missing_information") or []
         language = str(session_context.get("language") or "").strip().lower()
         if decision == NEED_MORE_INFORMATION and missing:
+            if "passport_attachment_ref" in missing:
+                if language.startswith("ar"):
+                    return "\u0645\u062d\u062a\u0627\u062c \u0635\u0648\u0631\u0629 \u0623\u0648 \u0645\u0644\u0641 PDF \u0644\u0644\u0628\u0627\u0633\u0628\u0648\u0631 \u0642\u0628\u0644 \u0625\u0646\u0634\u0627\u0621 \u0637\u0644\u0628 \u0627\u0644\u062d\u062c\u0632. \u0627\u0631\u0641\u0639\u0647 \u0645\u0646 \u0632\u0631 Attach Passport\u060c \u0648\u0644\u0648 \u0627\u0644\u0631\u0641\u0639 \u0645\u0634 \u0634\u063a\u0627\u0644 \u0627\u0643\u062a\u0628\u0644\u064a \u0625\u0646\u0643 \u0645\u0634 \u0642\u0627\u062f\u0631 \u062a\u0631\u0641\u0639\u0647."
+                return "I need the passport image or PDF before creating the booking request. Please use the Attach Passport button, and if upload is not working, tell me you cannot upload it."
             joined = ", ".join(GeminiWriteToolExecutor._humanize_token(item) for item in missing if item)
             if language.startswith("ar"):
                 return f"\u0642\u0628\u0644 \u0623\u0646 \u0623\u062a\u0627\u0628\u0639\u060c \u0623\u062d\u062a\u0627\u062c \u0625\u0644\u0649: {joined}."

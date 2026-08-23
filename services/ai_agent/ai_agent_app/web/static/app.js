@@ -8,6 +8,16 @@ const PASSPORT_CHAT_STAGES = [
   "awaiting_passport_upload",
 ];
 
+const PASSPORT_UPLOAD_STAGES = [
+  "awaiting_passport_upload",
+  "awaiting_currency",
+  "awaiting_confirmation",
+  "currency_required",
+  "booking_confirmation_required",
+  "booking_ready",
+  "waiting",
+];
+
 const els = {
   chatLog: document.getElementById("chat-log"),
   messageForm: document.getElementById("message-form"),
@@ -182,6 +192,17 @@ function renderMessages(messages) {
   els.chatLog.scrollTop = els.chatLog.scrollHeight;
 }
 
+function appendLocalAssistantMessage(text) {
+  if (!els.chatLog) return;
+  const div = document.createElement("div");
+  const dir = detectTextDirection(text);
+  div.className = `chat-bubble assistant dir-${dir}`;
+  div.dir = dir;
+  renderMessageText(div, text, dir);
+  els.chatLog.appendChild(div);
+  els.chatLog.scrollTop = els.chatLog.scrollHeight;
+}
+
 function renderSession(session) {
   if (!session) return;
   state.session = session;
@@ -222,7 +243,7 @@ function renderSession(session) {
   els.sendBtn.disabled = state.messagePending || (!canChat && !hasActiveHandoff) || isCompleted;
   renderQuickActions(session);
   renderTripTypePicker(session, { isGeminiMode, isToolCallingMode, isCompleted });
-  renderPassportUpload(session);
+  renderPassportUpload(session, { isCompleted });
 }
 
 function renderTripTypePicker(session, { isGeminiMode, isToolCallingMode, isCompleted }) {
@@ -270,13 +291,14 @@ function messagePlaceholder(session, runtimeMode = "deterministic") {
   return "Waiting for intake form...";
 }
 
-function renderPassportUpload(session) {
+function renderPassportUpload(session, { isCompleted = false } = {}) {
   if (!els.passportUploadBtn || !els.passportFileInput) return;
   const isUploadStage = session.stage === "awaiting_passport_upload";
   const uploadEnabled = session.passportUploadEnabled !== false;
   const passportRequired = Boolean(session.passportRequired);
   const hasAttachment = Boolean(session.passportAttachmentRef);
-  const canUpload = uploadEnabled && state.sessionId && (isUploadStage || (passportRequired && !hasAttachment));
+  const uploadStageAllowed = PASSPORT_UPLOAD_STAGES.includes(session.stage);
+  const canUpload = !isCompleted && uploadEnabled && state.sessionId && passportRequired && (isUploadStage || (!hasAttachment && uploadStageAllowed));
   els.passportUploadBtn.hidden = !canUpload;
   els.passportUploadBtn.disabled = !canUpload;
   els.passportUploadBtn.textContent = hasAttachment ? "Replace Passport" : "Attach Passport";
@@ -526,6 +548,9 @@ els.passportFileInput?.addEventListener("change", async (event) => {
     }
     const data = await response.json();
     renderSession(data.session);
+    if (data.session?.passportAttachmentRef) {
+      appendLocalAssistantMessage("تم استلام ملف الباسبور.\nPassport received.");
+    }
     if (data.session?.stage === "awaiting_passport_upload") {
       els.messageInput.value = "done";
       els.messageInput.focus();

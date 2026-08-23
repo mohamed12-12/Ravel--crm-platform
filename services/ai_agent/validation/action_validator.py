@@ -577,10 +577,13 @@ class ActionValidator:
             "unsupported_request",
             "policy_review",
             "private_trip_consultation",
+            "passport_upload_failed",
+            "missing_trip_price",
         }
         if (
             controlled_reason in controlled_review_reasons
             or controlled_step == "create_capacity_handoff"
+            or controlled_step == "create_pricing_handoff"
             or controlled_state in {"capacity_handoff_required", "duplicate_traveler_detected"}
         ):
             reasons.append("Backend workflow policy requires a controlled human review handoff.")

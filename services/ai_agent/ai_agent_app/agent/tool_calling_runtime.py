@@ -1562,6 +1562,16 @@ class ToolCallingSessionRuntime:
         return normalized in _AFFIRMATIVE_REPLIES
 
     @staticmethod
+    def _passport_attachment_stage_allows_upload(stage: str) -> bool:
+        return str(stage or "").strip() in {
+            "awaiting_passport_upload",
+            "currency_required",
+            "booking_confirmation_required",
+            "booking_ready",
+            "waiting",
+        }
+
+    @staticmethod
     def _looks_negative_confirmation(text: str) -> bool:
         normalized = ToolCallingSessionRuntime._normalize_trip_reference(text)
         if normalized in {"no", "n", "cancel", "stop", "not now", "لا", "لاء", "الغاء", "إلغاء"}:
@@ -4835,6 +4845,10 @@ class ToolCallingSessionRuntime:
     def _handoff_success_message(self, session: SessionState, reason_code: str = "") -> str:
         responsible = self.settings.post_trip_handoff_responsible_employee
         if session.language.startswith("ar"):
+            if reason_code == "passport_upload_failed":
+                return f"\u0648\u0627\u0636\u062d \u0625\u0646 \u0631\u0641\u0639 \u0645\u0644\u0641 \u0627\u0644\u0628\u0627\u0633\u0628\u0648\u0631 \u0645\u0634 \u0634\u063a\u0627\u0644 \u0639\u0646\u062f\u0643. \u062d\u0648\u0644\u062a \u0627\u0644\u0637\u0644\u0628 \u0644\u0640{responsible} \u0641\u064a \u0641\u0631\u064a\u0642 Ravel \u0639\u0634\u0627\u0646 \u064a\u0633\u0627\u0639\u062f\u0648\u0643 \u0648\u064a\u0643\u0645\u0644\u0648\u0627 \u0627\u0644\u0645\u0631\u0627\u062c\u0639\u0629 \u0645\u0639\u0627\u0643."
+            if reason_code == "missing_trip_price":
+                return f"\u0627\u0644\u0633\u0639\u0631 \u0645\u0634 \u0645\u0633\u062c\u0644 \u0628\u0634\u0643\u0644 \u0643\u0627\u0641\u064a \u0641\u064a CRM\u060c \u0641\u062d\u0648\u0644\u062a \u0627\u0644\u0637\u0644\u0628 \u0644\u0640{responsible} \u0641\u064a \u0641\u0631\u064a\u0642 Ravel \u0644\u0645\u0631\u0627\u062c\u0639\u0629 \u0627\u0644\u0633\u0639\u0631 \u0648\u0627\u0644\u062a\u0648\u0627\u0635\u0644 \u0645\u0639\u0643."
             if reason_code == "duplicate_phone_match":
                 return f"رقم واتساب ده مرتبط بأكتر من ملف مسافر، لذلك أرسلت الطلب لـ{responsible} في فريق Ravel للمراجعة، وسيتواصل معك."
             if reason_code == "room_capacity":
@@ -4844,6 +4858,12 @@ class ToolCallingSessionRuntime:
             return f"This WhatsApp number matches more than one traveler profile, so I've sent the request to {responsible} on the Ravel team for review. They'll follow up with you."
         if reason_code == "room_capacity":
             return f"The requested room option is not currently available for the full group. I've sent the request to {responsible} on the Ravel team to check the available alternatives, and they'll follow up with you."
+        if reason_code == "missing_trip_price":
+            return f"The price is not listed clearly enough in CRM, so I've sent the request to {responsible} on the Ravel team to review the price and follow up with you."
+        if reason_code == "passport_upload_failed":
+            if session.language.startswith("ar"):
+                return f"واضح إن رفع ملف الباسبور مش شغال عندك. حولت الطلب لـ{responsible} في فريق Ravel عشان يساعدوك ويكملوا المراجعة معاك."
+            return f"It looks like the passport upload is not working for you. I've sent the request to {responsible} on the Ravel team so they can help and continue the review with you."
         return f"I've sent your request to {responsible} on the Ravel team for review, and they'll follow up with you once they have an update."
 
     def _handoff_already_under_review_message(self, session: SessionState) -> str:
@@ -5003,6 +5023,151 @@ class ToolCallingSessionRuntime:
         session.fallback_used = True
         return True
 
+    @classmethod
+    def _is_passport_upload_problem(cls, text: str) -> bool:
+        normalized = cls._normalize_trip_reference(text)
+        compact = cls._compact_intent(text)
+        if not normalized and not compact:
+            return False
+        passport_terms = ("passport", "attachment", "upload", "file", "photo", "image", "باسبور", "الباسبور", "جواز", "جواز السفر", "صوره", "صورة", "ملف", "ارفع", "ارفعة", "ارفعه")
+        problem_terms = (
+            "not working",
+            "won't upload",
+            "wont upload",
+            "can't upload",
+            "cant upload",
+            "cannot upload",
+            "upload failed",
+            "not uploading",
+            "doesn't upload",
+            "doesnt upload",
+            "مش راضي",
+            "مش راضى",
+            "مش شغال",
+            "مش بيترفع",
+            "مش بيرفع",
+            "مش عارف ارفع",
+            "مش قادر ارفع",
+            "بحاول ارفعه",
+            "بحاول ارفعة",
+            "مش عارف ابعته",
+            "مش قادر ابعته",
+        )
+        if any(term in normalized for term in passport_terms) and any(term in normalized for term in problem_terms):
+            return True
+        return compact in {
+            "بحاولارفعهمشراضي",
+            "بحاولارفعهمشراضى",
+            "مشعارفارفعه",
+            "مشقادرارفعه",
+            "مشعارفابعتالباسبور",
+            "مشقادرابعتالباسبور",
+        }
+
+    def _handle_passport_upload_problem(self, session: SessionState, clean_text: str) -> bool:
+        if session.passport_attachment_ref or not self._passport_required_for_session(session):
+            return False
+        if not self._passport_attachment_stage_allows_upload(session.stage):
+            return False
+        if not self._is_passport_upload_problem(clean_text):
+            return False
+        if self._has_active_handoff(session):
+            session.messages.append({"role": "user", "text": clean_text})
+            self._append_authoritative_reply(
+                session,
+                message_key="workflow.handoff.already_under_review.passport_upload_failed",
+                base_text=self._handoff_already_under_review_message(session),
+            )
+            session.tools_used = []
+            session.fallback_used = False
+            return True
+
+        session_context = self._build_context(session, clean_text)
+        payload = {
+            "traveler_id": session_context.get("traveler_id") or "",
+            "raw_phone": session.raw_phone or session.pending_raw_phone,
+            "country_code": session.country_code or self.settings.default_country_code,
+            "lead_id": session_context.get("lead_id") or "",
+            "trip_id": session.selected_trip_id,
+            "flow_key": f"tool_calling:{session.id}",
+            "reason_code": "passport_upload_failed",
+            "reason_text": "Customer reported that the passport attachment upload is not working.",
+            "priority": "High",
+            "channel": "web",
+            "customer_name": session.customer_name,
+            "agent_summary": "Customer is blocked because passport attachment upload failed during an international booking.",
+            "customer_summary": clean_text,
+            "notes": f"Session {session.id}. Stage: {session.stage}. Customer could not upload the required passport attachment. Latest customer message: {clean_text}",
+            "update_lead": True,
+            "deduplicate_open": True,
+            "metadata": {
+                "blocked_step": "passport_attachment_upload",
+                "missing_information": ["passport_attachment_ref"],
+            },
+        }
+        try:
+            result = self._write_executor.execute(
+                action="create_handoff",
+                payload=payload,
+                session_context={
+                    **session_context,
+                    "workflow_policy": {
+                        "handoff_required": True,
+                        "reason": "passport_upload_failed",
+                        "state": "human_handoff_required",
+                    },
+                },
+            )
+        except Exception as exc:
+            agent_logger.warning("Passport upload handoff could not be created session=%s error=%s", session.id, exc)
+            result = {}
+
+        session.messages.append({"role": "user", "text": clean_text})
+        if isinstance(result, dict) and str(result.get("result_id") or "").strip() and write_result_allows_success(result, "handoff"):
+            self._apply_result(session, {"write_results": [result], "tool_requests": []})
+            session.handoff_state = "handed_off"
+            handoff_id = str(result.get("result_id") or "")
+            traveler = session_context.get("known_traveler") if isinstance(session_context.get("known_traveler"), dict) else None
+            session.final_result = {
+                **(session.final_result if isinstance(session.final_result, dict) else {}),
+                "traveler": traveler,
+                "lead_id": str(session_context.get("lead_id") or ""),
+                "handoff_id": handoff_id,
+                "handoff_required": True,
+                "handoff_reason": "passport_upload_failed",
+                "write_result": {
+                    "handoff_case": result.get("handoff_case")
+                    if isinstance(result.get("handoff_case"), dict)
+                    else {}
+                },
+            }
+            self._append_authoritative_reply(
+                session,
+                message_key="workflow.handoff.passport_upload_failed",
+                base_text=self._handoff_success_message(session, "passport_upload_failed"),
+            )
+            session.stage = "human_handoff_required"
+            session.booking_confirmation_requested = False
+            session.booking_confirmed = False
+            session.tools_used = ["create_handoff"]
+            session.fallback_used = False
+            agent_logger.info("Passport upload issue handoff created session=%s handoff=%s", session.id, handoff_id)
+            return True
+
+        self._append_authoritative_reply(
+            session,
+            message_key="workflow.handoff_unavailable.passport_upload_failed",
+            base_text=self._safe_response_fallback(
+                session,
+                message_key="workflow.handoff_failed.passport_upload_failed",
+            ),
+        )
+        session.handoff_state = "handoff_failed"
+        session.stage = "awaiting_passport_upload"
+        session.tools_used = []
+        session.fallback_used = True
+        return True
+
     @staticmethod
     def _is_simple_greeting(text: str) -> bool:
         normalized = " ".join(str(text or "").strip().casefold().split())
@@ -5099,6 +5264,9 @@ class ToolCallingSessionRuntime:
             return session
 
         if self._handle_revision_intent(session, clean_text):
+            return session
+
+        if self._handle_passport_upload_problem(session, clean_text):
             return session
 
         if self._handle_booking_confirmation_reply(session, clean_text):
@@ -5732,6 +5900,12 @@ class ToolCallingSessionRuntime:
                 "room_capacity",
                 "High",
                 "Room inventory is insufficient for the requested traveler group.",
+            )
+        if decision.required_step == "create_pricing_handoff":
+            return (
+                "missing_trip_price",
+                "High",
+                "CRM does not list a usable price for the requested trip room and pricing group.",
             )
         reason = str(decision.reason or "manual_review").strip().split(":", 1)[0]
         return reason or "manual_review", "High", "Backend workflow policy requires employee review."
@@ -6440,7 +6614,10 @@ class ToolCallingSessionRuntime:
 
     def handle_passport_attachment(self, session: SessionState, attachment_ref: str) -> None:
         ref = str(attachment_ref or "").strip()
-        if session.stage != "awaiting_passport_upload" or not self._passport_required_for_session(session):
+        if (
+            not self._passport_attachment_stage_allows_upload(session.stage)
+            or not self._passport_required_for_session(session)
+        ):
             agent_logger.warning("Tool-calling session %s: ignored passport attachment outside required passport step", session.id)
             return
         if not self._allowed_passport_attachment_ref(ref):
@@ -6711,6 +6888,8 @@ class ToolCallingSessionRuntime:
         if not lowered:
             return None
         if lowered in {"0", "zero", "none", "no", "no family", "no couples", "مفيش", "لا", "ولا واحد"}:
+            return 0
+        if re.fullmatch(r"0+[1-9]*", lowered):
             return 0
         family_terms = (
             "family", "families", "couple", "couples", "shared", "share",

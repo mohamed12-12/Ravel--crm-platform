@@ -158,6 +158,7 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
     def test_affirmative_reply_normalization_is_class_scoped(self) -> None:
         self.assertTrue(ToolCallingSessionRuntime._looks_affirmative("yes"))
         self.assertTrue(ToolCallingSessionRuntime._looks_affirmative("\u0646\u0639\u0645"))
+        self.assertTrue(ToolCallingSessionRuntime._looks_affirmative("\u062a\u0645"))
         self.assertFalse(ToolCallingSessionRuntime._looks_affirmative("I need another trip"))
 
     def test_selected_international_trip_stays_locked_through_booking_questions(self) -> None:
@@ -290,6 +291,7 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
                 "trip_id": "RT-INT-26-001",
                 "trip_name": "DEmo",
                 "type": "International",
+                "public_price": "2500 USD",
                 "available_single": 3,
                 "available_double": 3,
                 "available_triple": 3,
@@ -1002,6 +1004,62 @@ class TestWorkflowPolicyIntegration(unittest.TestCase):
             ).fetchone()
         self.assertTrue((row[0] or "").endswith("passport.jpg"))
         self.assertEqual(row[1], "received")
+
+    def test_passport_upload_route_accepts_file_after_booking_confirmation_retry(self) -> None:
+        client, app = self._tool_calling_app()
+        self._seed_traveler(full_name="Mona Ali")
+        lead_id = self._seed_lead(full_name="Mona Ali", trip_type="international")
+        session = app.config["SESSIONS"].create_session()
+        session.customer_name = "Mona Ali"
+        session.raw_phone = "01112223333"
+        session.pending_raw_phone = "01112223333"
+        session.country_code = "20"
+        session.trip_type = "international"
+        session.selected_trip_id = "RT-INT-26-DEM"
+        session.selected_trip_name = "DEmo"
+        session.group_size = 1
+        session.room_group = "boys"
+        session.room_type = "Single"
+        session.group_nationality_type = "single"
+        session.flight_option = "Without Flight"
+        session.currency = "EGP"
+        session.stage = "booking_confirmation_required"
+        session.booking_confirmation_requested = True
+        session.preview = {
+            "traveler": {"traveler_id": "TR00999", "full_name": "Mona Ali", "status": "Active"},
+            "collection_state": {
+                "room_group": True,
+                "room_type": True,
+                "group_size": True,
+                "group_nationality_type": True,
+                "flight_option": True,
+                "currency": True,
+            },
+            "trip_result": {
+                "open_trips": [
+                    {"trip_id": "RT-INT-26-DEM", "trip_name": "DEmo", "type": "International"},
+                ],
+                "date_tbd_trips": [],
+            },
+        }
+        session.final_result = {
+            "traveler": {"traveler_id": "TR00999", "full_name": "Mona Ali", "status": "Active"},
+            "write_result": {"lead_update": {"lead_id": lead_id}},
+        }
+        app.config["SESSIONS"]._persist_session(session)
+
+        response = client.post(
+            f"/api/session/{session.id}/passport_attachment",
+            data={"file": (io.BytesIO(b"passport"), "passport.jpg")},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["session"]["passportAttachmentRef"].endswith("passport.jpg"))
+        self.assertEqual(payload["session"]["stage"], "booking_confirmation_required")
+        self.assertTrue(payload["leadSync"]["passport_attachment_ref"].endswith("passport.jpg"))
+        self.assertEqual(payload["leadSync"]["passport_status"], "received")
 
 
 if __name__ == "__main__":

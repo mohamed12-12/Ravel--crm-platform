@@ -607,6 +607,19 @@ class ConversationWorkflowPolicy:
                 **common,
             )
 
+        missing_pricing = self._missing_pricing_for_context(session_context, selected_trip)
+        if missing_pricing:
+            return WorkflowDecision(
+                state="human_handoff_required",
+                customer_status="Human review required",
+                allowed_tools={"create_handoff"},
+                required_step="create_pricing_handoff",
+                customer_message_key="pricing_handoff_required",
+                assistant_message=self._pricing_handoff_message(missing_pricing, arabic=arabic),
+                handoff_required=True,
+                **{**common, "reason": "missing_trip_price"},
+            )
+
         if not currency:
             return WorkflowDecision(
                 state="currency_required",
@@ -898,27 +911,75 @@ class ConversationWorkflowPolicy:
         counts = self._pricing_counts_for_context(session_context)
         egp_price = price_for_room_and_currency(selected_trip, room_type=room_type, currency="EGP", fallback_public_price=False)
         usd_price = price_for_room_and_currency(selected_trip, room_type=room_type, currency="USD", fallback_public_price=False)
+        public_price = price_for_room_and_currency(selected_trip, room_type=room_type, currency="", fallback_public_price=True)
         egp_total = self._parse_money(egp_price) * counts["egyptian"]
         usd_total = self._parse_money(usd_price) * counts["foreigner"]
         lines: list[str] = []
         if arabic:
             lines.append("تفصيل السعر المؤكد من CRM قبل اختيار عملة الدفع:")
             if counts["egyptian"]:
-                lines.append(f"- المصريون: {counts['egyptian']} x {egp_price or 'غير مسجل'} EGP = {self._format_money(egp_total, 'EGP') if egp_price else 'غير مسجل'}")
+                if egp_price:
+                    lines.append(f"- المصريون: {counts['egyptian']} x {egp_price} EGP = {self._format_money(egp_total, 'EGP')}")
+                elif public_price:
+                    lines.append(f"- المصريون: {counts['egyptian']} مسافر، السعر العام في CRM: {public_price}")
             if counts["foreigner"]:
-                lines.append(f"- الأجانب: {counts['foreigner']} x {usd_price or 'unlisted'} USD = {self._format_money(usd_total, 'USD') if usd_price else 'unlisted'}")
+                if usd_price:
+                    lines.append(f"- الأجانب: {counts['foreigner']} x {usd_price} USD = {self._format_money(usd_total, 'USD')}")
+                elif public_price:
+                    lines.append(f"- الأجانب: {counts['foreigner']} مسافر، السعر العام في CRM: {public_price}")
         else:
             lines.append("Verified CRM price breakdown before payment currency selection:")
             if counts["egyptian"]:
-                lines.append(f"- Egyptians: {counts['egyptian']} x {egp_price or 'unlisted'} EGP = {self._format_money(egp_total, 'EGP') if egp_price else 'unlisted'}")
+                if egp_price:
+                    lines.append(f"- Egyptians: {counts['egyptian']} x {egp_price} EGP = {self._format_money(egp_total, 'EGP')}")
+                elif public_price:
+                    lines.append(f"- Egyptians: {counts['egyptian']} travelers, CRM public price: {public_price}")
             if counts["foreigner"]:
-                lines.append(f"- Foreigners: {counts['foreigner']} x {usd_price or 'unlisted'} USD = {self._format_money(usd_total, 'USD') if usd_price else 'unlisted'}")
+                if usd_price:
+                    lines.append(f"- Foreigners: {counts['foreigner']} x {usd_price} USD = {self._format_money(usd_total, 'USD')}")
+                elif public_price:
+                    lines.append(f"- Foreigners: {counts['foreigner']} travelers, CRM public price: {public_price}")
         return "\n".join(lines)
 
     def _final_currency_prompt(self, session_context: dict[str, Any], *, selected_trip: dict[str, Any], arabic: bool = False) -> str:
         breakdown = self._pricing_breakdown_text(session_context, selected_trip, arabic=arabic)
         prompt = self._currency_prompt(arabic=arabic)
         return f"{breakdown}\n\n{prompt}" if breakdown else prompt
+
+    def _missing_pricing_for_context(self, session_context: dict[str, Any], selected_trip: dict[str, Any]) -> list[str]:
+        room_type = str(session_context.get("room_type") or "").strip()
+        if not selected_trip or not room_type:
+            return []
+        counts = self._pricing_counts_for_context(session_context)
+        public_price = price_for_room_and_currency(selected_trip, room_type=room_type, currency="", fallback_public_price=True)
+        missing: list[str] = []
+        if counts["egyptian"] and not (
+            price_for_room_and_currency(selected_trip, room_type=room_type, currency="EGP", fallback_public_price=False)
+            or public_price
+        ):
+            missing.append("Egyptian EGP")
+        if counts["foreigner"] and not (
+            price_for_room_and_currency(selected_trip, room_type=room_type, currency="USD", fallback_public_price=False)
+            or public_price
+        ):
+            missing.append("Foreigner USD")
+        return missing
+
+    @staticmethod
+    def _pricing_handoff_message(missing_pricing: list[str], *, arabic: bool = False) -> str:
+        missing_text = ", ".join(missing_pricing)
+        if arabic:
+            return (
+                "\u0627\u0644\u0633\u0639\u0631 \u0627\u0644\u0645\u0637\u0644\u0648\u0628 \u0644\u0647\u0630\u0647 \u0627\u0644\u063a\u0631\u0641\u0629 \u063a\u064a\u0631 \u0645\u0633\u062c\u0644 \u0628\u0634\u0643\u0644 \u0643\u0627\u0641\u064a \u0641\u064a CRM\u060c "
+                "\u0641\u0644\u0646 \u0623\u0624\u0643\u062f \u0627\u0644\u0633\u0639\u0631 \u0622\u0644\u064a\u0627. "
+                f"\u0627\u0644\u0633\u0628\u0628: {missing_text}. "
+                "\u0633\u0623\u062d\u0648\u0644 \u0627\u0644\u0637\u0644\u0628 \u0644\u0641\u0631\u064a\u0642 Ravel \u0644\u0645\u0631\u0627\u062c\u0639\u0629 \u0627\u0644\u0633\u0639\u0631 \u0648\u0627\u0644\u062a\u0648\u0627\u0635\u0644 \u0645\u0639\u0643."
+            )
+        return (
+            "The required price for this room is not listed clearly enough in CRM, so I will not confirm it automatically. "
+            f"Reason: {missing_text}. "
+            "I will send this to the Ravel team to review the price and follow up with you."
+        )
 
     @staticmethod
     def _is_minor_from_context(session_context: dict[str, Any]) -> bool:
