@@ -265,6 +265,44 @@ def test_missing_fields_and_empty_entry() -> None:
     assert parse_instagram_webhook({"entry": [None, {}]}) == []
 
 
+def test_prevent_duplicate_instagram_replies(agent_app, monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    router_calls = []
+
+    def fake_send_router_response(url, text, recipient_id):
+        router_calls.append((url, text, recipient_id))
+        return True
+
+    monkeypatch.setattr("services.ai_agent.ai_agent_app.server._send_router_response_webhook", fake_send_router_response)
+
+    meta_mock = MagicMock()
+    meta_mock.send_instagram_text_message.return_value = MagicMock(ok=True)
+    agent_app.config["SETTINGS"] = replace(agent_app.config["SETTINGS"], meta_page_access_token="fake_token")
+
+    with agent_app.test_request_context(
+        "/rahma-agent/webhook",
+        method="POST",
+        json={
+            "entry": [
+                {
+                    "id": "17841480645273321",
+                    "messaging": [
+                        {
+                            "sender": {"id": "user_dup_test"},
+                            "message": {"mid": "mid_dup_test", "text": "Hi"},
+                        }
+                    ],
+                }
+            ]
+        },
+        headers={"X-Response-Webhook": "http://127.0.0.1/router-cb"},
+    ):
+        from services.ai_agent.ai_agent_app.server import process_request
+        # Router response succeeds, so meta_client.send_instagram_text_message should NOT be called!
+        assert len(router_calls) == 0
+
+
 # ============================================================================
 # INCIDENT 3: META_APP_SECRET Security & Configuration Tests
 # ============================================================================

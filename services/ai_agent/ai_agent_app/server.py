@@ -2078,47 +2078,17 @@ def _send_router_response_webhook(response_url: str, text: str, recipient_id: st
                             "text": draft.text,
                             "reason": draft.reason
                         })
+                        reply_sent = False
                         if response_url:
                             if _send_router_response_webhook(response_url, draft.text, event.sender_id):
                                 replies_sent += 1
-                        if meta_client is not None:
+                                reply_sent = True
+
+                        if not reply_sent and meta_client is not None:
                             send_result = meta_client.send_instagram_text_message(event.sender_id, draft.text)
                             if send_result.ok:
                                 replies_sent += 1
-                                if service is not None:
-                                    try:
-                                        service.create_interaction(
-                                            timestamp=(
-                                                datetime.fromtimestamp(event.timestamp / 1000, tz=timezone.utc)
-                                                if event.timestamp
-                                                else datetime.now(timezone.utc)
-                                            ),
-                                            channel="Instagram",
-                                            customer_name=f"Instagram sender {event.sender_id}",
-                                            raw_phone=event.sender_id,
-                                            integrated_whatsapp="",
-                                            phone_lookup_key="",
-                                            traveler_id="",
-                                            matched_row=None,
-                                            status_snapshot="WEBHOOK_REPLIED",
-                                            intent="outbound_message",
-                                            trip_type="",
-                                            suggested_trips="",
-                                            action_taken="outbound_reply_sent",
-                                            handoff_required=False,
-                                            handoff_reason="",
-                                            agent_notes=(
-                                                f"Outbound reply sent after inbound webhook. "
-                                                f"Reason: {draft.reason}. Reply: {draft.text}"
-                                            ),
-                                            flow_key="instagram",
-                                            step_key="outbound_reply",
-                                            message_key=f"{event.event_id}:reply",
-                                            language="",
-                                            outcome="sent",
-                                        )
-                                    except Exception as exc:
-                                        webhook_logger.warning(f"Could not record outbound Instagram reply: {exc}")
+                                reply_sent = True
                             else:
                                 replies_failed += 1
                                 webhook_logger.warning(
@@ -2127,6 +2097,41 @@ def _send_router_response_webhook(response_url: str, text: str, recipient_id: st
                                     send_result.status_code,
                                     send_result.response_json,
                                 )
+
+                        if reply_sent and service is not None:
+                            try:
+                                service.create_interaction(
+                                    timestamp=(
+                                        datetime.fromtimestamp(event.timestamp / 1000, tz=timezone.utc)
+                                        if event.timestamp
+                                        else datetime.now(timezone.utc)
+                                    ),
+                                    channel="Instagram",
+                                    customer_name=f"Instagram sender {event.sender_id}",
+                                    raw_phone=event.sender_id,
+                                    integrated_whatsapp="",
+                                    phone_lookup_key="",
+                                    traveler_id="",
+                                    matched_row=None,
+                                    status_snapshot="WEBHOOK_REPLIED",
+                                    intent="outbound_message",
+                                    trip_type="",
+                                    suggested_trips="",
+                                    action_taken="outbound_reply_sent",
+                                    handoff_required=False,
+                                    handoff_reason="",
+                                    agent_notes=(
+                                        f"Outbound reply sent after inbound webhook. "
+                                        f"Reason: {draft.reason}. Reply: {draft.text}"
+                                    ),
+                                    flow_key="instagram",
+                                    step_key="outbound_reply",
+                                    message_key=f"{event.event_id}:reply",
+                                    language="",
+                                    outcome="sent",
+                                )
+                            except Exception as exc:
+                                webhook_logger.warning(f"Could not record outbound Instagram reply: {exc}")
                     else:
                         duplicates += 1
 
