@@ -229,9 +229,10 @@ class ExcelSheetGateway:
     def get_demo_stats(self) -> dict[str, Any]:
         client = self._crm_api_client()
         if client is not None:
-            # crm_access_mode=api means Postgres (via the CRM API) is the authority;
-            # let failures surface instead of masking them with stale sqlite/Excel data.
-            return client.read("get_demo_stats", {})
+            try:
+                return client.read("get_demo_stats", {})
+            except Exception as exc:
+                sheet_logger.warning(f"get_demo_stats CRM API read failed: {exc}")
         db_stats = self._get_demo_stats_from_db()
         if db_stats is not None:
             return db_stats
@@ -243,9 +244,12 @@ class ExcelSheetGateway:
     def crm_preview(self, limit: int = 15) -> list[dict[str, Any]]:
         client = self._crm_api_client()
         if client is not None:
-            response = client.read("crm_preview", {"limit": limit})
-            rows = response.get("rows")
-            return rows if isinstance(rows, list) else []
+            try:
+                response = client.read("crm_preview", {"limit": limit})
+                rows = response.get("rows")
+                return rows if isinstance(rows, list) else []
+            except Exception as exc:
+                sheet_logger.warning(f"crm_preview CRM API read failed: {exc}")
         db_rows = self._crm_preview_from_db(limit)
         if db_rows is not None:
             return db_rows

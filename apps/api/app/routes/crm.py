@@ -70,7 +70,7 @@ def _agent_runtime():
 
 
 @crm_bp.route('/agent/read', methods=['POST'])
-@limiter.limit(lambda: os.environ.get("CRM_AGENT_READ_RATE_LIMIT", "300 per hour"))
+@limiter.limit(lambda: os.environ.get("CRM_AGENT_READ_RATE_LIMIT", "10000 per hour"))
 def agent_read():
     data = request.get_json(silent=True) or {}
     action = str(data.get("action") or "").strip()

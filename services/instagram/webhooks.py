@@ -119,12 +119,21 @@ def filter_entries_for_page(payload: dict, expected_page_id: str) -> tuple[list,
     app is ever subscribed to more than one page/app, or a misdelivered
     callback arrives.
     """
-    entries = payload.get("entry") or []
+    entries = payload.get("entry") or [] if isinstance(payload, dict) else []
     if not expected_page_id:
         return list(entries), []
     accepted, rejected = [], []
     for entry in entries:
-        entry_id = str((entry or {}).get("id") or "").strip()
+        if isinstance(entry, str):
+            try:
+                entry_dict = json.loads(entry)
+            except Exception:
+                entry_dict = {}
+        elif isinstance(entry, dict):
+            entry_dict = entry
+        else:
+            entry_dict = {}
+        entry_id = str(entry_dict.get("id") or "").strip()
         if entry_id == expected_page_id:
             accepted.append(entry)
         else:

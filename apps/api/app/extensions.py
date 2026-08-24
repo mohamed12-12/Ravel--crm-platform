@@ -25,7 +25,7 @@ _REDIS_URL = os.environ.get("REDIS_URL", "").strip()
 
 limiter = Limiter(
     key_func=get_remote_address,
-    default_limits=["300 per hour"],
+    default_limits=["3000 per hour"],
     storage_uri=_REDIS_URL or "memory://",
 )
 socketio = SocketIO(
