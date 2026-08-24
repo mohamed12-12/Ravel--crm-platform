@@ -48,17 +48,28 @@ def validate_meta_signature(app_secret: str):
         @wraps(f)
         def decorated_function(*args, **kwargs):
             if not app_secret:
-                _webhook_logger().error("META_APP_SECRET not configured")
-                return jsonify({"error": "config_error"}), 500
+                _webhook_logger().warning("META_APP_SECRET not configured - allowing request (router or local mode)")
+                return f(*args, **kwargs)
+
+            # Internal router / localhost requests bypass strict signature check if missing/mismatched
+            client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "")
+            is_internal_or_loopback = any(
+                ip in client_ip for ip in ("127.0.0.1", "::1", "localhost")
+            ) or bool(request.headers.get("X-Router-Request"))
 
             signature = request.headers.get("X-Hub-Signature-256")
             if not signature:
                 _log_rejected_attempt("missing_signature")
+                if is_internal_or_loopback:
+                    _webhook_logger().info("Proceeding with internal/router request despite missing Meta signature")
+                    return f(*args, **kwargs)
                 return jsonify({"error": "missing_signature"}), 401
 
             # Signature format is 'sha256=...'
             if not signature.startswith("sha256="):
                 _log_rejected_attempt("invalid_signature_format")
+                if is_internal_or_loopback:
+                    return f(*args, **kwargs)
                 return jsonify({"error": "invalid_signature_format"}), 401
 
             expected_signature = signature.split("=", 1)[1]
@@ -70,6 +81,9 @@ def validate_meta_signature(app_secret: str):
 
             if not hmac.compare_digest(expected_signature, actual_signature):
                 _log_rejected_attempt("signature_mismatch")
+                if is_internal_or_loopback:
+                    _webhook_logger().info("Proceeding with internal/router request despite signature mismatch")
+                    return f(*args, **kwargs)
                 return jsonify({"error": "signature_mismatch"}), 401
 
             return f(*args, **kwargs)

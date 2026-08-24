@@ -1970,6 +1970,7 @@ def create_app(
                 duplicates = 0
                 replies_sent = 0
                 replies_failed = 0
+                generated_replies = []
                 meta_client = None
                 if settings.meta_page_access_token:
                     meta_client = MetaGraphClient(
@@ -1985,16 +1986,17 @@ def create_app(
                     webhook_logger.warning(f"Could not initialize system service for webhook: {exc}")
                     service = None
 
-                if service is not None:
-                    for event in events:
-                        attachments = [
-                            {
-                                "type": attachment.attachment_type,
-                                "url": attachment.url,
-                                "payload": attachment.payload,
-                            }
-                            for attachment in event.attachments
-                        ]
+                for event in events:
+                    attachments = [
+                        {
+                            "type": attachment.attachment_type,
+                            "url": attachment.url,
+                            "payload": attachment.payload,
+                        }
+                        for attachment in event.attachments
+                    ]
+                    result = {"created": True}
+                    if service is not None:
                         try:
                             result = service.record_inbound_channel_event(
                                 channel="Instagram",
@@ -2016,13 +2018,19 @@ def create_app(
                             webhook_logger.warning(f"Error recording inbound channel event: {exc}")
                             result = {"created": True}
 
-                        if result.get("created"):
-                            persisted += 1
-                            if meta_client is not None:
-                                draft = build_instagram_reply(event)
-                                send_result = meta_client.send_instagram_text_message(event.sender_id, draft.text)
-                                if send_result.ok:
-                                    replies_sent += 1
+                    if result.get("created"):
+                        persisted += 1
+                        draft = build_instagram_reply(event)
+                        generated_replies.append({
+                            "recipient_id": event.sender_id,
+                            "text": draft.text,
+                            "reason": draft.reason
+                        })
+                        if meta_client is not None:
+                            send_result = meta_client.send_instagram_text_message(event.sender_id, draft.text)
+                            if send_result.ok:
+                                replies_sent += 1
+                                if service is not None:
                                     try:
                                         service.create_interaction(
                                             timestamp=(
@@ -2056,16 +2064,16 @@ def create_app(
                                         )
                                     except Exception as exc:
                                         webhook_logger.warning(f"Could not record outbound Instagram reply: {exc}")
-                                else:
-                                    replies_failed += 1
-                                    webhook_logger.warning(
-                                        "Instagram reply send failed for %s: %s %s",
-                                        event.sender_id,
-                                        send_result.status_code,
-                                        send_result.response_json,
-                                    )
-                        else:
-                            duplicates += 1
+                            else:
+                                replies_failed += 1
+                                webhook_logger.warning(
+                                    "Instagram reply send failed for %s: %s %s",
+                                    event.sender_id,
+                                    send_result.status_code,
+                                    send_result.response_json,
+                                )
+                    else:
+                        duplicates += 1
 
                 return jsonify(
                     {
@@ -2075,6 +2083,8 @@ def create_app(
                         "duplicates": duplicates,
                         "repliesSent": replies_sent,
                         "repliesFailed": replies_failed,
+                        "reply": generated_replies[0]["text"] if generated_replies else None,
+                        "replies": generated_replies,
                     }
                 )
             except Exception as exc:
