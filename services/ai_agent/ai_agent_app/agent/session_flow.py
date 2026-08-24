@@ -95,6 +95,7 @@ class SessionState:
     gender: str = ""
     nationality: str = ""
     raw_phone: str = ""
+    instagram_sender_id: str = ""
     country_code: str = ""
     phone_normalization: dict[str, Any] = field(default_factory=dict)
     pending_raw_phone: str = ""

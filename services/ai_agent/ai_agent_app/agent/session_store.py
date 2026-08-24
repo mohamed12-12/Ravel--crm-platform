@@ -108,6 +108,7 @@ class DurableSessionStore:
         "traveler_id": "VARCHAR(20)",
         "lead_id": "VARCHAR(50)",
         "raw_phone": "VARCHAR(32)",
+        "instagram_sender_id": "VARCHAR(64)",
     }
 
     def ensure_schema(self) -> None:
@@ -142,6 +143,12 @@ class DurableSessionStore:
             )
             connection.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_ai_agent_sessions_lead_id ON ai_agent_sessions (lead_id)")
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_ai_agent_sessions_instagram_sender_id "
+                    "ON ai_agent_sessions (instagram_sender_id)"
+                )
             )
         self._schema_ready = True
 
@@ -182,6 +189,18 @@ class DurableSessionStore:
         with self.engine.begin() as connection:
             connection.execute(text("DELETE FROM ai_agent_sessions"))
 
+    def find_session_id_by_instagram_sender_id(self, sender_id: str):
+        sender_id = str(sender_id or "").strip()
+        if not sender_id:
+            return None
+        self.ensure_schema()
+        with self.engine.begin() as connection:
+            row = connection.execute(
+                text("SELECT session_id FROM ai_agent_sessions WHERE instagram_sender_id = :sid"),
+                {"sid": sender_id},
+            ).mappings().first()
+        return str(row["session_id"]) if row else None
+
     def load(self, session_id: str) -> tuple[SessionState, AgentState, int] | None:
         self.ensure_schema()
         with self.engine.begin() as connection:
@@ -214,6 +233,7 @@ class DurableSessionStore:
             "traveler_id": str(session.traveler_id or "").strip() or None,
             "lead_id": str(session.lead_id or "").strip() or None,
             "raw_phone": str(session.raw_phone or "").strip() or None,
+            "instagram_sender_id": str(getattr(session, "instagram_sender_id", "") or "").strip() or None,
         }
         with self.engine.begin() as connection:
             existing = connection.execute(
@@ -227,11 +247,11 @@ class DurableSessionStore:
                         INSERT INTO ai_agent_sessions (
                             session_id, schema_version, payload, agent_state, version,
                             created_at, updated_at, locked_until, lock_owner, last_message_key,
-                            traveler_id, lead_id, raw_phone
+                            traveler_id, lead_id, raw_phone, instagram_sender_id
                         ) VALUES (
                             :session_id, :schema_version, :payload, :agent_state, 1,
                             :created_at, :updated_at, NULL, NULL, :last_message_key,
-                            :traveler_id, :lead_id, :raw_phone
+                            :traveler_id, :lead_id, :raw_phone, :instagram_sender_id
                         )
                         """
                     ),
@@ -265,7 +285,8 @@ class DurableSessionStore:
                         last_message_key = :last_message_key,
                         traveler_id = :traveler_id,
                         lead_id = :lead_id,
-                        raw_phone = :raw_phone
+                        raw_phone = :raw_phone,
+                        instagram_sender_id = :instagram_sender_id
                     WHERE session_id = :session_id
                     """
                 ),

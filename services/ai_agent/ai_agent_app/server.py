@@ -15,6 +15,7 @@ import re
 import time
 import urllib.request
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -2074,7 +2075,22 @@ def create_app(
 
                     if result.get("created"):
                         persisted += 1
-                        draft = build_instagram_reply(event)
+                        session_runtime = app.config["SESSIONS"]
+                        if hasattr(session_runtime, "get_or_create_session_for_instagram"):
+                            sheet_gateway = app.config.get("SHEET_GATEWAY")
+                            ig_session = session_runtime.get_or_create_session_for_instagram(
+                                event.sender_id, gateway=sheet_gateway
+                            )
+                            agent_result = session_runtime.handle_message_by_id(
+                                ig_session.id, event.text or "", sheet_gateway
+                            )
+                            if agent_result is not None and agent_result.messages:
+                                reply_text = agent_result.messages[-1].get("text", "")
+                            else:
+                                reply_text = ""
+                            draft = SimpleNamespace(text=reply_text, reason="tool_calling_agent")
+                        else:
+                            draft = build_instagram_reply(event)
                         generated_replies.append({
                             "recipient_id": event.sender_id,
                             "text": draft.text,

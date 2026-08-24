@@ -429,6 +429,27 @@ class ToolCallingSessionRuntime:
         self._persist_session(session)
         return session
 
+    def get_or_create_session_for_instagram(self, sender_id: str, gateway=None) -> SessionState:
+        """Get-or-create a durable session keyed by Instagram sender id.
+
+        Mirrors the raw_phone/traveler_id identity pattern in session_store.py:
+        an Instagram sender is looked up by their scoped sender_id instead of
+        a browser session cookie, and reused across webhook deliveries.
+        """
+        sender_id = str(sender_id or "").strip()
+        existing_id = self._session_store.find_session_id_by_instagram_sender_id(sender_id)
+        if existing_id:
+            loaded = self._session_store.load(existing_id)
+            if loaded is not None:
+                session, agent_state, _ = loaded
+                self._sessions[existing_id] = session
+                self._state_by_session[existing_id] = agent_state
+                return session
+        session = self.create_session(gateway)
+        session.instagram_sender_id = sender_id
+        self._persist_session(session)
+        return session
+
     def handle_message_by_id(self, session_id: str, text: str, gateway) -> SessionState | None:
         """Load, lock, process, and persist one customer turn.
 
