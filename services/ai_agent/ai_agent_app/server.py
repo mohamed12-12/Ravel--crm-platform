@@ -1489,7 +1489,8 @@ def _handle_gemini_deterministic_workflow(session, text: str, gemini_agent: Gemi
             session.messages.append({"role": "user", "text": clean_text})
             reply = (
                 "\u0643\u0645 \u0639\u062f\u062f \u0627\u0644\u0645\u0633\u0627\u0641\u0631\u064a\u0646 \u0641\u064a \u0637\u0644\u0628 \u0627\u0644\u062d\u062c\u0632\u061f"
-                if str(getattr(session, "language", "") or "").startswith("ar")
+
+                if str(getattr(session, "language", "") or "").startswith("ar")
                 else "How many travelers should I put on this booking request?"
             )
             _gemini_append_verified_reply(session, reply, stage="group_size_required")
@@ -1784,6 +1785,26 @@ def _extract_booking_payload(session) -> tuple[str, str, str]:
     return traveler_id, traveler_name, lead_id
 
 
+def _send_router_response_webhook(response_url: str, text: str, recipient_id: str = "") -> bool:
+    if not response_url:
+        return False
+    try:
+        payload = json.dumps({"text": text, "message": text, "recipient_id": recipient_id}).encode("utf-8")
+        req = urllib.request.Request(
+            response_url,
+            data=payload,
+            headers={"Content-Type": "application/json", "User-Agent": "Rahma-Traveler-Agent/1.0"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            webhook_logger.info("Successfully called response_webhook %s status=%d", response_url, resp.status)
+            return resp.status < 400
+    except Exception as exc:
+        webhook_logger.warning("Failed to post reply to response_webhook %s: %s", response_url, exc)
+        return False
+
+
+
 def create_app(
     source_workbook: Path | None = None,
     runtime_workbook: Path | None = None,
@@ -1965,25 +1986,6 @@ def create_app(
             abort(404)
         return send_file(path, mimetype=row["mime_type"] or "image/jpeg", as_attachment=False, conditional=True, max_age=3600)
 
-def _send_router_response_webhook(response_url: str, text: str, recipient_id: str = "") -> bool:
-    if not response_url:
-        return False
-    try:
-        payload = json.dumps({"text": text, "message": text, "recipient_id": recipient_id}).encode("utf-8")
-        req = urllib.request.Request(
-            response_url,
-            data=payload,
-            headers={"Content-Type": "application/json", "User-Agent": "Rahma-Traveler-Agent/1.0"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            webhook_logger.info("Successfully called response_webhook %s status=%d", response_url, resp.status)
-            return resp.status < 400
-    except Exception as exc:
-        webhook_logger.warning("Failed to post reply to response_webhook %s: %s", response_url, exc)
-        return False
-
-
     @app.get("/rahma-agent/webhook")
     def webhook_verify():
         settings: Settings = app.config["SETTINGS"]
@@ -2081,7 +2083,7 @@ def _send_router_response_webhook(response_url: str, text: str, recipient_id: st
                         if response_url:
                             if _send_router_response_webhook(response_url, draft.text, event.sender_id):
                                 replies_sent += 1
-                        if meta_client is not None:
+                        elif meta_client is not None:
                             send_result = meta_client.send_instagram_text_message(event.sender_id, draft.text)
                             if send_result.ok:
                                 replies_sent += 1
@@ -2138,8 +2140,6 @@ def _send_router_response_webhook(response_url: str, text: str, recipient_id: st
                         "duplicates": duplicates,
                         "repliesSent": replies_sent,
                         "repliesFailed": replies_failed,
-                        "reply": generated_replies[0]["text"] if generated_replies else None,
-                        "replies": generated_replies,
                     }
                 )
             except Exception as exc:
