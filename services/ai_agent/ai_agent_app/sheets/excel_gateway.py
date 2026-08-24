@@ -28,12 +28,26 @@ from services.crm.system_services.config import resolve_system_db_path
 from scripts.phase1_readonly_agent import build_agent_response
 
 
+def _normalize_text(val: Any) -> str:
+    return " ".join(str(val or "").strip().split())
+
+
+def _load_workbook_with_retry(path: Path, **kwargs):
+    for attempt in range(3):
+        try:
+            return load_workbook(path, **kwargs)
+        except Exception:
+            if attempt == 2:
+                raise
+            time.sleep(0.1)
+
+
 class ExcelSheetGateway:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.source_path = settings.excel_source_workbook
         self.runtime_path = settings.excel_runtime_workbook
-        self._lock = threading.RLock()  # RLock: reentrant so Drive subclass can lock > super()
+        self._lock = threading.RLock()
 
     def ensure_runtime_workbook(self, reset: bool = False) -> None:
         with self._lock:
@@ -44,7 +58,11 @@ class ExcelSheetGateway:
                         "Runtime workbook was corrupted or not a valid .xlsx archive. Restoring from source."
                     )
                 sheet_logger.info(f"Ensuring runtime workbook: resetting={reset or runtime_invalid}")
-                shutil.copy2(self.source_path, self.runtime_path)
+                if self.source_path.exists():
+                    self.runtime_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(self.source_path, self.runtime_path)
+                else:
+                    sheet_logger.warning("Source workbook does not exist: %s - skipping runtime copy", self.source_path)
 
     def _load_runtime_workbook(self, **kwargs):
         self.ensure_runtime_workbook()
