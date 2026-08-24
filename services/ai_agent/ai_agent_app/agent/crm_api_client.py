@@ -9,6 +9,12 @@ class CRMApiError(RuntimeError):
     pass
 
 
+class CRMApiRateLimitError(CRMApiError):
+    def __init__(self, message: str, retry_after: int | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 class CRMApiClient:
     """Authenticated client for the CRM-owned agent tool endpoints."""
 
@@ -59,6 +65,15 @@ class CRMApiClient:
                 payload = json.loads(response.read().decode("utf-8"))
         except error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
+            if exc.code == 429:
+                retry_after_hdr = exc.headers.get("Retry-After")
+                retry_val: int | None = None
+                if retry_after_hdr and retry_after_hdr.strip().isdigit():
+                    retry_val = int(retry_after_hdr.strip())
+                raise CRMApiRateLimitError(
+                    f"CRM API returned HTTP 429: {detail[:500]}",
+                    retry_after=retry_val,
+                ) from exc
             raise CRMApiError(f"CRM API returned HTTP {exc.code}: {detail[:500]}") from exc
         except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise CRMApiError(f"CRM API request failed: {exc}") from exc

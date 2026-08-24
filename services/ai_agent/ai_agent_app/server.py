@@ -25,7 +25,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 from services.ai_agent.ai_agent_app.agent import GeminiAgent, SessionFlowManager
-from services.ai_agent.ai_agent_app.agent.crm_api_client import CRMApiError
+from services.ai_agent.ai_agent_app.agent.crm_api_client import CRMApiError, CRMApiRateLimitError
 from services.ai_agent.ai_agent_app.agent.response_format import response_completeness_issue
 from services.ai_agent.ai_agent_app.agent.response_guard import (
     guard_customer_response,
@@ -557,35 +557,56 @@ def _unavailable_demo_stats(*, cached: dict[str, Any] | None = None, error: str 
 def _safe_demo_stats(gateway: ExcelSheetGateway) -> dict[str, Any]:
     """Return optional UI stats without making core agent sessions depend on them.
 
-    In CRM API mode, stats are a dashboard convenience reached through the
-    same authenticated `/api/crm/agent/read` endpoint as core lookups. A 429,
-    5xx, timeout, or connection failure there must not make `/api/session`
-    fail. Non-API backends keep the existing strict behavior so local DB/schema
-    failures are still visible during development and tests.
+    A 429, 5xx, timeout, connection failure, or local schema error must NOT make
+    `/api/session` or recovery response serialization fail.
     """
-
-    if not _gateway_uses_crm_api(gateway):
-        return _mark_demo_stats_available(gateway.get_demo_stats())
-
     now = time.monotonic()
     cached = getattr(gateway, "_safe_demo_stats_cache", None)
     cached_until = float(getattr(gateway, "_safe_demo_stats_cache_until", 0.0) or 0.0)
+    cooldown_until = float(getattr(gateway, "_safe_demo_stats_cooldown_until", 0.0) or 0.0)
+
     if isinstance(cached, dict) and cached_until > now:
         return dict(cached)
 
+    if cooldown_until > now:
+        stale = cached if isinstance(cached, dict) else None
+        return _unavailable_demo_stats(cached=stale, error="stats_cooldown")
+
     try:
-        stats = _mark_demo_stats_available(gateway.get_demo_stats())
-    except CRMApiError as exc:
-        app_logger.warning("Optional CRM demo stats unavailable; continuing core agent session: %s", exc)
+        raw_stats = gateway.get_demo_stats()
+        stats = _mark_demo_stats_available(raw_stats)
+    except CRMApiRateLimitError as exc:
+        app_logger.warning(
+            "CRM_RATE_LIMITED action=get_demo_stats endpoint=/api/crm/agent/read operation=non-critical fallback_activated=true retry_after=%s error=%s",
+            getattr(exc, "retry_after", None),
+            exc,
+        )
+        setattr(gateway, "_safe_demo_stats_cooldown_until", now + 15.0)
         stale = cached if isinstance(cached, dict) else None
         return _unavailable_demo_stats(cached=stale, error="stats_unavailable")
+    except CRMApiError as exc:
+        app_logger.warning(
+            "CRM_NONCRITICAL_FALLBACK action=get_demo_stats endpoint=/api/crm/agent/read operation=non-critical error=%s fallback_activated=true",
+            exc,
+        )
+        setattr(gateway, "_safe_demo_stats_cooldown_until", now + 15.0)
+        stale = cached if isinstance(cached, dict) else None
+        return _unavailable_demo_stats(cached=stale, error="stats_unavailable")
+    except Exception as exc:
+        app_logger.warning(
+            "CRM_NONCRITICAL_FALLBACK action=get_demo_stats operation=non-critical error=%s fallback_activated=true",
+            exc,
+        )
+        if _gateway_uses_crm_api(gateway):
+            setattr(gateway, "_safe_demo_stats_cooldown_until", now + 15.0)
+            stale = cached if isinstance(cached, dict) else None
+            return _unavailable_demo_stats(cached=stale, error="stats_unavailable")
+        raise
 
     ttl = _stats_cache_ttl_seconds()
     setattr(gateway, "_safe_demo_stats_cache", dict(stats))
-    if ttl > 0:
-        setattr(gateway, "_safe_demo_stats_cache_until", now + ttl)
-    else:
-        setattr(gateway, "_safe_demo_stats_cache_until", 0.0)
+    setattr(gateway, "_safe_demo_stats_cache_until", now + ttl if ttl > 0 else 0.0)
+    setattr(gateway, "_safe_demo_stats_cooldown_until", 0.0)
     return stats
 
 

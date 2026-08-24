@@ -232,7 +232,10 @@ class ExcelSheetGateway:
             try:
                 return client.read("get_demo_stats", {})
             except Exception as exc:
-                sheet_logger.warning(f"get_demo_stats CRM API read failed: {exc}")
+                sheet_logger.warning("get_demo_stats CRM API read failed: %s", exc)
+                from services.ai_agent.ai_agent_app.agent.crm_api_client import CRMApiError
+                if isinstance(exc, CRMApiError):
+                    raise
         db_stats = self._get_demo_stats_from_db()
         if db_stats is not None:
             return db_stats

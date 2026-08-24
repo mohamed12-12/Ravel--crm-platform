@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import json
 from functools import wraps
 from flask import has_request_context, request, jsonify
 
@@ -48,7 +49,10 @@ def validate_meta_signature(app_secret: str):
         @wraps(f)
         def decorated_function(*args, **kwargs):
             if not app_secret:
-                _webhook_logger().warning("META_APP_SECRET not configured - allowing request (router or local mode)")
+                _webhook_logger().warning(
+                    "META_SIGNATURE_CONFIGURATION_ERROR reason=missing_meta_app_secret "
+                    "message='META_APP_SECRET is not configured; Meta webhook signature verification is bypassed for local/router calls.'"
+                )
                 return f(*args, **kwargs)
 
             # Internal router / localhost requests bypass strict signature check if missing/mismatched
@@ -110,7 +114,7 @@ def verify_webhook(verify_token: str):
     return "Not Found", 404
 
 
-def filter_entries_for_page(payload: dict, expected_page_id: str) -> tuple[list, list]:
+def filter_entries_for_page(payload: object, expected_page_id: str) -> tuple[list[dict], list[dict]]:
     """Split webhook entries into (accepted, rejected) by page/IG business ID.
 
     Meta webhook payloads carry the receiving page's ID as entry["id"]. When
@@ -119,24 +123,56 @@ def filter_entries_for_page(payload: dict, expected_page_id: str) -> tuple[list,
     app is ever subscribed to more than one page/app, or a misdelivered
     callback arrives.
     """
-    entries = payload.get("entry") or [] if isinstance(payload, dict) else []
-    if not expected_page_id:
-        return list(entries), []
-    accepted, rejected = [], []
-    for entry in entries:
-        if isinstance(entry, str):
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            payload = {}
+
+    if not isinstance(payload, dict):
+        return [], []
+
+    raw_entries = payload.get("entry")
+    if isinstance(raw_entries, str):
+        try:
+            raw_entries = json.loads(raw_entries)
+        except Exception:
+            raw_entries = []
+
+    if isinstance(raw_entries, dict):
+        raw_entries = [raw_entries]
+    elif not isinstance(raw_entries, list):
+        raw_entries = []
+
+    accepted: list[dict] = []
+    rejected: list[dict] = []
+    expected = str(expected_page_id or "").strip()
+
+    for item in raw_entries:
+        if isinstance(item, str):
             try:
-                entry_dict = json.loads(entry)
+                item_dict = json.loads(item)
             except Exception:
-                entry_dict = {}
-        elif isinstance(entry, dict):
-            entry_dict = entry
+                item_dict = None
+        elif isinstance(item, dict):
+            item_dict = item
         else:
-            entry_dict = {}
-        entry_id = str(entry_dict.get("id") or "").strip()
-        if entry_id == expected_page_id:
-            accepted.append(entry)
+            item_dict = None
+
+        if not isinstance(item_dict, dict):
+            _webhook_logger().warning("WEBHOOK_INVALID_ENTRY reason=non_dict_entry item_type=%s", type(item).__name__)
+            continue
+
+        entry_id = str(item_dict.get("id") or "").strip()
+        if not expected or entry_id == expected:
+            accepted.append(item_dict)
         else:
-            rejected.append(entry)
-            _log_rejected_attempt("unexpected_page_id", entry_id=entry_id, expected=expected_page_id)
+            rejected.append(item_dict)
+            _log_rejected_attempt("unexpected_page_id", entry_id=entry_id, expected=expected)
+            _webhook_logger().warning(
+                "WEBHOOK_ENTRY_REJECTED reason=unexpected_page_id entry_id=%s expected=%s",
+                entry_id,
+                expected,
+            )
+
     return accepted, rejected
