@@ -1939,7 +1939,7 @@ class UnifiedCRMService:
                 language="",
                 outcome=outcome or "received",
             )
-        except sqlite3.IntegrityError:
+        except (sqlite3.IntegrityError, Exception):
             if not safe_message_key:
                 raise
             with self.connect() as connection:

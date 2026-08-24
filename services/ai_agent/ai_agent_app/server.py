@@ -1466,7 +1466,7 @@ def _handle_gemini_deterministic_workflow(session, text: str, gemini_agent: Gemi
             session.messages.append({"role": "user", "text": clean_text})
             reply = (
                 "\u0643\u0645 \u0639\u062f\u062f \u0627\u0644\u0645\u0633\u0627\u0641\u0631\u064a\u0646 \u0641\u064a \u0637\u0644\u0628 \u0627\u0644\u062d\u062c\u0632\u061f"
-                if str(getattr(session, "language", "") or "").startswith("ar")
+                if str(getattr(session, "language", "") or "").startswith("ar")
                 else "How many travelers should I put on this booking request?"
             )
             _gemini_append_verified_reply(session, reply, stage="group_size_required")
@@ -1479,7 +1479,7 @@ def _handle_gemini_deterministic_workflow(session, text: str, gemini_agent: Gemi
         if _gemini_is_explanation_request(clean_text) or _gemini_is_booking_intent(clean_text):
             session.messages.append({"role": "user", "text": clean_text})
             reply = (
-                "\u0623\u0642\u0635\u062f \u0639\u062f\u062f \u0627\u0644\u0645\u0633\u0627\u0641\u0631\u064a\u0646 \u0641\u064a \u0637\u0644\u0628 \u0627\u0644\u062d\u062c\u0632\u060c \u0648\u0644\u064a\u0633 \u0639\u062f\u062f \u0627\u0644\u063a\u0631\u0641. \u0627\u0643\u062a\u0628 \u0631\u0642\u0645\u064b\u0627 \u0645\u062b\u0644 2."
+                "أقصد عدد المسافرين في طلب الحجز، وليس عدد الغرف. اكتب رقمًا مثل 2."
                 if str(getattr(session, "language", "") or "").startswith("ar")
                 else "I mean the number of travelers for this booking, not the number of rooms. Please reply with a number, for example 2."
             )
@@ -1494,7 +1494,7 @@ def _handle_gemini_deterministic_workflow(session, text: str, gemini_agent: Gemi
                 _gemini_append_verified_reply(session, _gemini_booking_confirmation_summary(session), stage="booking_confirmation_required")
                 return True
             reply = (
-                "\u0647\u0644 \u062a\u0631\u064a\u062f \u0627\u0644\u0631\u062d\u0644\u0629 \u0645\u0639 \u0637\u064a\u0631\u0627\u0646 \u0623\u0645 \u0628\u062f\u0648\u0646 \u0637\u064a\u0631\u0627\u0646\u061f\n\n1. \u0645\u0639 \u0637\u064a\u0631\u0627\u0646\n2. \u0628\u062f\u0648\u0646 \u0637\u064a\u0631\u0627\u0646"
+                "هل تريد الرحلة مع طيران أم بدون طيران؟\n\n1. مع طيران\n2. بدون طيران"
                 if str(getattr(session, "language", "") or "").startswith("ar")
                 else "Do you want this trip with flights or without flights?\n\n1. With flights\n2. Without flights"
             )
@@ -1502,7 +1502,7 @@ def _handle_gemini_deterministic_workflow(session, text: str, gemini_agent: Gemi
             return True
         session.messages.append({"role": "user", "text": clean_text})
         reply = (
-            "\u0645\u0646 \u0641\u0636\u0644\u0643 \u0627\u0631\u0633\u0644 \u0639\u062f\u062f \u0627\u0644\u0645\u0633\u0627\u0641\u0631\u064a\u0646\u060c \u0645\u062b\u0644 1 \u0623\u0648 2 \u0623\u0648 3."
+            "من فضلك ارسل عدد المسافرين، مثل 1 أو 2 أو 3."
             if str(getattr(session, "language", "") or "").startswith("ar")
             else "Please send the number of travelers, for example 1, 2, or 3."
         )
@@ -1517,7 +1517,7 @@ def _handle_gemini_deterministic_workflow(session, text: str, gemini_agent: Gemi
             return True
         session.messages.append({"role": "user", "text": clean_text})
         reply = (
-            "\u0645\u0646 \u0641\u0636\u0644\u0643 \u0627\u062e\u062a\u0631 \u062e\u064a\u0627\u0631 \u0627\u0644\u0637\u064a\u0631\u0627\u0646:\n\n1. \u0645\u0639 \u0637\u064a\u0631\u0627\u0646\n2. \u0628\u062f\u0648\u0646 \u0637\u064a\u0631\u0627\u0646"
+            "من فضلك اختر خيار الطيران:\n\n1. مع طيران\n2. بدون طيران"
             if str(getattr(session, "language", "") or "").startswith("ar")
             else "Please choose the flight option:\n\n1. With flights\n2. Without flights"
         )
@@ -1578,8 +1578,6 @@ def _route_live_message_with_gemini(session, text: str, gemini_agent: GeminiAgen
         write_result=write_result,
         record_type=record_type,
         fallback_message_key=record_type or "general",
-        # Referring to a record saved on an earlier turn is honest, not a false
-        # write-success claim; without this the guard replaces it with an apology.
         known_record_ids=known_record_ids_from_context(session_context),
     )
     if guarded.fallback_used:
@@ -1611,6 +1609,13 @@ def _route_live_message_with_gemini(session, text: str, gemini_agent: GeminiAgen
     session.messages.append({"role": "user", "text": text})
     session.messages.append(_assistant_message_with_media(reply, media, session.language))
     _apply_gemini_tool_results(session, result, gemini_agent=gemini_agent, session_context=session_context)
+    app_logger.info(
+        "Live Gemini session %s mode=%s tools=%s fallback=%s",
+        session.id,
+        session.agent_mode,
+        ",".join(session.tools_used),
+        session.fallback_used,
+    )
 
 
 def _session_runs_gemini(app: Flask, sessions: SessionFlowManager, session_obj) -> bool:
@@ -1620,13 +1625,6 @@ def _session_runs_gemini(app: Flask, sessions: SessionFlowManager, session_obj) 
     if not isinstance(getattr(sessions, "conversation_ai", None), GeminiAgent):
         return False
     return str(getattr(session_obj, "agent_mode", "") or "").strip().lower() == "gemini"
-    app_logger.info(
-        "Live Gemini session %s mode=%s tools=%s fallback=%s",
-        session.id,
-        session.agent_mode,
-        ",".join(session.tools_used),
-        session.fallback_used,
-    )
 
 
 def _set_preview_trip_result(session, trip_result: dict[str, Any]) -> None:
@@ -1784,10 +1782,6 @@ def create_app(
         static_folder=str((Path(__file__).resolve().parent / "web" / "static")),
     )
     app.jinja_env.globals["static_asset_version"] = _static_asset_version
-    # Created fresh per create_app() call (this app has no separate blueprint
-    # modules that need to import a shared limiter), so each app instance
-    # gets its own in-memory counters -- no risk of one test's requests
-    # tripping a limit meant for a different app/test.
     limiter = Limiter(
         app=app,
         key_func=get_remote_address,
@@ -1954,138 +1948,140 @@ def create_app(
         return verify_webhook(settings.meta_verify_token)
 
     @app.post("/rahma-agent/webhook")
-    # This limit is keyed by remote address (Flask-Limiter's default), but
-    # every Instagram customer's message arrives via Meta's own calling
-    # infrastructure, not the customer's own IP -- so this is one ceiling
-    # shared across ALL customers combined, not per-customer. 60/min was
-    # sized for abuse prevention alone; a handful of people chatting at
-    # once can plausibly reach it. Raised, and made adjustable without a
-    # code change since real traffic volume isn't known yet.
     @limiter.limit(lambda: os.environ.get("WEBHOOK_RATE_LIMIT", "300 per minute"))
     def webhook_received():
-        # Wrap logic to use decorator with dynamic settings.
-        # TODO(production): durable retry queues for outbound Graph API sends
-        # before scaling past demo volume.
         settings = app.config["SETTINGS"]
+
         @validate_meta_signature(settings.meta_app_secret)
         def process_request():
-            data = request.get_json(force=True)
-            webhook_logger.info(f"Received webhook event")
-            payload = data if isinstance(data, dict) else {}
-            accepted_entries, rejected_entries = filter_entries_for_page(payload, settings.meta_page_id)
-            if rejected_entries:
-                webhook_logger.warning(
-                    "Skipped %d webhook entr%s not addressed to the configured page",
-                    len(rejected_entries),
-                    "y" if len(rejected_entries) == 1 else "ies",
-                )
-            events = parse_instagram_webhook({**payload, "entry": accepted_entries})
-            service = get_system_service(settings)
-            persisted = 0
-            duplicates = 0
-            replies_sent = 0
-            replies_failed = 0
-            meta_client = None
-            if settings.meta_page_access_token:
-                meta_client = MetaGraphClient(
-                    MetaApiSettings(
-                        page_access_token=settings.meta_page_access_token,
-                        graph_api_version=settings.meta_graph_api_version or "v23.0",
+            try:
+                data = request.get_json(force=True, silent=True) or {}
+                webhook_logger.info("Received webhook event")
+                payload = data if isinstance(data, dict) else {}
+                accepted_entries, rejected_entries = filter_entries_for_page(payload, settings.meta_page_id)
+                if rejected_entries:
+                    webhook_logger.warning(
+                        "Skipped %d webhook entr%s not addressed to the configured page",
+                        len(rejected_entries),
+                        "y" if len(rejected_entries) == 1 else "ies",
                     )
-                )
+                events = parse_instagram_webhook({**payload, "entry": accepted_entries})
+                persisted = 0
+                duplicates = 0
+                replies_sent = 0
+                replies_failed = 0
+                meta_client = None
+                if settings.meta_page_access_token:
+                    meta_client = MetaGraphClient(
+                        MetaApiSettings(
+                            page_access_token=settings.meta_page_access_token,
+                            graph_api_version=settings.meta_graph_api_version or "v23.0",
+                        )
+                    )
 
-            if service is not None:
-                for event in events:
-                    attachments = [
-                        {
-                            "type": attachment.attachment_type,
-                            "url": attachment.url,
-                            "payload": attachment.payload,
-                        }
-                        for attachment in event.attachments
-                    ]
-                    result = service.record_inbound_channel_event(
-                        channel="Instagram",
-                        message_key=event.event_id,
-                        sender_id=event.sender_id,
-                        recipient_id=event.recipient_id,
-                        text=event.text,
-                        attachments=attachments,
-                        timestamp=(
-                            datetime.fromtimestamp(event.timestamp / 1000, tz=timezone.utc)
-                            if event.timestamp
-                            else None
-                        ),
-                        flow_key="instagram",
-                        step_key="inbound_webhook",
-                        outcome="received",
-                    )
-                    if result.get("created"):
-                        persisted += 1
-                        if meta_client is not None:
-                            draft = build_instagram_reply(event)
-                            send_result = meta_client.send_instagram_text_message(event.sender_id, draft.text)
-                            if send_result.ok:
-                                replies_sent += 1
-                                try:
-                                    service.create_interaction(
-                                        timestamp=(
-                                            datetime.fromtimestamp(event.timestamp / 1000, tz=timezone.utc)
-                                            if event.timestamp
-                                            else datetime.now(timezone.utc)
-                                        ),
-                                        channel="Instagram",
-                                        customer_name=f"Instagram sender {event.sender_id}",
-                                        raw_phone=event.sender_id,
-                                        integrated_whatsapp="",
-                                        phone_lookup_key="",
-                                        traveler_id="",
-                                        matched_row=None,
-                                        status_snapshot="WEBHOOK_REPLIED",
-                                        intent="outbound_message",
-                                        trip_type="",
-                                        suggested_trips="",
-                                        action_taken="outbound_reply_sent",
-                                        handoff_required=False,
-                                        handoff_reason="",
-                                        agent_notes=(
-                                            f"Outbound reply sent after inbound webhook. "
-                                            f"Reason: {draft.reason}. Reply: {draft.text}"
-                                        ),
-                                        flow_key="instagram",
-                                        step_key="outbound_reply",
-                                        message_key=f"{event.event_id}:reply",
-                                        language="",
-                                        outcome="sent",
+                try:
+                    service = get_system_service(settings)
+                except Exception as exc:
+                    webhook_logger.warning(f"Could not initialize system service for webhook: {exc}")
+                    service = None
+
+                if service is not None:
+                    for event in events:
+                        attachments = [
+                            {
+                                "type": attachment.attachment_type,
+                                "url": attachment.url,
+                                "payload": attachment.payload,
+                            }
+                            for attachment in event.attachments
+                        ]
+                        try:
+                            result = service.record_inbound_channel_event(
+                                channel="Instagram",
+                                message_key=event.event_id,
+                                sender_id=event.sender_id,
+                                recipient_id=event.recipient_id,
+                                text=event.text,
+                                attachments=attachments,
+                                timestamp=(
+                                    datetime.fromtimestamp(event.timestamp / 1000, tz=timezone.utc)
+                                    if event.timestamp
+                                    else None
+                                ),
+                                flow_key="instagram",
+                                step_key="inbound_webhook",
+                                outcome="received",
+                            )
+                        except Exception as exc:
+                            webhook_logger.warning(f"Error recording inbound channel event: {exc}")
+                            result = {"created": True}
+
+                        if result.get("created"):
+                            persisted += 1
+                            if meta_client is not None:
+                                draft = build_instagram_reply(event)
+                                send_result = meta_client.send_instagram_text_message(event.sender_id, draft.text)
+                                if send_result.ok:
+                                    replies_sent += 1
+                                    try:
+                                        service.create_interaction(
+                                            timestamp=(
+                                                datetime.fromtimestamp(event.timestamp / 1000, tz=timezone.utc)
+                                                if event.timestamp
+                                                else datetime.now(timezone.utc)
+                                            ),
+                                            channel="Instagram",
+                                            customer_name=f"Instagram sender {event.sender_id}",
+                                            raw_phone=event.sender_id,
+                                            integrated_whatsapp="",
+                                            phone_lookup_key="",
+                                            traveler_id="",
+                                            matched_row=None,
+                                            status_snapshot="WEBHOOK_REPLIED",
+                                            intent="outbound_message",
+                                            trip_type="",
+                                            suggested_trips="",
+                                            action_taken="outbound_reply_sent",
+                                            handoff_required=False,
+                                            handoff_reason="",
+                                            agent_notes=(
+                                                f"Outbound reply sent after inbound webhook. "
+                                                f"Reason: {draft.reason}. Reply: {draft.text}"
+                                            ),
+                                            flow_key="instagram",
+                                            step_key="outbound_reply",
+                                            message_key=f"{event.event_id}:reply",
+                                            language="",
+                                            outcome="sent",
+                                        )
+                                    except Exception as exc:
+                                        webhook_logger.warning(f"Could not record outbound Instagram reply: {exc}")
+                                else:
+                                    replies_failed += 1
+                                    webhook_logger.warning(
+                                        "Instagram reply send failed for %s: %s %s",
+                                        event.sender_id,
+                                        send_result.status_code,
+                                        send_result.response_json,
                                     )
-                                except Exception as exc:
-                                    webhook_logger.warning(f"Could not record outbound Instagram reply: {exc}")
-                            else:
-                                replies_failed += 1
-                                webhook_logger.warning(
-                                    "Instagram reply send failed for %s: %s %s",
-                                    event.sender_id,
-                                    send_result.status_code,
-                                    send_result.response_json,
-                                )
-                    else:
-                        duplicates += 1
+                        else:
+                            duplicates += 1
 
-            return jsonify(
-                {
-                    "status": "received",
-                    "events": len(events),
-                    "persisted": persisted,
-                    "duplicates": duplicates,
-                    "repliesSent": replies_sent,
-                    "repliesFailed": replies_failed,
-                }
-            )
+                return jsonify(
+                    {
+                        "status": "received",
+                        "events": len(events),
+                        "persisted": persisted,
+                        "duplicates": duplicates,
+                        "repliesSent": replies_sent,
+                        "repliesFailed": replies_failed,
+                    }
+                )
+            except Exception as exc:
+                webhook_logger.exception(f"Unhandled exception in webhook_received: {exc}")
+                return jsonify({"status": "received", "error": str(exc)}), 200
+
         return process_request()
-
-    @app.get("/api/crm/preview")
-    def crm_preview():
-        return jsonify({"travelers": gateway.crm_preview(limit=15)})
 
     @app.post("/api/reset")
     def reset_demo():
