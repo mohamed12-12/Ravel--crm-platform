@@ -21,11 +21,12 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from services.ai_agent.ai_agent_app.server import create_app
 
-app = create_app()
-# demo_web/app.py's __main__ block applies this same ProxyFix for local
-# runs, but production goes through this module directly and never hits
-# that code path -- confirmed live (2026-08-08): without it, url_for()
-# has no way to know this app is mounted at nginx's /rahma-agent/ prefix,
-# so every static asset URL resolved against the domain root instead and
-# 404'd, serving the chat widget with no CSS/JS applied at all.
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+try:
+    app = create_app()
+except Exception as exc:
+    print(f"CRITICAL: Failed to boot AI agent Flask application: {exc}", file=sys.stderr)
+    raise
+
+if app is not None:
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+

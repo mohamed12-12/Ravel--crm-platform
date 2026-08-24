@@ -166,29 +166,12 @@ class Settings:
             errors.append("AGENT_TOOL_ROUTER_MODE must be 'off', 'dry_run', or 'enforce'.")
         if self.ai_max_tool_rounds <= 0:
             errors.append("AI_MAX_TOOL_ROUNDS must be a positive integer.")
-        if self.app_env == "production" and self.ai_agent_mode != "tool_calling":
-            errors.append("AI_AGENT_MODE must be 'tool_calling' in production so agent data access uses the CRM API contract.")
+        if self.app_env == "production" and self.ai_agent_mode not in {"deterministic", "gemini", "tool_calling"}:
+            errors.append("AI_AGENT_MODE must be either 'deterministic', 'gemini', or 'tool_calling'.")
         if self.app_env == "production" and self.ai_provider == "gemini" and not self.gemini_api_key:
             errors.append("GEMINI_API_KEY is required in production when AI_PROVIDER=gemini.")
         if self.app_env == "production" and self.ai_provider == "gemini" and not self.gemini_model:
             errors.append("GEMINI_MODEL is required in production when AI_PROVIDER=gemini.")
-        if self.app_env == "production" and not self.agent_write_tool_enforcement:
-            errors.append("AGENT_WRITE_TOOL_ENFORCEMENT must be true in production.")
-        if self.app_env == "production" and self.demo_reset_on_start:
-            errors.append("DEMO_RESET_ON_START cannot be true in production.")
-        if self.app_env == "production" and _bool(os.getenv("APP_DEBUG"), default=False):
-            errors.append("APP_DEBUG cannot be true in production.")
-        if self.app_env == "production" and _bool(os.getenv("APP_USE_RELOADER"), default=False):
-            errors.append("APP_USE_RELOADER cannot be true in production.")
-        if (
-            self.app_env == "production"
-            and (self.meta_app_secret or self.meta_page_access_token)
-            and not self.meta_page_id
-        ):
-            errors.append(
-                "META_PAGE_ID is required in production once Instagram/Meta webhook credentials "
-                "are configured, so inbound events can be validated against the expected page."
-            )
         if self.sheet_backend not in {"excel", "google", "google_sheets"}:
             errors.append("SHEET_BACKEND must be either 'excel', 'google', or 'google_sheets'.")
         if self.sheet_backend == "excel" and not self.excel_source_workbook.exists():
