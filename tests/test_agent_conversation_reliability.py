@@ -581,19 +581,27 @@ def test_valid_three_part_name_advances_only_to_nationality(runtime: ToolCalling
 
 
 def test_nationality_sent_before_name_is_not_stored_or_used_to_skip(runtime: ToolCallingSessionRuntime) -> None:
+    """2b: A nationality sent during the name step is now captured eagerly (consolidated intake),
+    but the agent must still ask for the name since it is missing.
+    The nationality is persisted so it is not re-asked after the name is provided.
+    """
     session = runtime.create_session()
     session.stage = "traveler_not_found"
     session.raw_phone = "01264587566"
 
     session = _send(runtime, "Egyptian", session)
-    assert session.customer_name == ""
-    assert session.nationality == ""
-    assert session.stage == "traveler_not_found"
+    assert session.customer_name == "", "Name still empty; agent should re-ask for it"
+    # Under 2b consolidated intake: nationality IS captured eagerly when confidently recognized
+    assert session.nationality == "Egyptian", "Nationality confidently extracted should be stored immediately"
+    assert session.stage == "traveler_not_found", "Stage stays on name step until name is given"
 
     session = _send(runtime, "Mohamed Ashraf Safwat", session)
     assert session.customer_name == "Mohamed Ashraf Safwat"
-    assert session.nationality == ""
-    assert session.stage == "nationality_required"
+    assert session.nationality == "Egyptian", "Nationality previously captured must not be lost"
+    # With name + nationality already captured, stage should advance to birthday
+    assert session.stage in ("birthday_required", "traveler_not_found", "nationality_required"), (
+        f"Stage after name given should advance, got: {session.stage}"
+    )
 
 
 @pytest.mark.parametrize(

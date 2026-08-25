@@ -1800,10 +1800,11 @@ class SessionFlowManager:
             ("Double", "available_double", "boys_double", "girls_double"),
             ("Triple", "available_triple", "boys_triple", "girls_triple"),
         ):
-            if as_count(trip.get(available_field)) <= 0:
-                continue
+            total = as_count(trip.get(available_field))
             boys = as_count(trip.get(boys_field))
             girls = as_count(trip.get(girls_field))
+            if total <= 0 and boys <= 0 and girls <= 0:
+                continue
             if boys > 0 or girls > 0:
                 if boys > 0:
                     choices.append(
@@ -1823,13 +1824,21 @@ class SessionFlowManager:
                             "label": f"{room_type} girls room",
                         }
                     )
-            else:
+            elif total > 0:
                 choices.append(
                     {
                         "room_type": room_type,
-                        "room_group": "",
-                        "reply": f"{room_type.lower()} room",
-                        "label": f"{room_type} room",
+                        "room_group": "boys",
+                        "reply": f"{room_type.lower()} boys room",
+                        "label": f"{room_type} boys room",
+                    }
+                )
+                choices.append(
+                    {
+                        "room_type": room_type,
+                        "room_group": "girls",
+                        "reply": f"{room_type.lower()} girls room",
+                        "label": f"{room_type} girls room",
                     }
                 )
         return choices

@@ -1,4 +1,4 @@
-﻿"""Computes what stage of the sales workflow a session is actually in
+"""Computes what stage of the sales workflow a session is actually in
 (identity/trip-search/booking/etc, via WorkflowDecision) and which tools
 are allowed from there -- the gate that keeps the agent from, say,
 creating a booking before a traveler is verified. Read this alongside
@@ -89,6 +89,7 @@ class ConversationWorkflowPolicy:
         verified = workflow.get("verified_traveler") if isinstance(workflow.get("verified_traveler"), dict) else {}
         traveler = verified or known_traveler or {}
         lookup_status = str(workflow.get("lookup_status") or "").strip().lower()
+        identity_verified = bool(workflow.get("identity_verified"))
         raw_phone = str(session_context.get("raw_phone") or session_context.get("pending_raw_phone") or "").strip()
         # Every WorkflowDecision.assistant_message below is rendered VERBATIM
         # to the customer on several code paths (_ground_reply,
@@ -107,7 +108,7 @@ class ConversationWorkflowPolicy:
                 required_step="human_review",
                 customer_message_key="duplicate_traveler_review",
                 assistant_message=(
-                    "رقم الواتساب ده مرتبط بأكتر من ملف مسافر، فمحتاجين موظف من الفريق يراجعه قبل ما نكمل."
+                    "لقيت رقم الواتساب ده مرتبط بأكتر من ملف. هبعت الطلب للفريق وهيتواصلوا معاك بعد المراجعة."
                     if arabic
                     else "This WhatsApp number matches more than one traveler profile, so a team member needs to review it before we continue."
                 ),
@@ -139,7 +140,7 @@ class ConversationWorkflowPolicy:
                 required_step="collect_valid_whatsapp_number",
                 customer_message_key="invalid_phone",
                 assistant_message=(
-                    "من فضلك ابعت رقم واتساب صحيح. لو الرقم خارج مصر، اكتب كود الدولة معاه، مثال: +966512345678."
+                    "ممكن ترسلي رقم واتساب صحيح؟ لو خارج مصر، حط كود الدولة، مثال: +966512345678."
                     if arabic
                     else "Please send a valid WhatsApp mobile number. If it is outside Egypt, include the country code, for example +966512345678."
                 ),
@@ -158,7 +159,7 @@ class ConversationWorkflowPolicy:
                     required_step="human_review",
                     customer_message_key="restricted_traveler_review",
                     assistant_message=(
-                        "لقيت ملفك كمسافر، بس الطلب ده محتاج مراجعة من فريق Ravel Traveler قبل ما نكمل."
+                        "لقيت ملفك. الطلب ده بحتاج مراجعة من فريق Ravel — هيتواصلوا معاك قريب."
                         if arabic
                         else "I found your traveler profile, but this request needs review by the Ravel Traveler team before we continue."
                     ),
@@ -169,34 +170,38 @@ class ConversationWorkflowPolicy:
                 )
             return self._post_identity_decision(session_context, traveler=traveler, status=status)
 
-        if raw_phone:
-            return WorkflowDecision(
-                state="identity_lookup_pending",
-                customer_status="Checking CRM",
-                allowed_tools=IDENTITY_TOOLS,
-                required_step="run_traveler_lookup",
-                customer_message_key="identity_lookup_pending",
-                assistant_message=(
-                    "هراجع رقم الواتساب ده الأول، وبعدين نكمل طلب رحلتك."
-                    if arabic
-                    else "I will check this WhatsApp number first, then continue with your trip request."
-                ),
-                reason="phone_collected",
-            )
+        if not identity_verified and not traveler_id and not status:
+            if raw_phone:
+                return WorkflowDecision(
+                    state="identity_lookup_pending",
+                    customer_status="Checking CRM",
+                    allowed_tools=IDENTITY_TOOLS,
+                    required_step="run_traveler_lookup",
+                    customer_message_key="identity_lookup_pending",
+                    assistant_message=(
+                        "ثانية، بشوف رقم الواتساب ده ..."
+                        if arabic
+                        else "I will check this WhatsApp number first, then continue with your trip request."
+                    ),
+                    reason="phone_collected",
+                )
 
-        return WorkflowDecision(
-            state="identity_required",
-            customer_status="Waiting for WhatsApp number",
-            allowed_tools=IDENTITY_TOOLS,
-            required_step="collect_whatsapp_number",
-            customer_message_key="identity_required",
-            assistant_message=(
-                "من فضلك شاركني رقم الواتساب الخاص بك الأول عشان أقدر أراجع ملفك في Ravel Traveler بأمان."
-                if arabic
-                else "Please share your WhatsApp number first so I can check your Ravel Traveler profile safely."
-            ),
-            reason="missing_identity",
-        )
+            if bool(session_context.get("discovery_only")) and not bool(session_context.get("booking_intent")):
+                return self._post_identity_decision(session_context, traveler={}, status="")
+
+            return WorkflowDecision(
+                state="identity_required",
+                customer_status="Waiting for WhatsApp number",
+                allowed_tools=IDENTITY_TOOLS,
+                required_step="collect_whatsapp_number",
+                customer_message_key="identity_required",
+                assistant_message=(
+                    "عشان أكمل معاك الحجز، ممكن تبعتلي رقم واتساب الخاص بيك؟"
+                    if arabic
+                    else "Please share your WhatsApp number first so I can check your Ravel Traveler profile safely."
+                ),
+                reason="missing_identity",
+            )
 
     @staticmethod
     def _saved_new_traveler(session_context: dict[str, Any]) -> dict[str, Any]:
@@ -343,7 +348,7 @@ class ConversationWorkflowPolicy:
                     required_step="create_private_trip_request",
                     customer_message_key="private_request_ready",
                     assistant_message=(
-                        "هسجل طلب الرحلة الخاصة دي لفريق العمل دلوقتي."
+                        "تمام، بسجّل الطلب دلوقتي للفريق."
                         if arabic
                         else "I will save this private trip request for the team now."
                     ),
@@ -356,7 +361,7 @@ class ConversationWorkflowPolicy:
                 required_step="human_review",
                 customer_message_key="private_trip_consultation",
                 assistant_message=(
-                    "تم حفظ طلب الرحلة الخاصة، وفريق العمل هيتواصل معاك خلال 24-48 ساعة."
+                    "تم حفظ طلب الرحلة الخاصة. ✅ فريق Ravel هيتواصل معاك خلال ٢٤–٤٨ ساعة."
                     if arabic
                     else "Your private trip request is saved. The team will contact you within 24-48 hours."
                 ),
@@ -401,7 +406,7 @@ class ConversationWorkflowPolicy:
                     required_step="select_trip",
                     customer_message_key="trip_selection_required",
                     assistant_message=(
-                        "لقيت رحلات مطابقة لاختيارك. من فضلك اختار الرحلة اللي تحب تكمل بيها."
+                        "لقيت رحلات تناسب اختيارك 🎉 — اختار منها الرحلة اللي تحب:"
                         if arabic
                         else "I found matching trips for your choice. Please pick the trip you want to continue with."
                     ),
@@ -431,7 +436,7 @@ class ConversationWorkflowPolicy:
                 required_step="search_matching_trips",
                 customer_message_key="trip_search_ready",
                 assistant_message=(
-                    "شكرا. هراجع الرحلات المتاحة اللي تطابق اختيارك دلوقتي."
+                    "تمام، بدور دلوقتي على الرحلات المتاحة ..."
                     if arabic
                     else "Thanks. I will check the available trips that match your choice now."
                 ),
@@ -446,10 +451,10 @@ class ConversationWorkflowPolicy:
                 required_step="collect_traveler_gender",
                 customer_message_key="traveler_gender_required",
                 assistant_message=(
-                    "هل المسافرون شباب أم بنات؟\n\n"
-                    "1) شباب (Boys / Male)\n"
-                    "2) بنات (Girls / Female)\n"
-                    "3) مختلط (Boys + Girls)"
+                    "المجموعة شباب، بنات، ولا مختلطة؟\n\n"
+                    "١) شباب فقط\n"
+                    "٢) بنات فقط\n"
+                    "٣) مختلطة (شباب + بنات)"
                     if arabic
                     else "Are the travelers boys/male, girls/female, or mixed?\n\n1) Boys / Male\n2) Girls / Female\n3) Mixed boys + girls"
                 ),
@@ -499,7 +504,7 @@ class ConversationWorkflowPolicy:
                 required_step="collect_group_size",
                 customer_message_key="group_size_required",
                 assistant_message=(
-                    "\u0643\u0645 \u0639\u062f\u062f \u0627\u0644\u0645\u0633\u0627\u0641\u0631\u064a\u0646 \u0641\u064a \u0647\u0630\u0627 \u0627\u0644\u062d\u062c\u0632\u061f (Group size)"
+                    "إجمالي كام مسافر هيحجزوا؟"
                     if arabic
                     else "How many travelers are going on this booking?"
                 ),
@@ -524,6 +529,38 @@ class ConversationWorkflowPolicy:
         capacity = self._room_capacity(selected_trip, room_type, room_group)
         requested_rooms = self._rooms_needed(room_type, requested_group_size)
         if capacity is not None and requested_rooms > capacity:
+            alt_options = self._get_available_room_options(selected_trip, requested_group_size, room_group)
+            if alt_options:
+                alt_lines = []
+                for idx, opt in enumerate(alt_options, 1):
+                    label = opt["label_ar"] if arabic else opt["label_en"]
+                    alt_lines.append(f"{idx}) {label}")
+                alt_text = "\n".join(alt_lines)
+                if arabic:
+                    msg = (
+                        f"الغرفة اللي اخترتها ({room_type}) مش متاحة للمجموعة كلها حالياً "
+                        f"(محتاجين {requested_rooms} غرفة، المتاح {capacity} بس).\n\n"
+                        f"الخيارات المتاحة لمجموعتك ({requested_group_size} أفراد):\n"
+                        f"{alt_text}\n\n"
+                        "اختار رقم الخيار المناسب:"
+                    )
+                else:
+                    msg = (
+                        f"The requested room option ({room_type}) is not available for the full group at the moment "
+                        f"(needs {requested_rooms} room{'s' if requested_rooms > 1 else ''}, but CRM shows {capacity} available).\n\n"
+                        f"Available room options for your group size ({requested_group_size}):\n"
+                        f"{alt_text}\n\n"
+                        "Please reply with your preferred available room option."
+                    )
+                return WorkflowDecision(
+                    state="room_type_required",
+                    customer_status="Waiting for customer response",
+                    allowed_tools=SELECTED_TRIP_TOOLS,
+                    required_step="collect_room_type",
+                    customer_message_key="room_type_required",
+                    assistant_message=msg,
+                    **common,
+                )
             return WorkflowDecision(
                 state="capacity_handoff_required",
                 customer_status="Human review required",
@@ -532,20 +569,18 @@ class ConversationWorkflowPolicy:
                 customer_message_key="capacity_handoff_required",
                 assistant_message=(
                     (
-                        "\u062e\u064a\u0627\u0631 \u0627\u0644\u063a\u0631\u0641\u0629 \u0627\u0644\u0645\u0637\u0644\u0648\u0628 \u063a\u064a\u0631 \u0645\u062a\u0627\u062d \u0644\u0644\u0645\u062c\u0645\u0648\u0639\u0629 \u0628\u0627\u0644\u0643\u0627\u0645\u0644 \u062d\u0627\u0644\u064a\u0627.\n"
-                        f"\u0633\u0628\u0628 \u0627\u0644\u062a\u062d\u0648\u064a\u0644: \u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628 \u064a\u062d\u062a\u0627\u062c {requested_rooms} \u063a\u0631\u0641\u0629 \u0645\u0646 \u0646\u0648\u0639 {room_type}\u060c \u0648\u0627\u0644\u0645\u062a\u0627\u062d \u0641\u064a CRM \u0647\u0648 {capacity} \u0641\u0642\u0637.\n"
-                        "\u0633\u0623\u0631\u0633\u0644 \u0627\u0644\u0637\u0644\u0628 \u0644\u0641\u0631\u064a\u0642 Ravel Traveler \u0644\u0645\u0631\u0627\u062c\u0639\u0629 \u0627\u0644\u0628\u062f\u0627\u0626\u0644 \u0627\u0644\u0645\u062a\u0627\u062d\u0629."
+                        "مفيش غرف كافية لمجموعتك في أي خيار حالياً.\n"
+                        "بعت الطلب لفريق Ravel وهيتواصلوا معاك بعد المراجعة."
                     )
                     if arabic
                     else (
-                        "The requested room option is not available for the full group at the moment.\n"
-                        f"Reason for escalation: this request needs {requested_rooms} {room_type.lower()} room"
-                        f"{'' if requested_rooms == 1 else 's'}, but CRM shows {capacity} available.\n"
-                        "I will send this request to the Ravel Traveler team, and an employee will call you to confirm the available alternatives."
+                        "The requested room option is not available for the full group at the moment, "
+                        "and no other room options have enough capacity for your group size.\n"
+                        "I will send this request to the Ravel Traveler team, and an employee will call you to confirm available alternatives."
                     )
                 ),
                 handoff_required=True,
-                **common,
+                **{**common, "reason": "room_capacity"},
             )
 
         if requested_group_size > 1 and group_nationality_type not in {"single", "mixed"}:
@@ -665,8 +700,8 @@ class ConversationWorkflowPolicy:
         if arabic:
             label = "محلية" if normalized_type == "local" else "دولية"
             return (
-                f"للأسف مفيش رحلات {label} متاحة (مفتوحة) دلوقتي. "
-                "قيدت طلبك عشان فريق Ravel يراجعه ويتواصل معاك لو توفرت رحلة مناسبة."
+                f"للأسف مفيش رحلات {label} متاحة دلوقتي. "
+                "سجّلت طلبك وفريق Ravel هيتواصل معاك لو في رحلة مناسبة."
             )
         label = normalized_type or "matching"
         return (
@@ -678,10 +713,10 @@ class ConversationWorkflowPolicy:
     def _duplicate_lead_prompt(open_lead_id: str, *, arabic: bool = False) -> str:
         if arabic:
             return (
-                f"عندك طلب سابق لسه شغال برقم {open_lead_id}.\n"
-                "تحب نكمل على نفس الطلب، ولا نبدأ طلب جديد؟\n\n"
-                "1. أكمل الطلب الحالي\n"
-                "2. ابدأ طلب جديد"
+                f"عندك طلب مفتوح برقم {open_lead_id}.\n"
+                "تكمل عليه ولا تبدأ طلب جديد؟\n\n"
+                "١. أكمل الطلب الحالي\n"
+                "٢. ابدأ طلب جديد"
             )
         return (
             f"You already have an open request on file, {open_lead_id}.\n"
@@ -749,38 +784,56 @@ class ConversationWorkflowPolicy:
             "reason": "crm_lookup_not_found",
         }
 
+        missing_fields = []
         if not customer_name:
-            return WorkflowDecision(
-                state="traveler_not_found",
-                customer_status="New traveler details required",
-                required_step="collect_new_traveler_name",
-                customer_message_key="new_traveler_name_required",
-                assistant_message=(
-                    "\u0644\u0645 \u0623\u062c\u062f \u0645\u0644\u0641\u0627 \u0644\u0647\u0630\u0627 \u0627\u0644\u0631\u0642\u0645.\n"
-                    "\u0645\u0646 \u0641\u0636\u0644\u0643 \u0627\u0643\u062a\u0628 \u0627\u0633\u0645\u0643 \u0627\u0644\u062b\u0644\u0627\u062b\u064a\u060c \u0645\u062b\u0644: \u0645\u062d\u0645\u062f \u0623\u0634\u0631\u0641 \u0635\u0641\u0648\u062a."
-                    if arabic
-                    else "I could not find a traveler profile for this WhatsApp number. Please enter your full name as three parts, for example: Mohamed Ashraf Safwat."
-                ),
-                **common,
-            )
-
+            missing_fields.append("full_name")
         if not nationality:
-            return WorkflowDecision(
-                state="nationality_required",
-                customer_status="Waiting for customer response",
-                required_step="collect_nationality",
-                customer_message_key="nationality_required",
-                assistant_message=self._nationality_prompt(arabic=arabic),
-                **common,
-            )
-
+            missing_fields.append("nationality")
         if not birthday:
+            missing_fields.append("birthday")
+
+        if missing_fields:
+            if len(missing_fields) == 3:
+                msg = (
+                    "مش لاقي ملف بالرقم ده. عشان نكمل الحجز، بعتلي:\n"
+                    "١) الاسم الكامل (مثال: محمد أشرف صفوت)\n"
+                    "٢) الجنسية (مثال: مصري)\n"
+                    "٣) تاريخ الميلاد (مثال: 10/08/1995)\n"
+                    "٤) عدد المسافرين وتفاصيلهم (مثال: ٢ شباب)"
+                    if arabic
+                    else "I could not find a traveler profile for this WhatsApp number. To complete your booking, please provide:\n"
+                    "1) Full Name (e.g. Mohamed Ashraf Safwat)\n"
+                    "2) Nationality (e.g. Egyptian)\n"
+                    "3) Date of Birth (e.g. 10/08/1995)\n"
+                    "4) Group Composition / Size (e.g. 2 boys)"
+                )
+            else:
+                labels_ar = {
+                    "full_name": "الاسم الكامل (ثلاثي)",
+                    "nationality": "الجنسية",
+                    "birthday": "تاريخ الميلاد (مثال: 10/08/1995)",
+                }
+                labels_en = {
+                    "full_name": "Full Name (3 parts)",
+                    "nationality": "Nationality",
+                    "birthday": "Date of Birth (YYYY-MM-DD)",
+                }
+                labels = labels_ar if arabic else labels_en
+                missing_items = "\n".join(f"- {labels[f]}" for f in missing_fields)
+                msg = (
+                    f"تمام، بس محتاج كمان:\n{missing_items}"
+                    if arabic
+                    else f"Thank you! Please provide the remaining missing details to complete your profile:\n{missing_items}"
+                )
+
+            req_step = "collect_new_traveler_name" if "full_name" in missing_fields else ("collect_nationality" if "nationality" in missing_fields else "collect_birthday")
+            req_state = "traveler_not_found" if "full_name" in missing_fields else ("nationality_required" if "nationality" in missing_fields else "birthday_required")
             return WorkflowDecision(
-                state="birthday_required",
-                customer_status="Waiting for customer response",
-                required_step="collect_birthday",
-                customer_message_key="birthday_required",
-                assistant_message=self._birthday_prompt(arabic=arabic),
+                state=req_state,
+                customer_status="New traveler details required",
+                required_step=req_step,
+                customer_message_key="new_traveler_name_required",
+                assistant_message=msg,
                 **common,
             )
 
@@ -833,7 +886,7 @@ class ConversationWorkflowPolicy:
     @staticmethod
     def _group_nationality_type_prompt(*, arabic: bool = False) -> str:
         return (
-            "هل كل المسافرين نفس الجنسية/نفس فئة السعر، أم المجموعة مختلطة بين مصريين وأجانب؟\n\n1. نفس الفئة\n2. مختلطة"
+            "المجموعة كلها مصريين ولا في أجانب كمان؟\n\n١. كلهم نفس الجنسية\n٢. مختلطة (مصريين وأجانب)"
             if arabic
             else "Is everyone in the group the same nationality/pricing group, or is it mixed between Egyptians and foreigners?\n\n1. Same group\n2. Mixed group"
         )
@@ -841,7 +894,7 @@ class ConversationWorkflowPolicy:
     @staticmethod
     def _gender_counts_prompt(*, arabic: bool = False) -> str:
         return (
-            "كم عدد الشباب وكم عدد البنات في المجموعة؟ مثال: 2 شباب و2 بنات."
+            "كام شاب وكام بنت في المجموعة؟ مثال: ٣ شباب و٢ بنات."
             if arabic
             else "How many boys/male travelers and how many girls/female travelers are in the group? Example: 2 boys and 2 girls."
         )
@@ -849,7 +902,7 @@ class ConversationWorkflowPolicy:
     @staticmethod
     def _family_units_prompt(*, arabic: bool = False) -> str:
         return (
-            "هل يوجد زوجين أو عائلة يمكنهم مشاركة غرفة؟ اكتب العدد، أو 0 إذا لا يوجد."
+            "في أزواج أو عيلة يقدروا يتشاركوا في أوضة؟ اكتب العدد، أو ٠ لو مفيش."
             if arabic
             else "How many couples/family units may share a room together? Reply with a number, or 0 if none."
         )
@@ -857,7 +910,7 @@ class ConversationWorkflowPolicy:
     @staticmethod
     def _group_nationality_counts_prompt(group_size: int, *, arabic: bool = False) -> str:
         return (
-            f"من فضلك اكتب عدد المصريين وعدد الأجانب من إجمالي {group_size} مسافرين، مثل: 2 مصري و1 أجنبي."
+            f"بعتلي عدد المصريين والأجانب من الـ{group_size} مسافرين، مثال: ٢ مصري و١ أجنبي."
             if arabic
             else f"Please send how many Egyptians and how many foreigners are in the {group_size}-traveler group, for example: 2 Egyptians and 1 foreigner."
         )
@@ -1103,24 +1156,30 @@ class ConversationWorkflowPolicy:
         double_total = self._as_int(selected_trip.get("available_double"))
         double_boys = self._as_int(selected_trip.get("boys_double"))
         double_girls = self._as_int(selected_trip.get("girls_double"))
-        if double_boys or double_girls:
-            if double_boys and room_group != "girls":
+        if double_boys > 0 or double_girls > 0:
+            if double_boys > 0 and room_group != "girls":
                 lines.append("Double boys")
-            if double_girls and room_group != "boys":
+            if double_girls > 0 and room_group != "boys":
                 lines.append("Double girls")
         elif double_total > 0:
-            lines.append("Double")
+            if room_group != "girls":
+                lines.append("Double boys")
+            if room_group != "boys":
+                lines.append("Double girls")
 
         triple_total = self._as_int(selected_trip.get("available_triple"))
         triple_boys = self._as_int(selected_trip.get("boys_triple"))
         triple_girls = self._as_int(selected_trip.get("girls_triple"))
-        if triple_boys or triple_girls:
-            if triple_boys and room_group != "girls":
+        if triple_boys > 0 or triple_girls > 0:
+            if triple_boys > 0 and room_group != "girls":
                 lines.append("Triple boys")
-            if triple_girls and room_group != "boys":
+            if triple_girls > 0 and room_group != "boys":
                 lines.append("Triple girls")
         elif triple_total > 0:
-            lines.append("Triple")
+            if room_group != "girls":
+                lines.append("Triple boys")
+            if room_group != "boys":
+                lines.append("Triple girls")
 
         if not lines:
             if room_group in {"boys", "girls"}:
@@ -1262,6 +1321,58 @@ class ConversationWorkflowPolicy:
         if room_key in {"double", "triple"}:
             return self._gendered_room_capacity(selected_trip, room_key, group_key)
         return None
+
+    def _get_available_room_options(
+        self,
+        selected_trip: dict[str, Any],
+        group_size: int = 1,
+        room_group: str = "",
+    ) -> list[dict[str, Any]]:
+        """Returns list of room options that have sufficient capacity for group_size."""
+        if not selected_trip:
+            return []
+
+        options = []
+        # Single
+        single_cap = self._as_int(selected_trip.get("available_single"))
+        if single_cap and single_cap >= self._rooms_needed("single", group_size):
+            options.append({"room_type": "Single", "room_group": "", "label_en": "Single", "label_ar": "Single (\u0641\u0631\u062f\u064a\u0629)"})
+
+        # Double
+        double_total = self._as_int(selected_trip.get("available_double"))
+        double_boys = self._as_int(selected_trip.get("boys_double"))
+        double_girls = self._as_int(selected_trip.get("girls_double"))
+        double_rooms_needed = self._rooms_needed("double", group_size)
+
+        if double_boys > 0 or double_girls > 0:
+            if double_boys >= double_rooms_needed and room_group != "girls":
+                options.append({"room_type": "Double", "room_group": "boys", "label_en": "Double boys", "label_ar": "Double - Boys (\u062b\u0646\u0627\u0626\u064a\u0629 \u0634\u0628\u0627\u0628)"})
+            if double_girls >= double_rooms_needed and room_group != "boys":
+                options.append({"room_type": "Double", "room_group": "girls", "label_en": "Double girls", "label_ar": "Double - Girls (\u062b\u0646\u0627\u0626\u064a\u0629 \u0628\u0646\u0627\u062a)"})
+        elif double_total >= double_rooms_needed:
+            if room_group != "girls":
+                options.append({"room_type": "Double", "room_group": "boys", "label_en": "Double boys", "label_ar": "Double - Boys (\u062b\u0646\u0627\u0626\u064a\u0629 \u0634\u0628\u0627\u0628)"})
+            if room_group != "boys":
+                options.append({"room_type": "Double", "room_group": "girls", "label_en": "Double girls", "label_ar": "Double - Girls (\u062b\u0646\u0627\u0626\u064a\u0629 \u0628\u0646\u0627\u062a)"})
+
+        # Triple
+        triple_total = self._as_int(selected_trip.get("available_triple"))
+        triple_boys = self._as_int(selected_trip.get("boys_triple"))
+        triple_girls = self._as_int(selected_trip.get("girls_triple"))
+        triple_rooms_needed = self._rooms_needed("triple", group_size)
+
+        if triple_boys > 0 or triple_girls > 0:
+            if triple_boys >= triple_rooms_needed and room_group != "girls":
+                options.append({"room_type": "Triple", "room_group": "boys", "label_en": "Triple boys", "label_ar": "Triple - Boys (\u062b\u0644\u0627\u062b\u064a\u0629 \u0634\u0628\u0627\u0628)"})
+            if triple_girls >= triple_rooms_needed and room_group != "boys":
+                options.append({"room_type": "Triple", "room_group": "girls", "label_en": "Triple girls", "label_ar": "Triple - Girls (\u062b\u0644\u0627\u062b\u064a\u0629 \u0628\u0646\u0627\u062a)"})
+        elif triple_total >= triple_rooms_needed:
+            if room_group != "girls":
+                options.append({"room_type": "Triple", "room_group": "boys", "label_en": "Triple boys", "label_ar": "Triple - Boys (\u062b\u0644\u0627\u062b\u064a\u0629 \u0634\u0628\u0627\u0628)"})
+            if room_group != "boys":
+                options.append({"room_type": "Triple", "room_group": "girls", "label_en": "Triple girls", "label_ar": "Triple - Girls (\u062b\u0644\u0627\u062b\u064a\u0629 \u0628\u0646\u0627\u062a)"})
+
+        return options
 
     @staticmethod
     def _rooms_needed(room_type: str, traveler_count: int) -> int:

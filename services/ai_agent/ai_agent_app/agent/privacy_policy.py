@@ -111,18 +111,19 @@ class AgentPrivacyPolicy:
         language = cls._detect_language(user_text)
         blocked = cls._looks_like_other_traveler_request(user_text)
         if not blocked and cls._contains_other_phone(user_text, session_context):
-            # A phone number that differs from the session's is not by itself a
-            # request for someone else's data -- it is usually the customer
-            # giving or correcting their OWN number. Live 2026-08-20 transcript:
-            # the first number found no profile, the customer sent
-            # "اه بس الرقم ده 01240789320" (their real one) and got the
-            # cross-traveler refusal, so the corrected number was never even
-            # merged into the session.
-            #
-            # Checked in this order on purpose: a message that reads as a data
-            # request about another person ("عايز بيانات الرقم ده ...") is
-            # already blocked above and never reaches this allowance.
-            blocked = not cls._phone_is_offered_as_own_identity(user_text, session_context)
+            workflow = session_context.get("workflow") if isinstance(session_context.get("workflow"), dict) else {}
+            known = session_context.get("known_traveler") if isinstance(session_context.get("known_traveler"), dict) else {}
+            is_verified = bool(
+                workflow.get("identity_verified")
+                or session_context.get("traveler_id")
+                or session_context.get("booking_id")
+                or known.get("traveler_id")
+            )
+            has_bound_identity = is_verified or bool(session_context.get("customer_name") and session_context.get("raw_phone"))
+            if has_bound_identity:
+                blocked = not cls._phone_is_offered_as_own_identity(user_text, session_context)
+            else:
+                blocked = False
         if blocked:
             return AgentPrivacyResponse(
                 intent="other_traveler_data_request",
@@ -165,6 +166,19 @@ class AgentPrivacyPolicy:
             return None
         if cls._tool_targets_current_session(args, context):
             return None
+
+        workflow = context.get("workflow") if isinstance(context.get("workflow"), dict) else {}
+        known = context.get("known_traveler") if isinstance(context.get("known_traveler"), dict) else {}
+        is_verified = bool(
+            workflow.get("identity_verified")
+            or context.get("traveler_id")
+            or context.get("booking_id")
+            or known.get("traveler_id")
+        )
+        has_bound_identity = is_verified or bool(context.get("customer_name") and context.get("raw_phone"))
+        if tool_name in {"find_traveler_by_phone", "search_traveler"} and not has_bound_identity:
+            return None
+
         return cls.blocked_tool_result(language=str(context.get("language") or "en"))
 
     @classmethod
